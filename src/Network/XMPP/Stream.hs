@@ -116,7 +116,7 @@ startTLSName = nsName "urn:ietf:params:xml:ns:xmpp-tls"
 saslName :: Text -> Name
 saslName = nsName "urn:ietf:params:xml:ns:xmpp-sasl"
 
-data StreamException = UnexpectedStanza Name Name
+data StreamException = UnexpectedStanza Name [Name]
                      | XMLError XMLP.XmlException
                      | UnresolvedEntity (Set Text)
                      | UnsupportedVersion Text
@@ -269,7 +269,7 @@ runClient (ConnectionSettings {..}) comp = runTLSClientStartTLS connectionEndpoi
                    $(logInfo) "Negotiating TLS"
                    sendMsg $ closedElement $ startTLSName "starttls"
                    (_, eanswer) <- expectYield source'
-                   unless (elementName eanswer == startTLSName "proceed") $ throwM $ UnexpectedStanza (elementName eanswer) (startTLSName "proceed")
+                   unless (elementName eanswer == startTLSName "proceed") $ throwM $ UnexpectedStanza (elementName eanswer) [startTLSName "proceed"]
                    cancelSender sendThread
                    handle (throwM . TLSException) $ do
                      rr <- liftIO $ newIORef Nothing
@@ -319,7 +319,7 @@ runClient (ConnectionSettings {..}) comp = runTLSClientStartTLS connectionEndpoi
                   d | elementName eresp == saslName "success" -> return $ SASLSuccess d
                   Nothing | elementName eresp == saslName "failure" -> return $ SASLFailure
                   Just dat | elementName eresp == saslName "challenge" -> return $ SASLChallenge dat
-                  _ -> throwM $ UnexpectedStanza (elementName eresp) "challenge | success | failure"
+                  _ -> throwM $ UnexpectedStanza (elementName eresp) $ map saslName ["challenge", "success", "failure"]
                 res <- liftBase $ runSASLWire wire resp
                 case res of
                   Left (msg, wire') -> do
