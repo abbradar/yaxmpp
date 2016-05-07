@@ -19,6 +19,7 @@ library
   exposed-modules:     Network.XMPP.Connection
                      , Network.XMPP.Stream
                      , Network.XMPP.Names
+                     , Network.SASL
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
@@ -35,6 +36,7 @@ library
                      , xml-types
                      , blaze-builder
                      , xml-conduit
+                     , base64-bytestring
                      , iproute
                      , dns
                      , streaming-commons
@@ -64,6 +66,7 @@ library
 executable test
   build-depends:       base >=4.8 && <4.9
                      , yaxmpp
+                     , text
                      , either
                      , transformers-base
                      , monad-logger
@@ -72,4 +75,5 @@ executable test
   main-is:             Test.hs
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
+                     , TemplateHaskell
   ghc-options:         -Wall
