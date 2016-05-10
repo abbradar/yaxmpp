@@ -191,7 +191,7 @@ bindResource :: MonadSession m => Text -> Stream m -> m Text
 bindResource wantRes s
   | not $ any (\case BindResource -> True; _ -> False) $ streamFeatures s = throwM $ UnexpectedInput "bindResource: no resource bind"
   | otherwise = do
-      streamSend s $ element (jcName "iq") [("type", "set"), ("id", "res-bind")]
+      streamSend s $ element "iq" [("type", "set"), ("id", "res-bind")]
         [ NodeElement $ element (bindName "bind") []
           [ NodeElement $ element (bindName "resource") []
             [ NodeContent wantRes
@@ -219,7 +219,7 @@ parseLocation csettings string =
                                                               }
             }
   where (host, port) = case T.breakOnEnd ":" string of
-          (nhost, readMaybe . T.unpack -> Just nport) -> (nhost, nport)
+          (T.init -> nhost, readMaybe . T.unpack -> Just nport) -> (nhost, nport)
           _ -> (string, 5222)
 
 initSM :: MonadSession m => ConnectionSettings -> Stream m -> m (Maybe (Maybe ReconnectInfo))

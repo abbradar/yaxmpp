@@ -105,6 +105,7 @@ startEvents from to =
     , ("version", [ContentText xmppVersion])
     , ("from", [ContentText from])
     , ("to", [ContentText to])
+    , ("xmlns", [ContentText jcNS])
     ]
   ]
 
