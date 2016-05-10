@@ -73,6 +73,7 @@ executable test
                      , connection
                      , dns
                      , exceptions
+                     , lifted-base
   hs-source-dirs:      exe
   main-is:             Test.hs
   default-language:    Haskell2010

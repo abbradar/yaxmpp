@@ -1,8 +1,10 @@
+import Control.Monad
 import Data.Monoid
 import qualified Data.Text as T
 import qualified Data.ByteString.Char8 as B
 import Control.Monad.IO.Class
 import Control.Monad.Catch
+import Control.Concurrent.Lifted
 import Control.Monad.Trans.Either
 import Network.DNS
 import Network.Connection
@@ -47,5 +49,7 @@ main = runStderrLoggingT $ do
       myHandler sess e = do
         $(logInfo) $ "Stanza received by handler"
         
-  bracket initSession closeSession $ \sess -> do
-    $(logInfo) "Session successfully created!"
+  bracket initSession closeSession $ \sess ->
+    bracket (fork $ forever $ threadDelay 5000000 >> cleanupPending sess) killThread $ \_ -> do
+      $(logInfo) "Session successfully created!"
+      forever $ sessionStep sess

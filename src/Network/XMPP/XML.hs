@@ -37,11 +37,13 @@ jsNS :: T.Text
 jsName :: T.Text -> Name
 (jsNS, jsName) = namePair "jabber:server"
 
+smNS :: Text
 smName :: Text -> Name
-smName = nsName "urn:xmpp:sm:3"
+(smNS, smName) = namePair "urn:xmpp:sm:3"
 
+bindNS :: Text
 bindName :: Text -> Name
-bindName = nsName "urn:ietf:params:xml:ns:xmpp-bind"
+(bindNS, bindName) = namePair "urn:ietf:params:xml:ns:xmpp-bind"
 
 element :: Name -> [(Name, Text)] -> [Node] -> Element
 element name attrs nodes = Element { elementName = name

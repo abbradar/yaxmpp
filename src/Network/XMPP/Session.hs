@@ -136,11 +136,12 @@ sessionSend :: MonadSession m => Session m -> Element -> m ()
 sessionSend sess e = modifyWrite sess $ \ws -> do
   s <- readIORef $ sessionStream sess
   let ws' = case ws of
-        Nothing -> ws
-        Just rws -> let nextp = wsPendingN rws + 1
-                    in Just rws { wsPendingN = nextp
-                                , wsPending = wsPending rws |> (nextp, e)
-                                }
+        Just rws | nameNamespace (elementName e) /= Just smNS ->
+                   let nextp = wsPendingN rws + 1
+                   in Just rws { wsPendingN = nextp
+                               , wsPending = wsPending rws |> (nextp, e)
+                               }
+        _ -> ws
   streamSend s e
   return (ws', ())
 
@@ -155,12 +156,12 @@ handleIq ri e = case readAttr "id" e of
                    }
       return (ri', handler)
 
-handleQ :: MonadSession m => ReadSessionData m -> Session m -> Element -> m ()
-handleQ (RSData { rsRecvN = Just n }) sess _ = sessionSend sess $ element (smName "r") [("h", T.pack $ show n)] []
-handleQ _ _ _ = fail "handleQ: impossible"
+handleR :: MonadSession m => ReadSessionData m -> Session m -> Element -> m ()
+handleR (RSData { rsRecvN = Just n }) sess _ = sessionSend sess $ element (smName "r") [("h", T.pack $ show n)] []
+handleR _ _ _ = fail "handleQ: impossible"
 
-handleR :: MonadSession m => Session m -> Element -> m ()
-handleR sess e = case readAttr "h" e of
+handleA :: MonadSession m => Session m -> Element -> m ()
+handleA sess e = case readAttr "h" e of
   Nothing -> throwM $ UnexpectedInput "handleR: invalid h"
   Just nsent -> modifyWrite sess $ \case
     Nothing -> throwM $ UnexpectedInput "handleR: stream management is not enabled"
@@ -171,16 +172,16 @@ sessionStep sess = do
   (handler, emsg) <- modifyRead sess $ \ri -> do
     s <- readIORef $ sessionStream sess
     emsg <- streamRecv s
-    let ri' = ri { rsRecvN = fmap (+1) $ rsRecvN ri }
-    (ri'', handler) <-
+    let riInc = ri { rsRecvN = fmap (+1) $ rsRecvN ri }
+    (ri', handler) <-
       if | elementName emsg == jcName "iq"
            , Just typ <- getAttr "type" emsg
            , typ == "result" || typ == "error"
-            -> handleIq ri emsg 
-         | elementName emsg == smName "q" -> return (ri', handleQ ri')
-         | elementName emsg == smName "r" -> return (ri', handleR)
-         | otherwise -> return (ri', sessionHandler sess)
-    return (ri'', (handler, emsg))
+            -> handleIq riInc emsg 
+         | elementName emsg == smName "r" -> return (ri, handleR ri)
+         | elementName emsg == smName "a" -> return (ri, handleA)
+         | otherwise -> return (riInc, sessionHandler sess)
+    return (ri', (handler, emsg))
   handler sess emsg
 
 data SessionSettings = SessionSettings { ssConn :: ConnectionSettings
