@@ -32,9 +32,9 @@ successWire = SASLWire $ \case
   SASLFailure -> return $ Right Nothing
   _ -> return $ Left (SASLAbort, successWire)
 
-plainAuth :: ByteString -> ByteString -> SASLAuthenticator ()
-plainAuth login password =
+plainAuth :: ByteString -> ByteString -> ByteString -> SASLAuthenticator ()
+plainAuth identity login password =
   SASLAuthenticator { saslMechanism = "PLAIN"
-                    , saslInitial = Just $ login <> "\0" <> password <> "\0"
+                    , saslInitial = Just $ identity <> "\0" <> login <> "\0" <> password
                     , saslWire = successWire
                     }

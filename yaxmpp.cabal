@@ -18,8 +18,10 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Network.XMPP.Connection
                      , Network.XMPP.Stream
-                     , Network.XMPP.Names
+                     , Network.XMPP.Session
+                     , Network.XMPP.XML
                      , Network.SASL
+                     , Data.ID
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
@@ -29,26 +31,21 @@ library
                      , either
                      , exceptions
                      , transformers
-                     , transformers-base
-                     , monad-control
                      , monad-logger
-                     , primitive
                      , xml-types
                      , blaze-builder
                      , xml-conduit
                      , base64-bytestring
                      , iproute
                      , dns
-                     , streaming-commons
                      , conduit
                      , conduit-extra
-                     , network-conduit-tls
+                     , connection
                      , tls
                      , data-default
-                     , async
-                     , stm
-                     , stm-chans
-                     , stm-conduit
+                     , transformers-base
+                     , monad-control
+                     , lifted-base
   hs-source-dirs:      src
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
@@ -61,16 +58,21 @@ library
                      , FlexibleContexts
                      , ViewPatterns
                      , ScopedTypeVariables
+                     , PatternSynonyms
+                     , ConstraintKinds
   ghc-options:         -Wall
 
 executable test
   build-depends:       base >=4.8 && <4.9
                      , yaxmpp
                      , text
+                     , bytestring
                      , either
-                     , transformers-base
+                     , transformers
                      , monad-logger
+                     , connection
                      , dns
+                     , exceptions
   hs-source-dirs:      exe
   main-is:             Test.hs
   default-language:    Haskell2010
