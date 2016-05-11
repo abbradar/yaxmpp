@@ -204,29 +204,20 @@ renderStanza from to = do
 -- 2) streamSend then yields several Events and Flush per each Element that it gets.
 createSendStream :: MonadStream m => ConnectionSettings -> Connection -> m (Element -> m (), m ())
 createSendStream (ConnectionSettings {..}) conn = do
-  buf <- newIORef undefined
-  let bufSource = do
-        val <- readIORef buf
-        case val of
-          Nothing -> return ()
-          Just a -> yield a >> bufSource
-      destSource = newResumableSource $
-                   bufSource
-                   =$= renderStanza (connectionUser <> "@" <> connectionServer) connectionServer
+  let destSource = newResumableConduit $
+                   renderStanza (connectionUser <> "@" <> connectionServer) connectionServer
                    =$= XMLR.renderBuilderFlush renderSettings
                    =$= builderToByteStringFlush
       destSink = tillFlush =$= sinkConn conn
-  (destSource', _) <- destSource $$++ destSink
+  (destSource', _) <- CL.sourceNull $$ destSource =$$++ tillFlush =$= sinkConn conn
   destRef <- newIORef destSource'
   let streamSend msg = do
         dest <- readIORef destRef
-        writeIORef buf $ Just msg
-        (dest', _) <- dest $$++ destSink
+        (dest', _) <- yield msg $$ dest =$$++ destSink
         writeIORef destRef dest'
       streamCloseSend = do
         dest <- readIORef destRef
-        writeIORef buf Nothing
-        dest $$+- CL.mapMaybe maybeFlush =$= sinkConn conn
+        CL.sourceNull $$ dest =$$+- CL.mapMaybe maybeFlush =$= sinkConn conn
   return (streamSend, streamCloseSend)
 
   where renderSettings = def { rsNamespaces = [ ("stream", streamNS)
