@@ -10,15 +10,9 @@ let
 
   haskellPackages_ = haskellPackages.override {
     overrides = self: super: with pkgs.haskell.lib; {
-      # https://github.com/snoyberg/xml/pull/85
       xml-conduit = overrideCabal super.xml-conduit (oldAttrs: {
-        src =
-          let src0 = pkgs.fetchgit {
-            url = "git://github.com/abbradar/xml";
-            rev = "ccc63ba4a253571775892ec4c2458a874e3da743";
-            sha256 = "0d5vc6jq1p3p0qgi8a4720bkwr0nxndjnicfl9plv416ri67i5sf";
-          };
-          in "${src0}/xml-conduit";
+        version = "1.3.5";
+        sha256 = "10yw8jiksw21jgwqjjd1ixflavcblisgkp9qq3ba05vadc35lqr5";
       });
       # https://github.com/vincenthz/hs-tls/issues/140
       tls = self.tls_1_3_4;

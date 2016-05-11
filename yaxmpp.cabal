@@ -31,10 +31,13 @@ library
                      , either
                      , exceptions
                      , transformers
+                     , transformers-base
+                     , monad-control
+                     , lifted-base
                      , monad-logger
                      , xml-types
                      , blaze-builder
-                     , xml-conduit
+                     , xml-conduit >= 1.3.5
                      , base64-bytestring
                      , iproute
                      , dns
@@ -43,9 +46,6 @@ library
                      , connection
                      , tls
                      , data-default
-                     , transformers-base
-                     , monad-control
-                     , lifted-base
   hs-source-dirs:      src
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
