@@ -7,6 +7,7 @@ module Network.XMPP.Stream
        , StreamFeature(..)
        , Stream
        , streamSend
+       , streamRecv'
        , streamRecv
        , streamClose
        , streamFeatures
@@ -198,27 +199,18 @@ renderStanza from to = do
     yield Flush
   mapM_ (yield . Chunk) stopEvents
 
--- "Resumable source" for rendering one element at a time.
+-- "Resumable conduit" for rendering one element at a time.
 -- This requires several invariants to hold:
--- 1) streamSend first yields several Events and then Flush, without getting an Element.
--- 2) streamSend then yields several Events and Flush per each Element that it gets.
-createSendStream :: MonadStream m => ConnectionSettings -> Connection -> m (Element -> m (), m ())
-createSendStream (ConnectionSettings {..}) conn = do
-  let destSource = newResumableConduit $
-                   renderStanza (connectionUser <> "@" <> connectionServer) connectionServer
-                   =$= XMLR.renderBuilderFlush renderSettings
-                   =$= builderToByteStringFlush
-      destSink = tillFlush =$= sinkConn conn
-  (destSource', _) <- CL.sourceNull $$ destSource =$$++ tillFlush =$= sinkConn conn
-  destRef <- newIORef destSource'
-  let streamSend msg = do
-        dest <- readIORef destRef
-        (dest', _) <- yield msg $$ dest =$$++ destSink
-        writeIORef destRef dest'
-      streamCloseSend = do
-        dest <- readIORef destRef
-        CL.sourceNull $$ dest =$$+- CL.mapMaybe maybeFlush =$= sinkConn conn
-  return (streamSend, streamCloseSend)
+-- 1) 'renderStanza' first yields several Events and then Flush, without getting an Element.
+-- 2) 'renderStanza' then yields several Events and Flush per each Element that it gets.
+createStreamRender :: MonadStream m => ConnectionSettings -> Connection -> m (ResumableConduit Element m (Flush ByteString))
+createStreamRender (ConnectionSettings {..}) conn = do
+  let render = newResumableConduit $
+               renderStanza (connectionUser <> "@" <> connectionServer) connectionServer
+               =$= XMLR.renderBuilderFlush renderSettings
+               =$= builderToByteStringFlush
+  (render', _) <- CL.sourceNull $$ render =$$++ tillFlush =$= sinkConn conn
+  return render'
 
   where renderSettings = def { rsNamespaces = [ ("stream", streamNS)
                                               , ("xml", xmlNS)
@@ -236,40 +228,63 @@ parseStanza streamcfgR = handle (throwM . XMLError) $ streamTag $ \streamcfg -> 
             return e
           Left unres -> throwM $ UnresolvedEntity unres
 
-createRecvStream :: MonadStream m => Connection -> m (StreamSettings, m Element, m ())
-createRecvStream conn = do
+createStreamSource :: MonadStream m => Connection -> m (StreamSettings, ResumableSource m Element)
+createStreamSource conn = do
   streamcfgR <- newIORef Nothing
-  let source0 = newResumableSource $
-                sourceConn conn
-                =$= XMLP.parseBytes parseSettings
-                =$= parseStanza streamcfgR
-  (source0', _) <- source0 $$++ CL.peek
+  let source = newResumableSource $
+               sourceConn conn
+               =$= XMLP.parseBytes parseSettings
+               =$= parseStanza streamcfgR
+  (source', _) <- source $$++ CL.peek
   Just streamcfg <- readIORef streamcfgR
-  sourceRef <- newIORef source0'
-  let streamRecv = do
-        source <- readIORef sourceRef
-        (source', ma) <- source $$++ CL.head
-        writeIORef sourceRef source'
-        case ma of
-          Nothing -> throwM ConnectionClosedException
-          Just a -> return a
-      streamCloseRecv = do
-        source <- readIORef sourceRef
-        source $$+- CL.sinkNull
-  return (streamcfg, streamRecv, streamCloseRecv)
-
+  return (streamcfg, source')
+  
   where parseSettings = def
 
-saslAuth :: MonadStream m => (Element -> m ()) -> m Element -> [SASLAuthenticator r] -> m (Maybe r)
-saslAuth _ _ [] = return Nothing
-saslAuth sendMsg recvMsg (auth:others) = do
+data Stream m = Stream { streamConn :: Connection
+                       , streamSource :: IORef (ResumableSource m Element)
+                       , streamRender :: IORef (ResumableConduit Element m (Flush ByteString))
+                       , streamFeatures :: [StreamFeature]
+                       , streamInfo :: StreamSettings
+                       }
+
+streamSend :: MonadStream m => Stream m -> Element -> m ()
+streamSend (Stream {..}) msg = do
+  render <- readIORef streamRender
+  (render', _) <- yield msg $$ render =$$++ tillFlush =$= sinkConn streamConn
+  writeIORef streamRender render'
+
+streamRecv' :: MonadStream m => Stream m -> m (Maybe Element)
+streamRecv' (Stream {..}) = do
+  source <- readIORef streamSource
+  (source', mmsg) <- source $$++ CL.head
+  writeIORef streamSource source'
+  return mmsg
+
+streamRecv :: MonadStream m => Stream m -> m Element
+streamRecv s = streamRecv' s >>= \case
+  Nothing -> throwM ConnectionClosedException
+  Just msg -> return msg
+
+streamClose :: MonadStream m => Stream m -> m ()
+streamClose (Stream {..}) = do
+  $(logInfo) "Closing connection"
+  render <- readIORef streamRender
+  CL.sourceNull $$ render =$$+- CL.mapMaybe maybeFlush =$= sinkConn streamConn
+  source <- readIORef streamSource
+  source $$+- CL.sinkNull
+  liftIO $ connectionClose streamConn
+
+saslAuth :: MonadStream m => Stream m -> [SASLAuthenticator r] -> m (Maybe r)
+saslAuth _ [] = return Nothing
+saslAuth s (auth:others) = do
   $(logInfo) $ "Trying auth method " <> T.decodeUtf8 (saslMechanism auth)
-  sendMsg $ element (saslName "auth") [("mechanism", T.decodeUtf8 $ saslMechanism auth)] $
+  streamSend s $ element (saslName "auth") [("mechanism", T.decodeUtf8 $ saslMechanism auth)] $
     maybeToList $ fmap (NodeContent . T.decodeUtf8 . B64.encode) $ saslInitial auth
   proceedAuth $ saslWire auth
 
   where proceedAuth wire = do
-          eresp <- recvMsg
+          eresp <- streamRecv s
           let mdat = listToMaybe $ fmap (B64.decode . T.encodeUtf8) $ fromNode (NodeElement eresp) $/ content
           mdat' <- forM mdat $ \case
             Left err -> throwM $ UnexpectedInput $ "proceedAuth, base64 decode: " ++ err
@@ -282,12 +297,12 @@ saslAuth sendMsg recvMsg (auth:others) = do
           res <- liftIO $ runSASLWire wire resp
           case res of
             Left (msg, wire') -> do
-              sendMsg $ case msg of
+              streamSend s $ case msg of
                 SASLResponse r -> element (saslName "response") [] [NodeContent $ T.decodeUtf8 $ B64.encode r]
                 SASLAbort -> closedElement (saslName "abort")
               proceedAuth wire'
             Right (Just a) -> return $ Just a
-            Right Nothing -> saslAuth sendMsg recvMsg others
+            Right Nothing -> saslAuth s others
 
 data FeaturesResult = FeaturesOK
                     | FeaturesUnauthorized
@@ -295,19 +310,19 @@ data FeaturesResult = FeaturesOK
                     | FeaturesTLS
                     deriving (Show, Eq)
 
-initFeatures :: MonadStream m => ConnectionSettings -> (Element -> m ()) -> m Element -> [StreamFeature] -> m FeaturesResult
-initFeatures (ConnectionSettings {..}) sendMsg recvMsg features
+initFeatures :: MonadStream m => ConnectionSettings -> Stream m -> [StreamFeature] -> m FeaturesResult
+initFeatures (ConnectionSettings {..}) s features
   | any (\case StartTLS _ -> True; _ -> False) features = do
       $(logInfo) "Negotiating TLS"
-      sendMsg $ closedElement $ startTLSName "starttls"
-      eanswer <- recvMsg
+      streamSend s $ closedElement $ startTLSName "starttls"
+      eanswer <- streamRecv s
       unless (elementName eanswer == startTLSName "proceed") $ throwM $ UnexpectedStanza (elementName eanswer) [startTLSName "proceed"]
       return FeaturesTLS
   
   | any (\case SASL _ -> True; _ -> False) features = do
       $(logInfo) "Authenticating"
       let (SASL methods):_ = filter (\case SASL _ -> True; _ -> False) features
-      r <- saslAuth sendMsg recvMsg $ concatMap (\m -> filter (\a -> saslMechanism a == m) connectionAuth) methods
+      r <- saslAuth s $ concatMap (\m -> filter (\a -> saslMechanism a == m) connectionAuth) methods
       return $ if isJust r then FeaturesRestart else FeaturesUnauthorized
 
   | otherwise = return FeaturesOK
@@ -316,46 +331,47 @@ data ClientError = Unauthorized
                  | NoTLSParams
                  deriving (Show, Eq)
 
-data Stream m = Stream { streamSend :: Element -> m ()
-                       , streamRecv :: m Element
-                       , streamClose :: m ()
-                       , streamFeatures :: [StreamFeature]
-                       , streamInfo :: StreamSettings
-                       }
-
 createStream :: MonadStream m => ConnectionSettings -> m (Either ClientError (Stream m))
 createStream csettings@(ConnectionSettings {..}) =
   bracketOnError (handleConnErr $ connectTo connectionContext connectionParams { connectionUseSecure = Nothing }) (liftIO . connectionClose) initStream
 
   where
-    initStream conn = do
+    initStream streamConn = do
       $(logInfo) "Initializing stream"
-    
-      (streamSend, streamCloseSend) <- createSendStream csettings conn
-      (streamInfo, streamRecv, streamCloseRecv) <- createRecvStream conn
-      let streamClose = do
-            $(logInfo) "Closing connection"
-            streamCloseSend
-            streamCloseRecv
-            liftIO $ connectionClose conn
 
-      (streamFeatures, r) <- handle (\e -> streamSend (streamErrorMsg e) >> streamClose >> throwM e) $ do
-        efeatures <- streamRecv
-        unless (ssVersion streamInfo == xmppVersion) $ throwM $ UnsupportedVersion $ ssVersion streamInfo
-        features <- parseFeatures efeatures
-        r <- initFeatures csettings streamSend streamRecv features
-        return (features, r)
+      streamRender' <- createStreamRender csettings streamConn
+      (streamInfo, streamSource') <- createStreamSource streamConn
+      streamRender <- newIORef streamRender'
+      streamSource <- newIORef streamSource'
+
+      let stream = Stream { streamFeatures = []
+                          , ..
+                          }
+          handleErr e = do
+            streamSend stream $ streamErrorMsg e
+            streamClose stream
+            throwM e
+      
+      (features, r) <- handle handleErr $ do
+        efeatures <- streamRecv stream
+        if ssVersion streamInfo /= xmppVersion
+          then throwM $ UnsupportedVersion $ ssVersion streamInfo
+          else do
+            features <- parseFeatures efeatures
+            r <- initFeatures csettings stream features
+            return (features, r)
 
       case r of
-        FeaturesOK -> return $ Right Stream { .. }
         FeaturesUnauthorized -> do
-          streamClose
+          streamClose stream
           return $ Left Unauthorized
 
-        FeaturesRestart -> initStream conn
+        FeaturesOK -> return $ Right stream { streamFeatures = features }
+
+        FeaturesRestart -> initStream streamConn
 
         FeaturesTLS -> case connectionUseSecure connectionParams of
           Nothing -> return $ Left NoTLSParams
           Just tls -> do
-            handleConnErr $ connectionSetSecure connectionContext conn tls
-            initStream conn
+            handleConnErr $ connectionSetSecure connectionContext streamConn tls
+            initStream streamConn
