@@ -301,7 +301,9 @@ saslAuth s (auth:others) = do
                 SASLResponse r -> element (saslName "response") [] [NodeContent $ T.decodeUtf8 $ B64.encode r]
                 SASLAbort -> closedElement (saslName "abort")
               proceedAuth wire'
-            Right (Just a) -> return $ Just a
+            Right (Just a) -> do
+              $(logInfo) $ "Successfully authenticated"
+              return $ Just a
             Right Nothing -> saslAuth s others
 
 data FeaturesResult = FeaturesOK
