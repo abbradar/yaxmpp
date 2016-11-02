@@ -1,8 +1,9 @@
-{ mkDerivation, base, base64-bytestring, blaze-builder, bytestring
-, conduit, conduit-extra, connection, containers, data-default, dns
-, either, exceptions, iproute, lifted-base, monad-control
-, monad-logger, stdenv, text, tls, transformers, transformers-base
-, xml-conduit, xml-types
+{ mkDerivation, attoparsec, base, base64-bytestring, blaze-builder
+, bytestring, conduit, conduit-extra, connection, containers
+, data-default, dns, either, exceptions, interpolatedstring-perl6
+, iproute, lifted-base, monad-control, monad-logger, stdenv
+, string-combinators, stringprep, text, tls, transformers
+, transformers-base, xml-conduit, xml-types
 }:
 mkDerivation {
   pname = "yaxmpp";
@@ -11,9 +12,10 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    base base64-bytestring blaze-builder bytestring conduit
+    attoparsec base base64-bytestring blaze-builder bytestring conduit
     conduit-extra connection containers data-default dns either
-    exceptions iproute lifted-base monad-control monad-logger text tls
+    exceptions interpolatedstring-perl6 iproute lifted-base
+    monad-control monad-logger string-combinators stringprep text tls
     transformers transformers-base xml-conduit xml-types
   ];
   executableHaskellDepends = [

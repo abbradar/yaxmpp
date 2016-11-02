@@ -1,44 +1,49 @@
 module Network.XMPP.Stream
        ( ConnectionInterruptionException(..)
+       , StreamErrorType(..)
+       , StreamError(..)
+       , unexpectedStanza
+       , unexpectedInput
        , StreamSettings(..)
        , xmppVersion
-       , StreamException(..)
-       , streamErrorMsg
        , StreamFeature(..)
-       , Stream
        , streamSend
-       , streamRecv'
        , streamRecv
+       , streamThrow
        , streamClose
        , streamFeatures
        , streamInfo
        , ConnectionSettings(..)
        , ClientError(..)
        , MonadStream
+       , Stream
        , createStream
        ) where
 
 import Data.Monoid
 import Data.Maybe
+import Data.List (find)
 import Data.Typeable
-import Data.IORef.Lifted
 import Control.Monad
-import Control.Monad.Base
+import Control.Exception (IOException)
+import Data.IORef.Lifted
+import Control.Concurrent.MVar.Lifted
+import Data.Set (Set)
+import qualified Data.Set as S
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import Control.Monad.IO.Class
+import Control.Monad.Trans.Control
 import Control.Monad.Trans.Class
 import Control.Monad.Logger
 import Control.Monad.Catch
-import Control.Exception (IOException)
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.Conduit.ByteString.Builder
 import Network.Connection
 import Network.TLS (TLSException)
-import Data.Set (Set)
 import Data.ByteString (ByteString)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
 import Data.Default
 import Text.XML
 import Data.XML.Types (Event(..), Content(..))
@@ -46,8 +51,11 @@ import qualified Text.XML.Unresolved as XMLU
 import qualified Text.XML.Stream.Parse as XMLP
 import qualified Text.XML.Stream.Render as XMLR
 import Text.XML.Cursor hiding (element)
+import qualified Text.XML.Cursor as XC
 import qualified Data.ByteString.Base64 as B64
+import Text.InterpolatedString.Perl6 (qq)
 
+import Data.Injective
 import Network.SASL
 import Network.XMPP.XML
 
@@ -70,15 +78,6 @@ maybeFlush :: Flush a -> Maybe a
 maybeFlush (Chunk a) = Just a
 maybeFlush Flush = Nothing
 
-data ConnectionInterruptionException = SocketException IOException
-                                     | TLSException TLSException
-                                     | ConnectionClosedException
-                                     deriving (Show, Typeable)
-instance Exception ConnectionInterruptionException
-
-handleConnErr :: (MonadIO m, MonadMask m) => IO a -> m a
-handleConnErr = handle (throwM . TLSException) . handle (throwM . SocketException) . liftIO
-
 sourceConn :: (MonadIO m, MonadMask m) => Connection -> Producer m ByteString
 sourceConn conn = lift (handleConnErr $ connectionGetChunk conn) >>= \case
   "" -> return ()
@@ -86,6 +85,120 @@ sourceConn conn = lift (handleConnErr $ connectionGetChunk conn) >>= \case
 
 sinkConn :: (MonadIO m, MonadMask m) => Connection -> Consumer ByteString m ()
 sinkConn conn = awaitForever $ lift . handleConnErr . connectionPut conn
+
+data ConnectionInterruptionException = SocketException IOException
+                                     | TLSException TLSException
+                                     | ConnectionClosedException
+                                     | OutStreamError StreamError
+                                     | InStreamError StreamError
+                                     deriving (Show, Typeable)
+
+instance Exception ConnectionInterruptionException
+
+handleConnErr :: (MonadIO m, MonadMask m) => IO a -> m a
+handleConnErr = handle (throwM . TLSException) . handle (throwM . SocketException) . liftIO
+
+data StreamErrorType = StBadFormat
+                     | StBadNamespacePrefix
+                     | StConflict
+                     | StConnectionTimeout
+                     | StHostGone
+                     | StHostUnknown
+                     | StImproperAddressing
+                     | StInternalServerError
+                     | StInvalidFrom
+                     | StInvalidNamespace
+                     | StInvalidXml
+                     | StNotAuthorized
+                     | StNotWellFormed
+                     | StPolicyViolation
+                     | StRemoteConnectionFailed
+                     | StReset
+                     | StResourceConstraint
+                     | StRestrictedXml
+                     | StSeeOtherHost
+                     | StSystemShutdown
+                     | StUndefinedCondition
+                     | StUnsupportedEncoding
+                     | StUnsupportedFeature
+                     | StUnsupportedStanzaType
+                     | StUnsupportedVersion
+                     deriving (Show, Eq, Enum, Bounded, Ord)
+
+instance Injective StreamErrorType Text where
+  injTo x = case x of
+    StBadFormat -> "bad-format"
+    StBadNamespacePrefix -> "bad-namespace-prefix"
+    StConflict -> "conflict"
+    StConnectionTimeout -> "connection-timeout"
+    StHostGone -> "host-gone"
+    StHostUnknown -> "host-unknown"
+    StImproperAddressing -> "improper-addressing"
+    StInternalServerError -> "internal-server-error"
+    StInvalidFrom -> "invalid-from"
+    StInvalidNamespace -> "invalid-namespace"
+    StInvalidXml -> "invalid-xml"
+    StNotAuthorized -> "not-authorized"
+    StNotWellFormed -> "not-well-formed"
+    StPolicyViolation -> "policy-violation"
+    StRemoteConnectionFailed -> "remote-connection-failed"
+    StReset -> "reset"
+    StResourceConstraint -> "resource-constraint"
+    StRestrictedXml -> "restricted-xml"
+    StSeeOtherHost -> "see-other-host"
+    StSystemShutdown -> "system-shutdown"
+    StUndefinedCondition -> "undefined-condition"
+    StUnsupportedEncoding -> "unsupported-encoding"
+    StUnsupportedFeature -> "unsupported-feature"
+    StUnsupportedStanzaType -> "unsupported-stanza-type"
+    StUnsupportedVersion -> "unsupported-version"
+
+data StreamError = StreamError { seType :: StreamErrorType
+                               , seText :: Maybe Text
+                               , seChildren :: [Element]
+                               }
+                 deriving (Show, Eq)
+
+intersperse :: (Foldable t, Monoid s) => s -> t s -> s
+intersperse sep = foldr1 (\a b -> a <> sep <> b)
+
+unexpectedStanza :: Name -> [Name] -> StreamError
+unexpectedStanza got expected =
+  StreamError { seType = StInvalidXml
+              , seText = Just $ [qq|Unexpected stanza: got <{nameLocalName got}>, expected one of |] <>
+                         intersperse ", " (map (\n -> [qq|<{nameLocalName n}>|]) expected)
+              , seChildren = []
+              }
+
+unexpectedInput :: Text -> StreamError
+unexpectedInput str =
+  StreamError { seType = StInvalidXml
+              , seText = Just [qq|Stanza error: $str|]
+              , seChildren = []
+              }
+
+xmlError :: XMLException -> StreamError
+xmlError e =
+  StreamError { seType = StInvalidXml
+              , seText = Just [qq|XML parse error: $e|]
+              , seChildren = []
+              }
+
+unresolvedEntity :: Set Text -> StreamError
+unresolvedEntity entities =
+  StreamError { seType = StInvalidXml
+              , seText = Just $ "Unresolved XML entities: " <>
+                         intersperse ", " (S.toList entities)
+              , seChildren = []
+              }
+
+unsupportedVersion :: Text -> StreamError
+unsupportedVersion ver =
+  StreamError { seType = StUnsupportedVersion
+              , seText = Just [qq|Supported version: $xmppVersion, got $ver|]
+              , seChildren = []
+              }
+
 
 data StreamSettings = StreamSettings { ssFrom :: Text
                                      , ssId :: Text
@@ -137,22 +250,6 @@ saslName = nsName "urn:ietf:params:xml:ns:xmpp-sasl"
 estreamName :: T.Text -> Name
 estreamName = nsName "urn:ietf:params:xml:ns:xmpp-streams"
 
-data StreamException = UnexpectedStanza Name [Name]
-                     | XMLError XMLP.XmlException
-                     | UnresolvedEntity (Set Text)
-                     | UnsupportedVersion Text
-                     | UnexpectedInput String
-                     deriving (Show, Typeable)
-
-instance Exception StreamException
-
-streamErrorMsg :: StreamException -> Element
-streamErrorMsg (UnexpectedStanza _ _) = closedElement $ estreamName "invalid-xml"
-streamErrorMsg (XMLError _) = closedElement $ estreamName "not-well-formed"
-streamErrorMsg (UnresolvedEntity _) = closedElement $ estreamName "not-well-formed"
-streamErrorMsg (UnsupportedVersion _) = closedElement $ estreamName "unsupported-version"
-streamErrorMsg (UnexpectedInput _) = closedElement $ estreamName "invalid-xml"
-
 data StreamFeature = Compression [Text]
                    | StartTLS Bool
                    | SASL [ByteString]
@@ -160,24 +257,24 @@ data StreamFeature = Compression [Text]
                    | BindResource
                    deriving (Show, Eq)
 
-type MonadStream m = (MonadIO m, MonadMask m, MonadLogger m, MonadBase IO m)
+type MonadStream m = (MonadIO m, MonadMask m, MonadLogger m, MonadBaseControl IO m)
 
-parseFeatures :: MonadStream m => Element -> m [StreamFeature]
-parseFeatures e
+parseFeatures :: MonadStream m => Stream m -> Element -> m [StreamFeature]
+parseFeatures stream e
   | elementName e == streamName "features" = catMaybes <$> mapM parseOne (elementNodes e)
-  | otherwise = throwM $ UnexpectedStanza (elementName e) [streamName "features"]
+  | otherwise = streamThrow stream $ unexpectedStanza (elementName e) [streamName "features"]
 
   where parseOne n@(NodeElement f)
           | elementName f == startTLSName "starttls" =
-              return $ Just $ StartTLS $ not $ null $ fromNode n $/ checkName (== startTLSName "required")
+              return $ Just $ StartTLS $ not $ null $ fromNode n $/ XC.element (startTLSName "required")
           | elementName f == compressionName "compression" =
-              return $ Just $ Compression $ fromNode n $/ checkName (== compressionName "method") &/ content
+              return $ Just $ Compression $ fromNode n $/ XC.element (compressionName "method") &/ content
           | elementName f == saslName "mechanisms" =
-              return $ Just $ SASL $ map T.encodeUtf8 $ fromNode n $/ checkName (== saslName "mechanism") &/ content
+              return $ Just $ SASL $ map T.encodeUtf8 $ fromNode n $/ XC.element (saslName "mechanism") &/ content
           | elementName f == smName "sm" = return $ Just StreamManagement
           | elementName f == bindName "bind" = return $ Just BindResource
           | otherwise = do
-              $(logWarn) $ "Unknown feature: " <> showElement f
+              $(logWarn) [qq|"Unknown feature: {showElement f}|]
               return Nothing
 
         parseOne _ = return Nothing
@@ -206,7 +303,7 @@ renderStanza from to = do
 createStreamRender :: MonadStream m => ConnectionSettings -> Connection -> m (ResumableConduit Element m (Flush ByteString))
 createStreamRender (ConnectionSettings {..}) conn = do
   let render = newResumableConduit $
-               renderStanza (connectionUser <> "@" <> connectionServer) connectionServer
+               renderStanza [qq|{connectionUser}@{connectionServer}|] connectionServer
                =$= XMLR.renderBuilderFlush renderSettings
                =$= builderToByteStringFlush
   (render', _) <- CL.sourceNull $$ render =$$++ tillFlush =$= sinkConn conn
@@ -217,24 +314,49 @@ createStreamRender (ConnectionSettings {..}) conn = do
                                               ]
                              }
 
+data InternalStreamException = InternalStreamException StreamError
+                             deriving (Show, Typeable)
+
+instance Exception InternalStreamException
+
 parseStanza :: MonadStream m => IORef (Maybe StreamSettings) -> Conduit Event m Element
-parseStanza streamcfgR = handle (throwM . XMLError) $ streamTag $ \streamcfg -> do
+parseStanza streamcfgR = handle (throwM . InternalStreamException . xmlError) $ streamTag $ \streamcfg -> do
   writeIORef streamcfgR $ Just streamcfg
   fuseLeftovers (map snd) (CL.map (Nothing, )) (yieldTries XMLU.elementFromEvents) =$= CL.mapM tryFromElement
 
   where tryFromElement e' = case fromXMLElement e' of
           Right e -> do
-            $(logDebug) $ "Received message: " <> showElement e
+            $(logDebug) [qq|Received message: {showElement e}|]
             return e
-          Left unres -> throwM $ UnresolvedEntity unres
+          Left unres -> throwM $ InternalStreamException $ unresolvedEntity unres
+
+getStreamError :: Element -> Maybe StreamError
+getStreamError e
+  | elementName e == estreamName "error" =
+      Just StreamError {..}
+  | otherwise = Nothing
+
+  where n = NodeElement e
+
+        seType = fromMaybe StUndefinedCondition $ do
+          NodeElement en <- fmap node $ listToMaybe $ fromNode n $/ anyElement
+          injFrom $ nameLocalName $ elementName en
+
+        seText = listToMaybe $ fromNode n $/ XC.element (estreamName "text") &/ content
+
+        seChildren = map (\(node -> NodeElement ec) -> ec) $ fromNode n $/ checkName (/= estreamName (injTo seType)) >=> checkName (/= estreamName "text")
 
 createStreamSource :: MonadStream m => Connection -> m (StreamSettings, ResumableSource m Element)
 createStreamSource conn = do
   streamcfgR <- newIORef Nothing
-  let source = newResumableSource $
+  let checkError = CL.mapM $ \e -> case getStreamError e of
+        Nothing -> return e
+        Just err -> throwM $ InStreamError err
+      source = newResumableSource $
                sourceConn conn
                =$= XMLP.parseBytes parseSettings
                =$= parseStanza streamcfgR
+               =$= checkError
   (source', _) <- source $$++ CL.peek
   Just streamcfg <- readIORef streamcfgR
   return (streamcfg, source')
@@ -242,43 +364,49 @@ createStreamSource conn = do
   where parseSettings = def
 
 data Stream m = Stream { streamConn :: Connection
-                       , streamSource :: IORef (ResumableSource m Element)
-                       , streamRender :: IORef (ResumableConduit Element m (Flush ByteString))
+                       , streamSource :: MVar (ResumableSource m Element)
+                       , streamRender :: MVar (ResumableConduit Element m (Flush ByteString))
                        , streamFeatures :: [StreamFeature]
                        , streamInfo :: StreamSettings
                        }
 
 streamSend :: MonadStream m => Stream m -> Element -> m ()
-streamSend (Stream {..}) msg = do
-  render <- readIORef streamRender
-  (render', _) <- yield msg $$ render =$$++ tillFlush =$= sinkConn streamConn
-  writeIORef streamRender render'
+streamSend (Stream {..}) msg = modifyMVar streamRender $ \render ->
+  yield msg $$ render =$$++ tillFlush =$= sinkConn streamConn
 
 streamRecv' :: MonadStream m => Stream m -> m (Maybe Element)
-streamRecv' (Stream {..}) = do
-  source <- readIORef streamSource
-  (source', mmsg) <- source $$++ CL.head
-  writeIORef streamSource source'
-  return mmsg
+streamRecv' stream@(Stream {..}) = modifyMVar streamSource $ \source ->
+  handle internalError (source $$++ CL.head)
+
+  where internalError (InternalStreamException e) = streamThrow stream e
 
 streamRecv :: MonadStream m => Stream m -> m Element
 streamRecv s = streamRecv' s >>= \case
   Nothing -> throwM ConnectionClosedException
   Just msg -> return msg
 
+streamThrow :: MonadStream m => Stream m -> StreamError -> m a
+streamThrow stream e@(StreamError {..}) = do
+  streamSend stream $ element (streamName "error") [] $
+    [ NodeElement $ closedElement $ estreamName $ injTo seType
+    ]
+    ++ maybeToList (fmap (\t -> NodeElement $ element (estreamName "text") [(xmlName "lang", "en")] [NodeContent t]) seText)
+    ++ map NodeElement seChildren
+  throwM $ OutStreamError e
+
 streamClose :: MonadStream m => Stream m -> m ()
 streamClose (Stream {..}) = do
   $(logInfo) "Closing connection"
-  render <- readIORef streamRender
+  render <- takeMVar streamRender
   CL.sourceNull $$ render =$$+- CL.mapMaybe maybeFlush =$= sinkConn streamConn
-  source <- readIORef streamSource
+  source <- takeMVar streamSource
   source $$+- CL.sinkNull
   liftIO $ connectionClose streamConn
 
 saslAuth :: MonadStream m => Stream m -> [SASLAuthenticator r] -> m (Maybe r)
 saslAuth _ [] = return Nothing
 saslAuth s (auth:others) = do
-  $(logInfo) $ "Trying auth method " <> T.decodeUtf8 (saslMechanism auth)
+  $(logInfo) [qq|Trying auth method {T.decodeUtf8 (saslMechanism auth)}|]
   streamSend s $ element (saslName "auth") [("mechanism", T.decodeUtf8 $ saslMechanism auth)] $
     maybeToList $ fmap (NodeContent . T.decodeUtf8 . B64.encode) $ saslInitial auth
   proceedAuth $ saslWire auth
@@ -287,13 +415,13 @@ saslAuth s (auth:others) = do
           eresp <- streamRecv s
           let mdat = listToMaybe $ fmap (B64.decode . T.encodeUtf8) $ fromNode (NodeElement eresp) $/ content
           mdat' <- forM mdat $ \case
-            Left err -> throwM $ UnexpectedInput $ "proceedAuth, base64 decode: " ++ err
+            Left err -> streamThrow s $ unexpectedInput [qq|proceedAuth, base64 decode: $err|]
             Right d -> return d
           resp <- case mdat' of
             d | elementName eresp == saslName "success" -> return $ SASLSuccess d
             Nothing | elementName eresp == saslName "failure" -> return $ SASLFailure
             Just dat | elementName eresp == saslName "challenge" -> return $ SASLChallenge dat
-            _ -> throwM $ UnexpectedStanza (elementName eresp) $ map saslName ["challenge", "success", "failure"]
+            _ -> streamThrow s $ unexpectedStanza (elementName eresp) $ map saslName ["challenge", "success", "failure"]
           res <- liftIO $ runSASLWire wire resp
           case res of
             Left (msg, wire') -> do
@@ -302,7 +430,7 @@ saslAuth s (auth:others) = do
                 SASLAbort -> closedElement (saslName "abort")
               proceedAuth wire'
             Right (Just a) -> do
-              $(logInfo) $ "Successfully authenticated"
+              $(logInfo) "Successfully authenticated"
               return $ Just a
             Right Nothing -> saslAuth s others
 
@@ -318,12 +446,11 @@ initFeatures (ConnectionSettings {..}) s features
       $(logInfo) "Negotiating TLS"
       streamSend s $ closedElement $ startTLSName "starttls"
       eanswer <- streamRecv s
-      unless (elementName eanswer == startTLSName "proceed") $ throwM $ UnexpectedStanza (elementName eanswer) [startTLSName "proceed"]
+      unless (elementName eanswer == startTLSName "proceed") $ streamThrow s $ unexpectedStanza (elementName eanswer) [startTLSName "proceed"]
       return FeaturesTLS
   
-  | any (\case SASL _ -> True; _ -> False) features = do
+  | Just (SASL methods) <- find (\case SASL _ -> True; _ -> False) features = do
       $(logInfo) "Authenticating"
-      let (SASL methods):_ = filter (\case SASL _ -> True; _ -> False) features
       r <- saslAuth s $ concatMap (\m -> filter (\a -> saslMechanism a == m) connectionAuth) methods
       return $ if isJust r then FeaturesRestart else FeaturesUnauthorized
 
@@ -343,23 +470,19 @@ createStream csettings@(ConnectionSettings {..}) =
 
       streamRender' <- createStreamRender csettings streamConn
       (streamInfo, streamSource') <- createStreamSource streamConn
-      streamRender <- newIORef streamRender'
-      streamSource <- newIORef streamSource'
+      streamRender <- newMVar streamRender'
+      streamSource <- newMVar streamSource'
 
       let stream = Stream { streamFeatures = []
                           , ..
                           }
-          handleErr e = do
-            streamSend stream $ streamErrorMsg e
-            streamClose stream
-            throwM e
-      
-      (features, r) <- handle handleErr $ do
+
+      (features, r) <- do
         efeatures <- streamRecv stream
         if ssVersion streamInfo /= xmppVersion
-          then throwM $ UnsupportedVersion $ ssVersion streamInfo
+          then streamThrow stream $ unsupportedVersion $ ssVersion streamInfo
           else do
-            features <- parseFeatures efeatures
+            features <- parseFeatures stream efeatures
             r <- initFeatures csettings stream features
             return (features, r)
 

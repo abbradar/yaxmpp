@@ -13,18 +13,15 @@ module Network.XMPP.Session
        ) where
 
 import Data.Word
-import Data.Monoid
 import Text.Read
 import Data.Typeable
 import Control.Monad
 import Control.Monad.Trans.Control
-import Control.Concurrent.Lifted
+import Control.Concurrent.MVar.Lifted
 import Control.Monad.Logger
 import Data.IORef.Lifted
 import Data.Sequence (Seq, (|>), ViewL(..))
 import qualified Data.Sequence as S
-import Data.Map (Map)
-import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import Control.Monad.Catch
@@ -32,11 +29,10 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Network.Connection
+import Text.InterpolatedString.Perl6 (qq)
 
 import Network.XMPP.XML
 import Network.XMPP.Stream
-import Data.ID (IDGen)
-import qualified Data.ID as ID
 
 type MonadSession m = (MonadStream m, MonadBaseControl IO m)
 
@@ -50,10 +46,8 @@ data ResumptionException = ResumptionException ConnectionInterruptionException R
 
 instance Exception ResumptionException
 
-data ReadSessionData m = RSData { rsRequests :: Map Integer (Session m -> Element -> m ())
-                                , rsReqIds :: IDGen
-                                , rsRecvN :: Maybe Word32
-                                }
+data ReadSessionData = RSData { rsRecvN :: Maybe Word32
+                              }
 
 data WriteSessionData = WSData { wsPending :: Seq (Word32, Element)
                                , wsPendingN :: Word32
@@ -64,10 +58,9 @@ data ReconnectInfo = ReconnectInfo { reconnectId :: Text
                                    }
 
 data Session m = Session { sessionResource :: Text
-                         , sessionHandler :: Session m -> Element -> m ()
                          , sessionReconnect :: Maybe ReconnectInfo
                          , sessionStream :: IORef (Stream m)
-                         , sessionRLock :: MVar (ReadSessionData m)
+                         , sessionRLock :: MVar ReadSessionData
                          , sessionWLock :: MVar (Maybe WriteSessionData)
                          }
 
@@ -81,7 +74,7 @@ applySentH h ws = ws { wsPending = go $ wsPending ws }
 
 tryRestart :: MonadSession m
            => ReconnectInfo
-           -> ReadSessionData m
+           -> ReadSessionData
            -> Maybe WriteSessionData
            -> ConnectionInterruptionException
            -> m (Stream m, WriteSessionData)
@@ -106,7 +99,7 @@ tryRestart ri@(ReconnectInfo {..}) rs@(RSData { rsRecvN = Just recvn }) (Just ws
 
 tryRestart _ _ _ e = throwM e
 
-modifyRead :: MonadSession m => Session m -> (ReadSessionData m -> m (ReadSessionData m, a)) -> m a
+modifyRead :: MonadSession m => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
 modifyRead sess comp = modifyMVar (sessionRLock sess) tryRun
 
   where tryRun rs = handle (tryHandle rs) $ comp rs
@@ -145,44 +138,33 @@ sessionSend sess e = modifyWrite sess $ \ws -> do
   streamSend s e
   return (ws', ())
 
-handleIq :: MonadSession m => ReadSessionData m -> Element -> m (ReadSessionData m, (Session m -> Element -> m ()))
-handleIq ri e = case readAttr "id" e of
-  Nothing -> throwM $ UnexpectedInput "sessionStep: no id for iq"
-  Just rid -> case M.lookup rid $ rsRequests ri of
-    Nothing -> throwM $ UnexpectedInput "sessionStep: invalid id for iq"
-    Just handler -> do
-      let ri' = ri { rsReqIds = ID.free rid $ rsReqIds ri
-                   , rsRequests = M.delete rid $ rsRequests ri
-                   }
-      return (ri', handler)
+sessionThrow :: MonadSession m => Session m -> StreamError -> m a
+sessionThrow sess e = do
+  s <- readIORef $ sessionStream sess
+  streamThrow s e
 
-handleR :: MonadSession m => ReadSessionData m -> Session m -> Element -> m ()
-handleR (RSData { rsRecvN = Just n }) sess _ = sessionSend sess $ element (smName "r") [("h", T.pack $ show n)] []
-handleR _ _ _ = fail "handleQ: impossible"
+handleR :: MonadSession m => ReadSessionData -> Session m -> m ()
+handleR (RSData { rsRecvN = Just n }) sess = sessionSend sess $ element (smName "r") [("h", T.pack $ show n)] []
+handleR _ _ = fail "handleQ: impossible"
 
 handleA :: MonadSession m => Session m -> Element -> m ()
-handleA sess e = case readAttr "h" e of
-  Nothing -> throwM $ UnexpectedInput "handleR: invalid h"
-  Just nsent -> modifyWrite sess $ \case
-    Nothing -> throwM $ UnexpectedInput "handleR: stream management is not enabled"
+handleA sess e = modifyWrite sess $ \ws -> case readAttr "h" e of
+  Nothing -> sessionThrow sess $ unexpectedInput "handleR: invalid h"
+  Just nsent -> case ws of
+    Nothing -> sessionThrow sess $ unexpectedInput "handleR: stream management is not enabled"
     Just wi -> return (Just $ applySentH nsent wi, ())
 
-sessionStep :: MonadSession m => Session m -> m ()
+sessionStep :: MonadSession m => Session m -> m (Maybe Element)
 sessionStep sess = do
-  (handler, emsg) <- modifyRead sess $ \ri -> do
+  (handler, res) <- modifyRead sess $ \ri -> do
     s <- readIORef $ sessionStream sess
     emsg <- streamRecv s
-    let riInc = ri { rsRecvN = fmap (+1) $ rsRecvN ri }
-    (ri', handler) <-
-      if | elementName emsg == jcName "iq"
-           , Just typ <- getAttr "type" emsg
-           , typ == "result" || typ == "error"
-            -> handleIq riInc emsg 
-         | elementName emsg == smName "r" -> return (ri, handleR ri)
-         | elementName emsg == smName "a" -> return (ri, handleA)
-         | otherwise -> return (riInc, sessionHandler sess)
-    return (ri', (handler, emsg))
-  handler sess emsg
+    let riInc = ri { rsRecvN = (+1) <$> rsRecvN ri }
+    if | elementName emsg == smName "r" -> return (ri, (handleR ri sess, Nothing))
+       | elementName emsg == smName "a" -> return (ri, (handleA sess emsg, Nothing))
+       | otherwise -> return (riInc, (return (), Just emsg))
+  handler
+  return res
 
 data SessionSettings = SessionSettings { ssConn :: ConnectionSettings
                                        , ssResource :: Text
@@ -190,7 +172,7 @@ data SessionSettings = SessionSettings { ssConn :: ConnectionSettings
 
 bindResource :: MonadSession m => Text -> Stream m -> m Text
 bindResource wantRes s
-  | not $ any (\case BindResource -> True; _ -> False) $ streamFeatures s = throwM $ UnexpectedInput "bindResource: no resource bind"
+  | not $ any (\case BindResource -> True; _ -> False) $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
   | otherwise = do
       streamSend s $ element "iq" [("type", "set"), ("id", "res-bind")]
         [ NodeElement $ element (bindName "bind") []
@@ -209,9 +191,9 @@ bindResource wantRes s
            &/ content
         of
         res:_ -> do
-          $(logInfo) $ "Binded resource: " <> res
+          $(logInfo) [qq|Binded resource: $res|]
           return res
-        _ -> throwM $ UnexpectedInput "bindResource: bind failure"
+        _ -> streamThrow s $ unexpectedInput "bindResource: bind failure"
 
 parseLocation :: ConnectionSettings -> Text -> ConnectionSettings
 parseLocation csettings string =
@@ -245,10 +227,10 @@ initSM csettings s
                then do
                  $(logInfo) "Stream management without resumption enabled"
                  return Nothing
-               else throwM $ UnexpectedInput "initSM: stream management is advertised but cannot be enabled"
+               else streamThrow s $ unexpectedInput "initSM: stream management is advertised but cannot be enabled"
 
-createSession :: MonadSession m => SessionSettings -> (Session m -> Element -> m ()) -> m (Either ClientError (Session m))
-createSession (SessionSettings {..}) sessionHandler = do
+createSession :: MonadSession m => SessionSettings -> m (Either ClientError (Session m))
+createSession (SessionSettings {..}) = do
   ms <- createStream ssConn
   case ms of
     Left e -> return $ Left e
@@ -256,9 +238,7 @@ createSession (SessionSettings {..}) sessionHandler = do
       sessionResource <- bindResource ssResource s
       msm <- initSM ssConn s
       sessionStream <- newIORef s
-      sessionRLock <- newMVar RSData { rsRequests = M.empty
-                                     , rsReqIds = ID.empty
-                                     , rsRecvN = 0 <$ msm
+      sessionRLock <- newMVar RSData { rsRecvN = 0 <$ msm
                                      }
       sessionWLock <- newMVar $ WSData { wsPending = S.empty
                                        , wsPendingN = 0

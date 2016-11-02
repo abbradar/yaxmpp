@@ -1,8 +1,6 @@
 import Control.Monad
-import Data.Monoid
 import System.Environment
 import Data.Text (Text)
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
@@ -13,6 +11,7 @@ import Control.Monad.Trans.Either
 import Network.DNS
 import Network.Connection
 import Control.Monad.Logger
+import Text.InterpolatedString.Perl6 (qq)
 
 import Network.XMPP.Connection
 import Network.XMPP.Stream
@@ -32,7 +31,7 @@ main = runStderrLoggingT $ do
   settings <- liftIO $ read <$> readFile settingsfile
   rs <- liftIO $ makeResolvSeed defaultResolvConf
   Right svrs <- liftIO $ withResolver rs $ \resolver -> runEitherT $ findServers resolver (server settings) Nothing
-  $(logInfo) $ "Found servers: " <> T.pack (show svrs)
+  $(logInfo) [qq|Found servers: $svrs|]
   cctx <- liftIO initConnectionContext
   let (host, port) = head svrs
       tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
@@ -54,15 +53,15 @@ main = runStderrLoggingT $ do
                                   , ssResource = resource settings
                                   }
       initSession = do
-        ms <- createSession ssettings myHandler
+        ms <- createSession ssettings
         case ms of
-          Left e -> fail $ "Error creating session: " ++ show e
+          Left e -> fail [qq|Error creating session: $e|]
           Right s -> return s
 
-      myHandler sess e = do
-        $(logInfo) $ "Stanza received by handler"
-        
   bracket initSession closeSession $ \sess ->
     bracket (fork $ forever $ threadDelay 5000000 >> cleanupPending sess) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
-      forever $ sessionStep sess
+      forever $ sessionStep sess >>= \case
+        Nothing -> return ()
+        Just s -> do
+          $(logDebug) [qq|Stanza received: $s|]

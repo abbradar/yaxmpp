@@ -22,9 +22,10 @@ library
                      , Network.XMPP.XML
                      , Network.SASL
                      , Data.ID
+                     , Data.Injective
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base >=4.8 && <4.9
+  build-depends:       base >=4.8
                      , bytestring
                      , text
                      , containers
@@ -38,6 +39,7 @@ library
                      , xml-types
                      , blaze-builder
                      , xml-conduit >= 1.3.5
+                     , attoparsec
                      , base64-bytestring
                      , iproute
                      , dns
@@ -46,6 +48,8 @@ library
                      , connection
                      , tls
                      , data-default
+                     , stringprep
+                     , interpolatedstring-perl6
   hs-source-dirs:      src
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
@@ -60,10 +64,12 @@ library
                      , ScopedTypeVariables
                      , PatternSynonyms
                      , ConstraintKinds
+                     , MultiParamTypeClasses
+                     , QuasiQuotes
   ghc-options:         -Wall
 
 executable test
-  build-depends:       base >=4.8 && <4.9
+  build-depends:       base >=4.8
                      , yaxmpp
                      , text
                      , bytestring
@@ -74,9 +80,12 @@ executable test
                      , dns
                      , exceptions
                      , lifted-base
+                     , interpolatedstring-perl6
   hs-source-dirs:      exe
   main-is:             Test.hs
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings
                      , TemplateHaskell
+                     , QuasiQuotes
+                     , LambdaCase
   ghc-options:         -Wall
