@@ -1,0 +1,16 @@
+* TODO
+** RFCs
+[ ] RFC 6120 (Core) [https://tools.ietf.org/html/rfc6120]
+    [x] SRV records
+    [x] Stream negotiation
+    [x] STARTTLS negotiation
+    [x] SASL negotiation
+    [x] Stream-level error handling
+    [ ] Stanza-level error handling
+    [ ] Send and receive stanzas
+[ ] RFC 6121 (Instant Messaging and Presence) [https://tools.ietf.org/html/rfc6121]
+    [x] <message> and <presence> types
+[ ] RFC 6122 (Address Format) [https://tools.ietf.org/html/rfc6122]
+
+** XEPs
+[x] XEP-0198 (Stream Management) [http://xmpp.org/extensions/xep-0198.html]
