@@ -16,6 +16,7 @@ import Text.InterpolatedString.Perl6 (qq)
 import Network.XMPP.Connection
 import Network.XMPP.Stream
 import Network.XMPP.Session
+import Network.XMPP.Stanza
 import Network.SASL
 
 data Settings = Settings { server :: ByteString
@@ -52,16 +53,21 @@ main = runStderrLoggingT $ do
       ssettings = SessionSettings { ssConn = csettings
                                   , ssResource = resource settings
                                   }
-      initSession = do
-        ms <- createSession ssettings
+      initMain = do
+        ms <- stanzaSessionCreate ssettings
         case ms of
           Left e -> fail [qq|Error creating session: $e|]
           Right s -> return s
 
-  bracket initSession closeSession $ \sess ->
-    bracket (fork $ forever $ threadDelay 5000000 >> cleanupPending sess) killThread $ \_ -> do
+      msgHandler msg = do
+        $(logDebug) [qq|Stanza received: $msg|]
+        return Nothing
+
+      iqHandler iq = do
+        $(logDebug) [qq|Request received: $iq|]
+        return $ Left $ featureNotImplemented "Not implemented"
+          
+  bracket initMain stanzaSessionClose $ \sess ->
+    bracket (fork $ forever $ threadDelay 5000000 >> stanzaSessionPeriodic sess) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
-      forever $ sessionStep sess >>= \case
-        Nothing -> return ()
-        Just s -> do
-          $(logDebug) [qq|Stanza received: $s|]
+      forever $ stanzaSessionStep sess msgHandler iqHandler

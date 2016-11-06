@@ -17,7 +17,7 @@ module Network.XMPP.Stream
        , ClientError(..)
        , MonadStream
        , Stream
-       , createStream
+       , streamCreate
        ) where
 
 import Data.Monoid
@@ -153,9 +153,9 @@ instance Injective StreamErrorType Text where
     StUnsupportedStanzaType -> "unsupported-stanza-type"
     StUnsupportedVersion -> "unsupported-version"
 
-data StreamError = StreamError { seType :: StreamErrorType
-                               , seText :: Maybe Text
-                               , seChildren :: [Element]
+data StreamError = StreamError { smeType :: StreamErrorType
+                               , smeText :: Maybe Text
+                               , smeChildren :: [Element]
                                }
                  deriving (Show, Eq)
 
@@ -164,39 +164,39 @@ intersperse sep = foldr1 (\a b -> a <> sep <> b)
 
 unexpectedStanza :: Name -> [Name] -> StreamError
 unexpectedStanza got expected =
-  StreamError { seType = StInvalidXml
-              , seText = Just $ [qq|Unexpected stanza: got <{nameLocalName got}>, expected one of |] <>
+  StreamError { smeType = StInvalidXml
+              , smeText = Just $ [qq|Unexpected stanza: got <{nameLocalName got}>, expected one of |] <>
                          intersperse ", " (map (\n -> [qq|<{nameLocalName n}>|]) expected)
-              , seChildren = []
+              , smeChildren = []
               }
 
 unexpectedInput :: Text -> StreamError
 unexpectedInput str =
-  StreamError { seType = StInvalidXml
-              , seText = Just [qq|Stanza error: $str|]
-              , seChildren = []
+  StreamError { smeType = StInvalidXml
+              , smeText = Just [qq|Stanza error: $str|]
+              , smeChildren = []
               }
 
 xmlError :: XMLException -> StreamError
 xmlError e =
-  StreamError { seType = StInvalidXml
-              , seText = Just [qq|XML parse error: $e|]
-              , seChildren = []
+  StreamError { smeType = StInvalidXml
+              , smeText = Just [qq|XML parse error: $e|]
+              , smeChildren = []
               }
 
 unresolvedEntity :: Set Text -> StreamError
 unresolvedEntity entities =
-  StreamError { seType = StInvalidXml
-              , seText = Just $ "Unresolved XML entities: " <>
+  StreamError { smeType = StInvalidXml
+              , smeText = Just $ "Unresolved XML entities: " <>
                          intersperse ", " (S.toList entities)
-              , seChildren = []
+              , smeChildren = []
               }
 
 unsupportedVersion :: Text -> StreamError
 unsupportedVersion ver =
-  StreamError { seType = StUnsupportedVersion
-              , seText = Just [qq|Supported version: $xmppVersion, got $ver|]
-              , seChildren = []
+  StreamError { smeType = StUnsupportedVersion
+              , smeText = Just [qq|Supported version: $xmppVersion, got $ver|]
+              , smeChildren = []
               }
 
 
@@ -237,6 +237,10 @@ streamTag = XMLP.force "Stream has not started" . XMLP.tagName (streamName "stre
           ssFrom <- XMLP.requireAttr "from"
           ssVersion <- XMLP.requireAttr "version"
           return StreamSettings {..}
+
+streamNS :: Text
+streamName :: Text -> Name
+(streamNS, streamName) = namePair "http://etherx.jabber.org/streams"
 
 compressionName :: Text -> Name
 compressionName = nsName "http://jabber.org/features/compress"
@@ -336,15 +340,15 @@ getStreamError e
       Just StreamError {..}
   | otherwise = Nothing
 
-  where n = NodeElement e
+  where cur = fromNode $ NodeElement e
 
-        seType = fromMaybe StUndefinedCondition $ do
-          NodeElement en <- fmap node $ listToMaybe $ fromNode n $/ anyElement
+        smeType = fromMaybe StUndefinedCondition $ do
+          NodeElement en <- listToMaybe $ cur $/ anyElement &| node
           injFrom $ nameLocalName $ elementName en
 
-        seText = listToMaybe $ fromNode n $/ XC.element (estreamName "text") &/ content
+        smeText = listToMaybe $ cur $/ XC.element (estreamName "text") &/ content
 
-        seChildren = map (\(node -> NodeElement ec) -> ec) $ fromNode n $/ checkName (/= estreamName (injTo seType)) >=> checkName (/= estreamName "text")
+        smeChildren = map (\(node -> NodeElement ec) -> ec) $ cur $/ checkName (\n -> n /= estreamName (injTo smeType) && n /= estreamName "text")
 
 createStreamSource :: MonadStream m => Connection -> m (StreamSettings, ResumableSource m Element)
 createStreamSource conn = do
@@ -388,10 +392,10 @@ streamRecv s = streamRecv' s >>= \case
 streamThrow :: MonadStream m => Stream m -> StreamError -> m a
 streamThrow stream e@(StreamError {..}) = do
   streamSend stream $ element (streamName "error") [] $
-    [ NodeElement $ closedElement $ estreamName $ injTo seType
+    [ NodeElement $ closedElement $ estreamName $ injTo smeType
     ]
-    ++ maybeToList (fmap (\t -> NodeElement $ element (estreamName "text") [(xmlName "lang", "en")] [NodeContent t]) seText)
-    ++ map NodeElement seChildren
+    ++ maybeToList (fmap (\t -> NodeElement $ element (estreamName "text") [(xmlName "lang", "en")] [NodeContent t]) smeText)
+    ++ map NodeElement smeChildren
   throwM $ OutStreamError e
 
 streamClose :: MonadStream m => Stream m -> m ()
@@ -460,8 +464,8 @@ data ClientError = Unauthorized
                  | NoTLSParams
                  deriving (Show, Eq)
 
-createStream :: MonadStream m => ConnectionSettings -> m (Either ClientError (Stream m))
-createStream csettings@(ConnectionSettings {..}) =
+streamCreate :: MonadStream m => ConnectionSettings -> m (Either ClientError (Stream m))
+streamCreate csettings@(ConnectionSettings {..}) =
   bracketOnError (handleConnErr $ connectTo connectionContext connectionParams { connectionUseSecure = Nothing }) (liftIO . connectionClose) initStream
 
   where

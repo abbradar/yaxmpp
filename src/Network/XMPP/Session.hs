@@ -7,9 +7,9 @@ module Network.XMPP.Session
        , sessionSend
        , sessionStep
        , SessionSettings(..)
-       , createSession
-       , closeSession
-       , cleanupPending
+       , sessionCreate
+       , sessionClose
+       , sessionPeriodic
        ) where
 
 import Data.Word
@@ -81,7 +81,7 @@ tryRestart :: MonadSession m
 tryRestart ri@(ReconnectInfo {..}) rs@(RSData { rsRecvN = Just recvn }) (Just ws) e = do
   let throwE = throwM . ResumptionException e
   $(logWarn) "Trying to restart the connection"
-  ns <- createStream reconnectSettings
+  ns <- streamCreate reconnectSettings
   case ns of
     Left err -> throwE $ ClientErrorException err
     Right s -> do
@@ -229,9 +229,9 @@ initSM csettings s
                  return Nothing
                else streamThrow s $ unexpectedInput "initSM: stream management is advertised but cannot be enabled"
 
-createSession :: MonadSession m => SessionSettings -> m (Either ClientError (Session m))
-createSession (SessionSettings {..}) = do
-  ms <- createStream ssConn
+sessionCreate :: MonadSession m => SessionSettings -> m (Either ClientError (Session m))
+sessionCreate (SessionSettings {..}) = do
+  ms <- streamCreate ssConn
   case ms of
     Left e -> return $ Left e
     Right s -> do
@@ -247,12 +247,12 @@ createSession (SessionSettings {..}) = do
                              , ..
                              }
 
-closeSession :: MonadSession m => Session m -> m ()
-closeSession sess = modifyMVar_ (sessionRLock sess) $ \ri -> modifyMVar (sessionWLock sess) $ \wi -> do
+sessionClose :: MonadSession m => Session m -> m ()
+sessionClose sess = modifyMVar_ (sessionRLock sess) $ \ri -> modifyMVar (sessionWLock sess) $ \wi -> do
   s <- readIORef $ sessionStream sess
   streamClose s
   -- Effectively prevent reconnection
   return (wi, ri { rsRecvN = Nothing })
 
-cleanupPending :: MonadSession m => Session m -> m ()
-cleanupPending sess = sessionSend sess $ closedElement $ smName "r"
+sessionPeriodic :: MonadSession m => Session m -> m ()
+sessionPeriodic sess = sessionSend sess $ closedElement $ smName "r"

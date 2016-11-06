@@ -25,10 +25,6 @@ xmlNS :: T.Text
 xmlName :: T.Text -> Name
 (xmlNS, xmlName) = namePair "http://www.w3.org/XML/1998/namespace"
 
-streamNS :: T.Text
-streamName :: T.Text -> Name
-(streamNS, streamName) = namePair "http://etherx.jabber.org/streams"
-
 jcNS :: T.Text
 jcName :: T.Text -> Name
 (jcNS, jcName) = namePair "jabber:client"
@@ -47,7 +43,7 @@ bindName :: Text -> Name
 
 element :: Name -> [(Name, Text)] -> [Node] -> Element
 element name attrs nodes = Element { elementName = name
-                                   , elementAttributes = M.fromList attrs
+                                   , elementAttributes = M.fromListWith (error "element: repeating attributes") attrs
                                    , elementNodes = nodes
                                    }
 

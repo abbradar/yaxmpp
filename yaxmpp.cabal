@@ -19,6 +19,8 @@ library
   exposed-modules:     Network.XMPP.Connection
                      , Network.XMPP.Stream
                      , Network.XMPP.Session
+                     , Network.XMPP.Stanza
+                     , Network.XMPP.Address
                      , Network.XMPP.XML
                      , Network.SASL
                      , Data.ID
