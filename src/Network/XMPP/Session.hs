@@ -10,6 +10,7 @@ module Network.XMPP.Session
        , sessionCreate
        , sessionClose
        , sessionPeriodic
+       , sessionGetStream
        ) where
 
 import Data.Word
@@ -100,28 +101,28 @@ tryRestart ri@(ReconnectInfo {..}) rs@(RSData { rsRecvN = Just recvn }) (Just ws
 tryRestart _ _ _ e = throwM e
 
 modifyRead :: MonadSession m => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
-modifyRead sess comp = modifyMVar (sessionRLock sess) tryRun
+modifyRead (Session {..}) comp = modifyMVar sessionRLock tryRun
 
   where tryRun rs = handle (tryHandle rs) $ comp rs
-        tryHandle rs e = case sessionReconnect sess of
+        tryHandle rs e = case sessionReconnect of
           Nothing -> throwM e
           Just ri -> do
-            modifyMVar_ (sessionWLock sess) $ \ws -> do
+            modifyMVar_ sessionWLock $ \ws -> do
               (s', ws') <- tryRestart ri rs ws e
-              writeIORef (sessionStream sess) s'
+              writeIORef sessionStream s'
               return $ Just ws'
             tryRun rs
 
 modifyWrite :: MonadSession m => Session m -> (Maybe WriteSessionData -> m (Maybe WriteSessionData, a)) -> m a
-modifyWrite sess comp = modifyMVar (sessionWLock sess) tryRun
+modifyWrite (Session {..}) comp = modifyMVar sessionWLock tryRun
 
   where tryRun ws = handle (tryHandle ws) $ comp ws
-        tryHandle ws e = case sessionReconnect sess of
+        tryHandle ws e = case sessionReconnect of
           Nothing -> throwM e
           Just ri -> do
-            ws' <- modifyMVar (sessionRLock sess) $ \rs -> do
+            ws' <- modifyMVar sessionRLock $ \rs -> do
               (s', ws') <- tryRestart ri rs ws e
-              writeIORef (sessionStream sess) s'
+              writeIORef sessionStream s'
               return (rs, Just ws')
             tryRun ws'
 
@@ -256,3 +257,6 @@ sessionClose sess = modifyMVar_ (sessionRLock sess) $ \ri -> modifyMVar (session
 
 sessionPeriodic :: MonadSession m => Session m -> m ()
 sessionPeriodic sess = sessionSend sess $ closedElement $ smName "r"
+
+sessionGetStream :: MonadSession m => Session m -> m (Stream m)
+sessionGetStream (Session {..}) = readIORef sessionStream

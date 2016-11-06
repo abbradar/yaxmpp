@@ -17,6 +17,7 @@ import Network.XMPP.Connection
 import Network.XMPP.Stream
 import Network.XMPP.Session
 import Network.XMPP.Stanza
+import Network.XMPP.Plugin
 import Network.SASL
 
 data Settings = Settings { server :: ByteString
@@ -54,20 +55,13 @@ main = runStderrLoggingT $ do
                                   , ssResource = resource settings
                                   }
       initMain = do
-        ms <- stanzaSessionCreate ssettings
+        ms <- sessionCreate ssettings
         case ms of
           Left e -> fail [qq|Error creating session: $e|]
-          Right s -> return s
+          Right s -> stanzaSessionCreate s
 
-      msgHandler msg = do
-        $(logDebug) [qq|Stanza received: $msg|]
-        return Nothing
-
-      iqHandler iq = do
-        $(logDebug) [qq|Request received: $iq|]
-        return $ Left $ featureNotImplemented "Not implemented"
-          
-  bracket initMain stanzaSessionClose $ \sess ->
-    bracket (fork $ forever $ threadDelay 5000000 >> stanzaSessionPeriodic sess) killThread $ \_ -> do
+  bracket initMain (sessionClose . ssSession) $ \sess ->
+    bracket (fork $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
-      forever $ stanzaSessionStep sess msgHandler iqHandler
+      let plugins = []
+      forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

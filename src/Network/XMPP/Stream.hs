@@ -259,6 +259,7 @@ data StreamFeature = Compression [Text]
                    | SASL [ByteString]
                    | StreamManagement
                    | BindResource
+                   | RosterVersioning
                    deriving (Show, Eq)
 
 type MonadStream m = (MonadIO m, MonadMask m, MonadLogger m, MonadBaseControl IO m)
@@ -277,6 +278,7 @@ parseFeatures stream e
               return $ Just $ SASL $ map T.encodeUtf8 $ fromNode n $/ XC.element (saslName "mechanism") &/ content
           | elementName f == smName "sm" = return $ Just StreamManagement
           | elementName f == bindName "bind" = return $ Just BindResource
+          | elementName f == rosterVerName "ver" = return $ Just RosterVersioning
           | otherwise = do
               $(logWarn) [qq|"Unknown feature: {showElement f}|]
               return Nothing

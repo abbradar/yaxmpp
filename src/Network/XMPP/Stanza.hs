@@ -18,6 +18,7 @@ module Network.XMPP.Stanza
 
   , ResponseIQHandler
   , StanzaSession
+  , ssSession
   , stanzaSend
   , stanzaRequest
   , stanzaSyncRequest
@@ -27,8 +28,6 @@ module Network.XMPP.Stanza
   , stanzaSessionStep
 
   , stanzaSessionCreate
-  , stanzaSessionClose
-  , stanzaSessionPeriodic
   ) where
 
 import Text.Read (readMaybe)
@@ -39,17 +38,17 @@ import qualified Data.Text as T
 import Control.Concurrent.Lifted
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.Either
+import Control.Monad.Logger
 import Data.Map (Map)
 import qualified Data.Map as M
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
+import Text.InterpolatedString.Perl6 (qq)
 
 import Data.Injective
 import Data.ID (IDGen)
 import qualified Data.ID as ID
-import Network.XMPP.Stream (ClientError)
 import Network.XMPP.Session
 import Network.XMPP.Address
 import Network.XMPP.XML
@@ -263,7 +262,8 @@ stanzaSyncRequest session req = do
   takeMVar ret
 
 stanzaSendError :: MonadSession m => StanzaSession m -> Element -> StanzaError -> m ()
-stanzaSendError (StanzaSession {..}) e (StanzaError {..}) =
+stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
+  $(logWarn) [qq|Stanza error sent: $err|]
   sessionSend ssSession $ element (elementName e) (("type", "error") : catMaybes attrs) (elementNodes e ++ [errorE])
 
   where attrs = [ ("id", ) <$> getAttr "id" e
@@ -375,15 +375,8 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
                                              }
          lift $ sendError res
 
-stanzaSessionCreate :: MonadSession m => SessionSettings -> m (Either ClientError (StanzaSession m))
-stanzaSessionCreate sessionSettings = runEitherT $ do
-  ssSession <- EitherT $ sessionCreate sessionSettings
-  ssReqIds <- lift $ newMVar ID.empty
-  ssRequests <- lift $ newMVar M.empty
+stanzaSessionCreate :: MonadSession m => Session m -> m (StanzaSession m)
+stanzaSessionCreate ssSession = do
+  ssReqIds <- newMVar ID.empty
+  ssRequests <- newMVar M.empty
   return StanzaSession {..}
-
-stanzaSessionClose :: MonadSession m => StanzaSession m -> m () 
-stanzaSessionClose (StanzaSession {..}) = sessionClose ssSession
-
-stanzaSessionPeriodic :: MonadSession m => StanzaSession m -> m () 
-stanzaSessionPeriodic (StanzaSession {..}) = sessionPeriodic ssSession

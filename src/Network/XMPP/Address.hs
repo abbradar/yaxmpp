@@ -21,7 +21,7 @@ data XMPPAddress = XMPPAddress { xmppLocal :: Maybe Text
                                , xmppDomain :: Text
                                , xmppResource :: Maybe Text
                                }
-                 deriving (Show, Eq)
+                 deriving (Show, Eq, Ord)
 
 nodeProhibited :: [Range]
 nodeProhibited = 

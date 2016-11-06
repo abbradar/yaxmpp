@@ -41,6 +41,10 @@ bindNS :: Text
 bindName :: Text -> Name
 (bindNS, bindName) = namePair "urn:ietf:params:xml:ns:xmpp-bind"
 
+rosterVerNS :: Text
+rosterVerName :: Text -> Name
+(rosterVerNS, rosterVerName) = namePair "urn:xmpp:features:rosterver"
+
 element :: Name -> [(Name, Text)] -> [Node] -> Element
 element name attrs nodes = Element { elementName = name
                                    , elementAttributes = M.fromListWith (error "element: repeating attributes") attrs
