@@ -15,6 +15,7 @@ module Network.XMPP.Stanza
   , IQRequestType(..)
   , InRequestIQ(..)
   , OutRequestIQ(..)
+  , serverRequest
 
   , ResponseIQHandler
   , StanzaSession
@@ -221,6 +222,11 @@ data OutRequestIQ = OutRequestIQ { oriTo :: Maybe XMPPAddress
                                  }
                   deriving (Show, Eq)
 
+serverRequest :: IQRequestType -> [Element] -> OutRequestIQ
+serverRequest oriIqType oriChildren = OutRequestIQ { oriTo = Nothing
+                                                   , ..
+                                                   }
+
 stanzaName :: T.Text -> Name
 stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 
@@ -233,9 +239,9 @@ data StanzaSession m = StanzaSession { ssSession :: Session m
                                      }
 
 stanzaSend :: MonadSession m => StanzaSession m -> OutStanza -> [Element] -> m Integer
-stanzaSend (StanzaSession {..}) (OutStanza {..}) body = modifyMVar ssReqIds $ \idgen -> do
-  let (idgen', sid) = ID.get idgen
-      (mname, mtype) = case ostType of
+stanzaSend (StanzaSession {..}) (OutStanza {..}) body = do
+  sid <- modifyMVar ssReqIds (return . ID.get)
+  let (mname, mtype) = case ostType of
         OutMessage t -> ("message", injTo t)
         OutPresence t -> ("presence", injTo t)
       attrs = [ ("id", T.pack $ show sid)
@@ -243,17 +249,17 @@ stanzaSend (StanzaSession {..}) (OutStanza {..}) body = modifyMVar ssReqIds $ \i
               ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) ostTo)
       msg = element (jcName mname) attrs $ map NodeElement body
   sessionSend ssSession msg
-  return (idgen', sid)
+  return sid
 
 stanzaRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
-stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssReqIds $ \idgen -> modifyMVar ssRequests $ \reqs -> do
-  let (idgen', sid) = ID.get idgen
-      attrs = [ ("id", T.pack $ show sid)
+stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
+  sid <- modifyMVar ssReqIds (return . ID.get)
+  let attrs = [ ("id", T.pack $ show sid)
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) oriTo)
       msg = element "iq" attrs $ map NodeElement oriChildren
   sessionSend ssSession msg
-  return (M.insert sid handler reqs, idgen')
+  modifyMVar_ ssRequests (return . M.insert sid handler)
 
 stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
 stanzaSyncRequest session req = do
@@ -340,16 +346,16 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
 
            Nothing -> do
              nid <- checkOrFail (readMaybe $ T.unpack mid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
-             lift $ modifyMVar_ ssRequests $ \requests ->
-               case M.lookup nid requests of
-                 Nothing -> do
-                   sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
-                   return requests
-                 Just handler -> do
+             lift $ do
+               mhandler <- modifyMVar ssRequests $ \requests -> case M.lookup nid requests of
+                 Nothing -> return (requests, Nothing)
+                 Just handler -> return $ (M.delete nid requests, Just handler)
+               case mhandler of
+                 Nothing -> sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
+                 Just handler ->
                    if | ttype == "result" -> handler $ Right payload
                       | ttype == "error" -> handler $ Left $ getStanzaError e
                       | otherwise -> sendError $ badRequest "stanzaSessionStep: iq type is invalid"
-                   return $ M.delete nid requests
 
      | otherwise -> do
          let (serror, children) =
