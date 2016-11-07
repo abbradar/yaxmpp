@@ -3,9 +3,9 @@ module Network.XMPP.Address.Internal where
 import Data.Monoid
 import Data.Text (Text)
 import Data.Aeson
+import Data.Aeson.Types (toJSONKeyText)
 import Control.Applicative
 import Control.Monad.Fail (MonadFail)
-import Data.Text (Text)
 import Data.Attoparsec.Text
 import Text.StringPrep
 import Text.StringPrep.Profiles
@@ -24,8 +24,16 @@ instance FromJSON XMPPAddress where
     Nothing -> fail "XMPPAddress"
     Just r -> return r
 
+instance FromJSONKey XMPPAddress where
+  fromJSONKey = FromJSONKeyTextParser $ \k -> case readXMPPAddress k of
+    Nothing -> fail "XMPPAddress"
+    Just r -> return r
+
 instance ToJSON XMPPAddress where
   toJSON = toJSON . showXMPPAddress
+
+instance ToJSONKey XMPPAddress where
+  toJSONKey = toJSONKeyText showXMPPAddress
 
 nodeProhibited :: [Range]
 nodeProhibited = 

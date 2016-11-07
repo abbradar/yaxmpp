@@ -36,7 +36,7 @@ import Data.Maybe
 import Control.Monad
 import Data.Text (Text)
 import qualified Data.Text as T
-import Control.Concurrent.Lifted
+import Control.Concurrent.MVar.Lifted
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
 import Control.Monad.Logger

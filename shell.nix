@@ -9,6 +9,9 @@ let
                        else pkgs.haskell.packages.${compiler};
 
   haskellPackages_ = haskellPackages.override {
+    overrides = self: super: {
+      aeson = self.aeson_1_0_2_1;
+    };
   };
 
   drv = haskellPackages_.callPackage ./default.nix {};

@@ -3,7 +3,7 @@
 , containers, data-default, dns, either, exceptions
 , interpolatedstring-perl6, iproute, lifted-base, monad-control
 , monad-logger, stdenv, stringprep, text, tls, transformers
-, transformers-base, xml-conduit, xml-types
+, transformers-base, xml-conduit, xml-types, yaml
 }:
 mkDerivation {
   pname = "yaxmpp";
@@ -21,6 +21,7 @@ mkDerivation {
   executableHaskellDepends = [
     base bytestring connection dns either exceptions
     interpolatedstring-perl6 lifted-base monad-logger text transformers
+    yaml
   ];
   description = "Yet another XMPP implementation for Haskell";
   license = stdenv.lib.licenses.bsd3;

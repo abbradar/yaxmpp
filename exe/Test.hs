@@ -1,9 +1,12 @@
 import Control.Monad
 import System.Environment
+import GHC.Generics (Generic)
+import qualified Data.Aeson as JSON
+import qualified Data.Yaml as Yaml
 import Data.Text (Text)
 import qualified Data.Text.Encoding as T
-import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
+import qualified Data.ByteString.Lazy.Char8 as BL
 import Control.Monad.IO.Class
 import Control.Monad.Catch
 import Control.Concurrent.Lifted
@@ -21,19 +24,22 @@ import Network.XMPP.Plugin
 import Network.XMPP.Roster
 import Network.SASL
 
-data Settings = Settings { server :: ByteString
+data Settings = Settings { server :: Text
                          , user :: Text
                          , password :: Text
                          , resource :: Text
+                         , rosterCache :: FilePath
                          }
-                deriving (Show, Read, Eq)
+                deriving (Show, Eq, Generic)
+
+instance JSON.FromJSON Settings where
 
 main :: IO ()
 main = runStderrLoggingT $ do
-  settingsfile:_ <- liftIO getArgs
-  settings <- liftIO $ read <$> readFile settingsfile
+  settingsFile:_ <- liftIO getArgs
+  Just settings <- liftIO $ Yaml.decodeFile settingsFile
   rs <- liftIO $ makeResolvSeed defaultResolvConf
-  Right svrs <- liftIO $ withResolver rs $ \resolver -> runEitherT $ findServers resolver (server settings) Nothing
+  Right svrs <- liftIO $ withResolver rs $ \resolver -> runEitherT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
   $(logInfo) [qq|Found servers: $svrs|]
   cctx <- liftIO initConnectionContext
   let (host, port) = head svrs
@@ -48,7 +54,7 @@ main = runStderrLoggingT $ do
                                    }
       csettings = ConnectionSettings { connectionParams = esettings
                                      , connectionContext = cctx
-                                     , connectionServer = T.decodeUtf8 $ server settings
+                                     , connectionServer = server settings
                                      , connectionUser = user settings
                                      , connectionAuth = [plainAuth "" (T.encodeUtf8 $ user settings) (T.encodeUtf8 $ password settings)]
                                      }
@@ -64,10 +70,18 @@ main = runStderrLoggingT $ do
   bracket initMain (sessionClose . ssSession) $ \sess ->
     bracket (fork $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
-      (rosterP, rosterRef) <- rosterPlugin Nothing sess
-      _ <- fork $ do
-        roster <- getRoster rosterRef
-        $(logInfo) [qq|Got roster: $roster|]
+      oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
+      (rosterP, rosterRef) <- rosterPlugin oldRoster sess
 
-      let plugins = [rosterP]
-      forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)
+      let saveRoster = do
+            roster <- tryGetRoster rosterRef
+            case roster of
+              Just r | Just _ <- rosterVersion r -> liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode r
+              _ -> return ()
+
+      flip finally saveRoster $ do
+        subscribeRoster rosterRef $ \roster -> do
+          $(logInfo) [qq|Got roster update: $roster|]
+
+        let plugins = [rosterP]
+        forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)
