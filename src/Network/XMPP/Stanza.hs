@@ -21,6 +21,7 @@ module Network.XMPP.Stanza
   , ssSession
   , stanzaSend
   , stanzaRequest
+  , stanzaSyncRequest
 
   , InHandler
   , RequestIQHandler
@@ -209,7 +210,7 @@ instance Injective IQRequestType Text where
 data InRequestIQ = InRequestIQ { iriFrom :: Maybe XMPPAddress
                                , iriTo :: Maybe XMPPAddress
                                , iriId :: Text
-                               , iriIqType :: IQRequestType
+                               , iriType :: IQRequestType
                                , iriChildren :: [Element]
                                }
                  deriving (Show, Eq)
@@ -224,7 +225,7 @@ stanzaName :: T.Text -> Name
 stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 
 
-type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m (Maybe StanzaError)
+type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m ()
 
 data StanzaSession m = StanzaSession { ssSession :: Session m
                                      , ssReqIds :: MVar IDGen
@@ -253,6 +254,12 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssR
       msg = element "iq" attrs $ map NodeElement oriChildren
   sessionSend ssSession msg
   return (M.insert sid handler reqs, idgen')
+
+stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
+stanzaSyncRequest session req = do
+  ret <- newEmptyMVar
+  stanzaRequest session req $ \res -> putMVar ret res
+  takeMVar ret
 
 stanzaSendError :: MonadSession m => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
@@ -301,7 +308,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
 
   let sendError = stanzaSendError sess e
       getAddr name = mapM extractAddr $ getAttr name e
-        where extractAddr addr = checkOrFail (readXMPPAddress addr) $ sendError $ jidMalformed addr
+        where extractAddr addr = checkOrFail (readXMPPAddress addr) $ sendError $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
 
       ename = elementName e
       payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e
@@ -317,7 +324,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
              res <- reqHandler InRequestIQ { iriFrom = tfrom
                                           , iriTo = tto
                                           , iriId = mid
-                                          , iriIqType = rtype
+                                          , iriType = rtype
                                           , iriChildren = payload
                                           }
              case res of
@@ -339,16 +346,9 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
                    sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
                    return requests
                  Just handler -> do
-                   res <-
-                     if | ttype == "result" -> handler $ Right payload
-                        | ttype == "error" -> do
-                            res <- handler $ Left $ getStanzaError e
-                            when (isJust res) $ fail "stanzaSessionStep: you mustn't response with error to an error"
-                            return Nothing
-                        | otherwise -> return $ Just $ badRequest "stanzaSessionStep: iq type is invalid"
-                   case res of
-                     Nothing -> return ()
-                     Just err -> sendError err
+                   if | ttype == "result" -> handler $ Right payload
+                      | ttype == "error" -> handler $ Left $ getStanzaError e
+                      | otherwise -> sendError $ badRequest "stanzaSessionStep: iq type is invalid"
                    return $ M.delete nid requests
 
      | otherwise -> do

@@ -18,6 +18,7 @@ import Network.XMPP.Stream
 import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
+import Network.XMPP.Roster
 import Network.SASL
 
 data Settings = Settings { server :: ByteString
@@ -63,5 +64,10 @@ main = runStderrLoggingT $ do
   bracket initMain (sessionClose . ssSession) $ \sess ->
     bracket (fork $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
-      let plugins = []
+      (rosterP, rosterRef) <- rosterPlugin Nothing sess
+      _ <- fork $ do
+        roster <- getRoster rosterRef
+        $(logInfo) [qq|Got roster: $roster|]
+
+      let plugins = [rosterP]
       forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

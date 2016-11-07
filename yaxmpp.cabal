@@ -23,6 +23,7 @@ library
                      , Network.XMPP.Address
                      , Network.XMPP.XML
                      , Network.XMPP.Plugin
+                     , Network.XMPP.Roster
                      , Network.SASL
                      , Data.ID
                      , Data.Injective

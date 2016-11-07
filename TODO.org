@@ -10,7 +10,7 @@
     [x] Send and receive stanzas
 [ ] RFC 6121 (Instant Messaging and Presence) [https://tools.ietf.org/html/rfc6121]
     [x] <message> and <presence> types
-    [ ] Roster
+    [x] Roster
     [ ] Presence
     [ ] Messages
 [x] RFC 6122 (Address Format) [https://tools.ietf.org/html/rfc6122]
