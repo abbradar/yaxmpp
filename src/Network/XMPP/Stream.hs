@@ -342,10 +342,10 @@ getStreamError e
       Just StreamError {..}
   | otherwise = Nothing
 
-  where cur = fromNode $ NodeElement e
+  where cur = fromElement e
 
         smeType = fromMaybe StUndefinedCondition $ do
-          NodeElement en <- listToMaybe $ cur $/ anyElement &| node
+          en <- listToMaybe $ cur $/ curElement
           injFrom $ nameLocalName $ elementName en
 
         smeText = listToMaybe $ cur $/ XC.element (estreamName "text") &/ content
@@ -419,7 +419,7 @@ saslAuth s (auth:others) = do
 
   where proceedAuth wire = do
           eresp <- streamRecv s
-          let mdat = listToMaybe $ fmap (B64.decode . T.encodeUtf8) $ fromNode (NodeElement eresp) $/ content
+          let mdat = listToMaybe $ fmap (B64.decode . T.encodeUtf8) $ fromElement eresp $/ content
           mdat' <- forM mdat $ \case
             Left err -> streamThrow s $ unexpectedInput [qq|proceedAuth, base64 decode: $err|]
             Right d -> return d

@@ -60,12 +60,12 @@ maybeFail err Nothing = fail err
 
 parseXMPPAddress :: Parser XMPPAddress
 parseXMPPAddress = do
-  first <- takeTill (\c -> c /= '@' && c /= '/')
+  first <- takeTill (\c -> c == '@' || c == '/')
   sep <- optional anyChar
   case sep of
     Just '@' -> do
       xmppLocal <- Just <$> checkLocal first
-      xmppDomain <- takeTill (/= '/') >>= checkDomain
+      xmppDomain <- takeTill (== '/') >>= checkDomain
       sep2 <- optional anyChar
       case sep2 of
         Just '/' -> do
@@ -74,7 +74,7 @@ parseXMPPAddress = do
         Nothing -> return XMPPAddress { xmppResource = Nothing
                                      , ..
                                      }
-        _ -> error "parseXMPPAddress: impossible"
+        _ -> error "parseXMPPAddress: impossible second separator"
     Just '/' -> do
       xmppDomain <- checkDomain first
       xmppResource <- Just <$> (takeText >>= checkResource)
@@ -87,7 +87,7 @@ parseXMPPAddress = do
                          , xmppResource = Nothing
                          , ..
                          }
-    _ -> error "parseXMPPAddress: impossible"
+    _ -> error "parseXMPPAddress: impossible first separator"
 
   where checkLocal = maybeFail "parseXMPPAddress: localpart doesn't satisfy Nodeprep profile of stringprep" . runStringPrep nodePrepProfile
         checkDomain = maybeFail "parseXMPPAddress: domainpart doesn't satisfy Nameprep profile of stringprep" . runStringPrep xmppNamePrepProfile

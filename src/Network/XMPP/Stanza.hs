@@ -21,7 +21,6 @@ module Network.XMPP.Stanza
   , ssSession
   , stanzaSend
   , stanzaRequest
-  , stanzaSyncRequest
 
   , InHandler
   , RequestIQHandler
@@ -225,7 +224,7 @@ stanzaName :: T.Text -> Name
 stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 
 
-type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m ()
+type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m (Maybe StanzaError)
 
 data StanzaSession m = StanzaSession { ssSession :: Session m
                                      , ssReqIds :: MVar IDGen
@@ -255,12 +254,6 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssR
   sessionSend ssSession msg
   return (M.insert sid handler reqs, idgen')
 
-stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
-stanzaSyncRequest session req = do
-  ret <- newEmptyMVar
-  stanzaRequest session req $ \res -> putMVar ret res
-  takeMVar ret
-
 stanzaSendError :: MonadSession m => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
   $(logWarn) [qq|Stanza error sent: $err|]
@@ -282,14 +275,14 @@ type RequestIQHandler m = InRequestIQ -> m (Either StanzaError [Element])
 getStanzaError :: Element -> (StanzaError, [Element])
 getStanzaError e = (StanzaError {..}, others)
 
-  where cur = fromNode $ NodeElement e
+  where cur = fromElement e
 
         szeType = fromMaybe SzCancel $ do
           ttype <- listToMaybe $ cur $/ XC.element "error" &/ attribute "type"
           injFrom ttype
 
         szeCondition = fromMaybe ScUndefinedCondition $ do
-          NodeElement en <- listToMaybe $ cur $/ XC.element "error" &/ anyElement &| node
+          en <- listToMaybe $ cur $/ XC.element "error" &/ curElement
           injFrom $ nameLocalName $ elementName en
 
         szeText = listToMaybe $ cur $/ XC.element "error" &/ XC.element (stanzaName "text") &/ content
@@ -346,9 +339,16 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
                    sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
                    return requests
                  Just handler -> do
-                   if | ttype == "result" -> handler $ Right payload
-                      | ttype == "error" -> handler $ Left $ getStanzaError e
-                      | otherwise -> sendError $ badRequest "stanzaSessionStep: iq type is invalid"
+                   res <-
+                     if | ttype == "result" -> handler $ Right payload
+                        | ttype == "error" -> do
+                            res <- handler $ Left $ getStanzaError e
+                            when (isJust res) $ fail "stanzaSessionStep: you mustn't response with error to an error"
+                            return Nothing
+                        | otherwise -> return $ Just $ badRequest "stanzaSessionStep: iq type is invalid"
+                   case res of
+                     Nothing -> return ()
+                     Just err -> sendError err
                    return $ M.delete nid requests
 
      | otherwise -> do

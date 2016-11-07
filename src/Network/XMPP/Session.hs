@@ -3,7 +3,7 @@ module Network.XMPP.Session
        , ResumptionExceptionData(..)
        , ResumptionException(..)
        , Session
-       , sessionResource
+       , sessionAddress
        , sessionSend
        , sessionStep
        , SessionSettings(..)
@@ -13,6 +13,7 @@ module Network.XMPP.Session
        , sessionGetStream
        ) where
 
+import Data.Maybe
 import Data.Word
 import Text.Read
 import Data.Typeable
@@ -34,6 +35,7 @@ import Text.InterpolatedString.Perl6 (qq)
 
 import Network.XMPP.XML
 import Network.XMPP.Stream
+import Network.XMPP.Address
 
 type MonadSession m = (MonadStream m, MonadBaseControl IO m)
 
@@ -58,7 +60,7 @@ data ReconnectInfo = ReconnectInfo { reconnectId :: Text
                                    , reconnectSettings :: ConnectionSettings
                                    }
 
-data Session m = Session { sessionResource :: Text
+data Session m = Session { sessionAddress :: XMPPAddress
                          , sessionReconnect :: Maybe ReconnectInfo
                          , sessionStream :: IORef (Stream m)
                          , sessionRLock :: MVar ReadSessionData
@@ -192,7 +194,7 @@ bindResource wantRes s
            &/ content
         of
         res:_ -> do
-          $(logInfo) [qq|Binded resource: $res|]
+          $(logInfo) [qq|Bound resource: $res|]
           return res
         _ -> streamThrow s $ unexpectedInput "bindResource: bind failure"
 
@@ -235,8 +237,11 @@ sessionCreate (SessionSettings {..}) = do
   ms <- streamCreate ssConn
   case ms of
     Left e -> return $ Left e
-    Right s -> do
-      sessionResource <- bindResource ssResource s
+    Right s -> flip onException (streamClose s) $ do
+      address <- bindResource ssResource s
+      sessionAddress <- case readXMPPAddress address of
+        Just r | isJust (xmppLocal r) && isJust (xmppResource r) -> return r
+        _ -> fail "sessionCreate: can't normalize address"
       msm <- initSM ssConn s
       sessionStream <- newIORef s
       sessionRLock <- newMVar RSData { rsRecvN = 0 <$ msm

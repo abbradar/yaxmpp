@@ -12,7 +12,7 @@ import qualified Text.XML.Unresolved as XMLU
 import qualified Text.XML.Stream.Render as XMLR
 import Data.Conduit
 import qualified Data.Conduit.List as CL
-import Text.XML.Cursor (Cursor)
+import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
 nsName :: T.Text -> T.Text -> Name
@@ -53,6 +53,9 @@ element name attrs nodes = Element { elementName = name
 
 closedElement :: Name -> Element
 closedElement name = element name [] []
+
+curElement :: Cursor -> [Element]
+curElement = anyElement &| ((\(NodeElement e) -> e) . node)
 
 showElement :: Element -> Text
 showElement e = T.decodeUtf8 $ BB.toByteString $ mconcat bs
