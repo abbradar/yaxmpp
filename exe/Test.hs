@@ -1,3 +1,4 @@
+import Data.Maybe
 import Control.Monad
 import System.Environment
 import GHC.Generics (Generic)
@@ -7,6 +8,7 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.Set as S
 import Control.Monad.IO.Class
 import Control.Monad.Catch
 import Control.Concurrent.Lifted
@@ -22,6 +24,8 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Roster
+import Network.XMPP.Disco
+import Network.XMPP.Address
 import Network.SASL
 
 data Settings = Settings { server :: Text
@@ -29,6 +33,7 @@ data Settings = Settings { server :: Text
                          , password :: Text
                          , resource :: Text
                          , rosterCache :: FilePath
+                         , pal :: XMPPAddress
                          }
                 deriving (Show, Eq, Generic)
 
@@ -82,6 +87,19 @@ main = runStderrLoggingT $ do
       flip finally saveRoster $ do
         subscribeRoster rosterRef $ \roster -> do
           $(logInfo) [qq|Got roster update: $roster|]
+
+        _ <- fork $ do
+          let entry = RosterEntry { rentryName = Just "Best pal"
+                                  , rentrySubscription = SubNone
+                                  , rentryGroups = S.fromList [ "Pals" ]
+                                  }
+          insertRoster (pal settings) entry rosterRef
+
+        _ <- fork $ do
+          topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
+          case topo of
+            Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
+            Right r -> $(logDebug) [qq|Discovery result: $r|]
 
         let plugins = [rosterP]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

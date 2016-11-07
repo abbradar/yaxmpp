@@ -345,7 +345,7 @@ getStreamError e
   where cur = fromElement e
 
         smeType = fromMaybe StUndefinedCondition $ do
-          en <- listToMaybe $ cur $/ curElement
+          en <- listToMaybe $ cur $/ curAnyElement
           injFrom $ nameLocalName $ elementName en
 
         smeText = listToMaybe $ cur $/ XC.element (estreamName "text") &/ content

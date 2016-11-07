@@ -54,8 +54,11 @@ element name attrs nodes = Element { elementName = name
 closedElement :: Name -> Element
 closedElement name = element name [] []
 
-curElement :: Cursor -> [Element]
-curElement = anyElement &| ((\(NodeElement e) -> e) . node)
+curElement :: Cursor -> Element
+curElement = (\(NodeElement e) -> e) . node
+
+curAnyElement :: Cursor -> [Element]
+curAnyElement = anyElement &| curElement
 
 showElement :: Element -> Text
 showElement e = T.decodeUtf8 $ BB.toByteString $ mconcat bs

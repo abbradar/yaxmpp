@@ -227,7 +227,7 @@ serverRequest oriIqType oriChildren = OutRequestIQ { oriTo = Nothing
                                                    , ..
                                                    }
 
-stanzaName :: T.Text -> Name
+stanzaName :: Text -> Name
 stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 
 
@@ -295,7 +295,7 @@ getStanzaError e = (StanzaError {..}, others)
           injFrom ttype
 
         szeCondition = fromMaybe ScUndefinedCondition $ do
-          en <- listToMaybe $ cur $/ XC.element "error" &/ curElement
+          en <- listToMaybe $ cur $/ XC.element "error" &/ curAnyElement
           injFrom $ nameLocalName $ elementName en
 
         szeText = listToMaybe $ cur $/ XC.element "error" &/ XC.element (stanzaName "text") &/ content

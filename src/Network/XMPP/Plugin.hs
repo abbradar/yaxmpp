@@ -14,7 +14,7 @@ data XMPPPlugin m = XMPPPlugin { pluginInHandler ::  InStanza -> m (Maybe (Maybe
 pluginsInHandler :: MonadSession m => [XMPPPlugin m] -> InHandler m
 pluginsInHandler [] msg = do
   $(logWarn) [qq|Unhandled stanza: $msg|]
-  return Nothing
+  return $ Just $ featureNotImplemented "Unsupported stanza"
 pluginsInHandler ((XMPPPlugin {..}):plugins) msg = do
   res <- pluginInHandler msg
   case res of

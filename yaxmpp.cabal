@@ -16,19 +16,19 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Network.XMPP.Connection
+  exposed-modules:     Network.SASL
+                     , Data.ID
+                     , Data.Injective
+                     , Control.Signal
+                     , Network.XMPP.Connection
                      , Network.XMPP.Stream
                      , Network.XMPP.Session
                      , Network.XMPP.Stanza
                      , Network.XMPP.Address
-                     , Network.XMPP.Address.Internal
                      , Network.XMPP.XML
                      , Network.XMPP.Plugin
                      , Network.XMPP.Roster
-                     , Network.SASL
-                     , Data.ID
-                     , Data.Injective
-                     , Control.Signal
+                     , Network.XMPP.XEP.Disco
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8
@@ -80,6 +80,7 @@ library
 executable test
   build-depends:       base >=4.8
                      , yaxmpp
+                     , containers
                      , text
                      , bytestring
                      , either
