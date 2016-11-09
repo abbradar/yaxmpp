@@ -1,6 +1,5 @@
-module Network.XMPP.Disco
+module Network.XMPP.XEP.Disco
   ( DiscoIdentity(..)
-  , DiscoLang
   , DiscoName
   , DiscoFeature
   , DiscoEntity(..)
@@ -36,11 +35,10 @@ data DiscoIdentity = DiscoIdentity { discoCategory :: Text
                                    }
                    deriving (Show, Eq, Ord)
 
-type DiscoLang = Text
 type DiscoName = Text
 type DiscoFeature = Text
 
-data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity (Map (Maybe DiscoLang) DiscoName) -- ^ Map of identities to their human-readable descriptions.
+data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity (Map XMLLang DiscoName) -- ^ Map of identities to their human-readable descriptions.
                                , discoFeatures :: Set DiscoFeature
                                }
                  deriving (Show, Eq)

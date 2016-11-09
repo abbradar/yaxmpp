@@ -24,8 +24,8 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Roster
-import Network.XMPP.Disco
 import Network.XMPP.Address
+import Network.XMPP.XEP.Disco
 import Network.SASL
 
 data Settings = Settings { server :: Text
