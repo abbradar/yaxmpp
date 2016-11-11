@@ -1,4 +1,3 @@
-import Data.Maybe
 import Control.Monad
 import System.Environment
 import GHC.Generics (Generic)
@@ -9,7 +8,6 @@ import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
 import qualified Data.Set as S
-import qualified Data.Map.Strict as M
 import Control.Monad.IO.Class
 import Control.Monad.Catch
 import Control.Concurrent.Lifted
@@ -80,7 +78,7 @@ main = runStderrLoggingT $ do
       $(logInfo) "Session successfully created!"
       oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
       (rosterP, rosterRef) <- rosterPlugin oldRoster sess
-      (subscrP, subscrRef) <- subscriptionPlugin sess $ \addr -> return $ Just False
+      (subscrP, subscrRef) <- subscriptionPlugin sess $ \addr -> return $ Just True
       (presP, presRef) <- presencePlugin sess
 
       let saveRoster = do
@@ -93,24 +91,28 @@ main = runStderrLoggingT $ do
         rosterSubscribe rosterRef $ \roster -> do
           $(logInfo) [qq|Got roster update: $roster|]
 
+        subSubscribe subscrRef $ \(addr, stat) -> do
+          $(logInfo) [qq|Got subscription update for $addr: $stat|]
+
         presenceSubscribe presRef $ \(addr, pres) -> do
           $(logInfo) [qq|Got presence update for $addr: $pres|]
-          insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
+          requestSubscription subscrRef $ pal settings
 
         _ <- fork $ do
           _ <- rosterTryGet rosterRef
           $(logInfo) [qq|Got initial roster, announcing presence|]
+          insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
           presenceSend presRef Presence { presenceShow = Nothing
-                                        , presenceStatus = M.empty
+                                        , presenceStatus = Nothing
                                         , presencePriority = 0
                                         , presenceChildren = []
                                         }
 
-        _ <- fork $ do
-          topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
-          case topo of
-            Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
-            Right r -> $(logDebug) [qq|Discovery result: $r|]
+        -- _ <- fork $ do
+        --   topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
+        --   case topo of
+        --     Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
+        --     Right r -> $(logDebug) [qq|Discovery result: $r|]
 
         let plugins = [rosterP, subscrP, presP]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

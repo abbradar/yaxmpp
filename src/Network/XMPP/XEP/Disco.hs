@@ -29,16 +29,16 @@ import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Address
+import Network.XMPP.Language
 
 data DiscoIdentity = DiscoIdentity { discoCategory :: Text
                                    , discoType :: Text
                                    }
                    deriving (Show, Eq, Ord)
 
-type DiscoName = Text
 type DiscoFeature = Text
 
-data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity (Map XMLLang DiscoName) -- ^ Map of identities to their human-readable descriptions.
+data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity LocalizedText
                                , discoFeatures :: Set DiscoFeature
                                }
                  deriving (Show, Eq)
@@ -56,7 +56,7 @@ parseDiscoEntity re = do
   identities <- mapM getIdentity $ fromElement re $/ XC.element (discoInfoName "identity") &| curElement
   features <- mapM getFeature $ fromElement re $/ XC.element (discoInfoName "feature") &| curElement
 
-  return DiscoEntity { discoIdentities = M.fromListWith M.union identities
+  return DiscoEntity { discoIdentities = fmap (fromJust . localizedText) $ M.fromListWith M.union identities
                      , discoFeatures = S.fromList features
                      }
   where getIdentity e = do
@@ -82,6 +82,7 @@ getDiscoEntity sess addr node = do
     _ -> Left $ badRequest "getDiscoEntity: multiple elements in response"
 
 type DiscoNode = Text
+type DiscoName = Text
 type DiscoItems = Map (XMPPAddress, Maybe DiscoNode) (Maybe DiscoName)
 
 discoItemsName :: Text -> Name

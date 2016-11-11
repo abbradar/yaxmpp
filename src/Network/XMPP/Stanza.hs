@@ -245,7 +245,7 @@ type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m ()
 
 data StanzaSession m = StanzaSession { ssSession :: Session m
                                      , ssReqIds :: MVar IDGen
-                                     , ssRequests :: MVar (Map Integer (ResponseIQHandler m))
+                                     , ssRequests :: MVar (Map (Maybe XMPPAddress, Integer) (ResponseIQHandler m))
                                      }
 
 stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m Integer
@@ -269,7 +269,7 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
               ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
   sessionSend ssSession msg
-  modifyMVar_ ssRequests (return . M.insert sid handler)
+  modifyMVar_ ssRequests (return . M.insert (oriTo, sid) handler)
 
 stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
 stanzaSyncRequest session req = do
@@ -360,9 +360,9 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
              Just resType -> do
                nid <- checkOrFail (readMaybe $ T.unpack tid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
                lift $ do
-                 mhandler <- modifyMVar ssRequests $ \requests -> case M.lookup nid requests of
+                 mhandler <- modifyMVar ssRequests $ \requests -> case M.lookup (tfrom, nid) requests of
                    Nothing -> return (requests, Nothing)
-                   Just handler -> return $ (M.delete nid requests, Just handler)
+                   Just handler -> return (M.delete (tfrom, nid) requests, Just handler)
                  case (mhandler, resType) of
                    (Nothing, _) -> sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
                    (Just handler, IQResult) -> handler $ Right payload
@@ -377,7 +377,9 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
                else (Right tmtype, payload)
          mtype <-
            if | ename == jcName "message" -> do
-                  let getType t = checkOrFail (t >>= injFrom) $ sendError $ badRequest "stanzaSessionStep: invalid message type"
+                  let getType mt = case mt of
+                        Nothing -> return MessageNormal
+                        Just t -> checkOrFail (injFrom t) $ sendError $ badRequest "stanzaSessionStep: invalid message type"
                   InMessage <$> mapM getType ttype
               | ename == jcName "presence" -> do
                   let getType t = checkOrFail (injFrom t) $ sendError $ badRequest "stanzaSessionStep: invalid presence type"

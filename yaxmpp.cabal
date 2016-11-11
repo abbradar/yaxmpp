@@ -26,6 +26,7 @@ library
                      , Network.XMPP.Stanza
                      , Network.XMPP.Address
                      , Network.XMPP.XML
+                     , Network.XMPP.Language
                      , Network.XMPP.Plugin
                      , Network.XMPP.Roster
                      , Network.XMPP.Subscription

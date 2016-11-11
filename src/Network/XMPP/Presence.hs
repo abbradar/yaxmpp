@@ -28,6 +28,7 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Address
+import Network.XMPP.Language
 
 data ShowState = ShowAway
                | ShowChat
@@ -43,7 +44,7 @@ instance Injective ShowState Text where
     ShowXA -> "xa"
 
 data Presence = Presence { presenceShow :: Maybe ShowState
-                         , presenceStatus :: Map XMLLang Text
+                         , presenceStatus :: Maybe LocalizedText
                          , presencePriority :: Int8
                          , presenceChildren :: [Element]
                          }
@@ -89,7 +90,7 @@ parsePresence elems = do
       Nothing -> Left $ badRequest "parsePresence: invalid show"
     [] -> return Nothing
     _ -> Left $ badRequest "parsePresence: multiple show values"
-  let presenceStatus = M.fromList $ map readStatus $ cur $/ XC.element (jcName "status") &| curElement
+  let presenceStatus = localizedText $ M.fromList $ map readStatus $ cur $/ XC.element (jcName "status") &| curElement
   presencePriority <- case cur $/ XC.element (jcName "priority") &/ content of
     [val] -> case readIntMaybe $ T.unpack val of
       Nothing -> Left $ badRequest "parsePresence: invalid priority value"
@@ -135,7 +136,8 @@ presenceSend (PresenceRef {..}) (Presence {..}) =
 
   where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
         mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
-        statuses = map (\(lang, s) -> element (jcName "status") (maybeToList $ fmap (xmlName "lang", ) lang) [NodeContent s]) $ M.toList presenceStatus
+        statusesList = join $ maybeToList $ fmap (M.toList . localTexts) presenceStatus
+        statuses = map (\(lang, s) -> element (jcName "status") (xmlLangAttr lang) [NodeContent s]) statusesList
 
 presencePlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, PresenceRef m)
 presencePlugin presenceSession = do

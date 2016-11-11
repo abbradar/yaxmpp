@@ -15,8 +15,6 @@ import qualified Data.Conduit.List as CL
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-type XMLLang = Maybe Text
-
 nsName :: T.Text -> T.Text -> Name
 nsName ns name = Name name (Just ns) Nothing
 
