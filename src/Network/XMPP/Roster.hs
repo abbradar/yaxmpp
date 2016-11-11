@@ -116,10 +116,10 @@ insertRoster (RosterRef {..}) jid name groups = do
   stanzaRequest rrefSession request okHandler
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
-        item = element "item"
+        item = element (rosterName "item")
                ([ ("jid", showXMPPAddress jid)
                 ] ++ maybeToList (fmap ("name", ) name)
-               ) $ map (\g -> NodeElement $ element "group" [] [NodeContent g]) $ S.toList groups
+               ) $ map (\g -> NodeElement $ element (rosterName "group") [] [NodeContent g]) $ S.toList groups
 
 deleteRoster :: MonadSession m => RosterRef m -> XMPPAddress -> m ()
 deleteRoster (RosterRef {..}) jid = do
@@ -127,7 +127,7 @@ deleteRoster (RosterRef {..}) jid = do
   stanzaRequest rrefSession request okHandler
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
-        item = element "item" [("jid", showXMPPAddress jid), ("subscription", "remove")] []
+        item = element (rosterName "item") [("jid", showXMPPAddress jid), ("subscription", "remove")] []
 
 parseInitial :: Element -> Either Text (XMPPAddress, RosterEntry)
 parseInitial e = do

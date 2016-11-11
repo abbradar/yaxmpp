@@ -177,7 +177,7 @@ bindResource :: MonadSession m => Text -> Stream m -> m Text
 bindResource wantRes s
   | not $ any (\case BindResource -> True; _ -> False) $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
   | otherwise = do
-      streamSend s $ element "iq" [("type", "set"), ("id", "res-bind")]
+      streamSend s $ element (jcName "iq") [("type", "set"), ("id", "res-bind")]
         [ NodeElement $ element (bindName "bind") []
           [ NodeElement $ element (bindName "resource") []
             [ NodeContent wantRes

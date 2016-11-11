@@ -83,14 +83,14 @@ parsePresence elems = do
   let cur = fromChildren elems
   let readStatus e = (getAttr (xmlName "lang") e, mconcat $ fromElement e $/ content)
   
-  presenceShow <- case cur $/ XC.element "show" &/ content of
+  presenceShow <- case cur $/ XC.element (jcName "show") &/ content of
     [val] -> case injFrom val of
       Just sh -> return $ Just sh
       Nothing -> Left $ badRequest "parsePresence: invalid show"
     [] -> return Nothing
     _ -> Left $ badRequest "parsePresence: multiple show values"
-  let presenceStatus = M.fromList $ map readStatus $ cur $/ XC.element "status" &| curElement
-  presencePriority <- case cur $/ XC.element "priority" &/ content of
+  let presenceStatus = M.fromList $ map readStatus $ cur $/ XC.element (jcName "status") &| curElement
+  presencePriority <- case cur $/ XC.element (jcName "priority") &/ content of
     [val] -> case readIntMaybe $ T.unpack val of
       Nothing -> Left $ badRequest "parsePresence: invalid priority value"
       Just r -> return r
@@ -133,9 +133,9 @@ presenceSend (PresenceRef {..}) (Presence {..}) =
                                               , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceChildren
                                               }
 
-  where priority = element "priority" [] [NodeContent $ T.pack $ show presencePriority]
-        mShow = fmap (\s -> element "show" [] [NodeContent $ injTo s]) presenceShow
-        statuses = map (\(lang, s) -> element "status" (maybeToList $ fmap (xmlName "lang", ) lang) [NodeContent s]) $ M.toList presenceStatus
+  where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
+        mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
+        statuses = map (\(lang, s) -> element (jcName "status") (maybeToList $ fmap (xmlName "lang", ) lang) [NodeContent s]) $ M.toList presenceStatus
 
 presencePlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, PresenceRef m)
 presencePlugin presenceSession = do

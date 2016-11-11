@@ -267,7 +267,7 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
   let attrs = [ ("id", T.pack $ show sid)
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) oriTo)
-      msg = element "iq" attrs $ map NodeElement oriChildren
+      msg = element (jcName "iq") attrs $ map NodeElement oriChildren
   sessionSend ssSession msg
   modifyMVar_ ssRequests (return . M.insert sid handler)
 
