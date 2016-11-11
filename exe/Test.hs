@@ -26,6 +26,7 @@ import Network.XMPP.Roster
 import Network.XMPP.Address
 import Network.XMPP.Subscription
 import Network.XMPP.Presence
+import Network.XMPP.Message
 import Network.XMPP.XEP.Disco
 import Network.SASL
 
@@ -78,8 +79,9 @@ main = runStderrLoggingT $ do
       $(logInfo) "Session successfully created!"
       oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
       (rosterP, rosterRef) <- rosterPlugin oldRoster sess
-      (subscrP, subscrRef) <- subscriptionPlugin sess $ \addr -> return $ Just True
+      (subscrP, subscrRef) <- subscriptionPlugin sess $ \_ -> return $ Just True
       (presP, presRef) <- presencePlugin sess
+      (imP, imRef) <- imPlugin sess
 
       let saveRoster = do
             roster <- rosterTryGet rosterRef
@@ -98,6 +100,10 @@ main = runStderrLoggingT $ do
           $(logInfo) [qq|Got presence update for $addr: $pres|]
           requestSubscription subscrRef $ pal settings
 
+        imSubscribe imRef $ \(addr, msg) -> do
+          $(logInfo) [qq|Got message from $addr: $msg|]
+          imSend imRef addr (msg { imExtended = [] })
+
         _ <- fork $ do
           _ <- rosterTryGet rosterRef
           $(logInfo) [qq|Got initial roster, announcing presence|]
@@ -105,7 +111,7 @@ main = runStderrLoggingT $ do
           presenceSend presRef Presence { presenceShow = Nothing
                                         , presenceStatus = Nothing
                                         , presencePriority = 0
-                                        , presenceChildren = []
+                                        , presenceExtended = []
                                         }
 
         -- _ <- fork $ do
@@ -114,5 +120,5 @@ main = runStderrLoggingT $ do
         --     Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
         --     Right r -> $(logDebug) [qq|Discovery result: $r|]
 
-        let plugins = [rosterP, subscrP, presP]
+        let plugins = [rosterP, subscrP, presP, imP]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

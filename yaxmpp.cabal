@@ -31,6 +31,7 @@ library
                      , Network.XMPP.Roster
                      , Network.XMPP.Subscription
                      , Network.XMPP.Presence
+                     , Network.XMPP.Message
                      , Network.XMPP.XEP.Disco
   -- other-modules:       
   -- other-extensions:    

@@ -46,7 +46,7 @@ instance Injective ShowState Text where
 data Presence = Presence { presenceShow :: Maybe ShowState
                          , presenceStatus :: Maybe LocalizedText
                          , presencePriority :: Int8
-                         , presenceChildren :: [Element]
+                         , presenceExtended :: [Element]
                          }
               deriving (Show, Eq)
 
@@ -82,7 +82,6 @@ readIntMaybe str = do
 parsePresence :: [Element] -> Either StanzaError Presence
 parsePresence elems = do
   let cur = fromChildren elems
-  let readStatus e = (getAttr (xmlName "lang") e, mconcat $ fromElement e $/ content)
   
   presenceShow <- case cur $/ XC.element (jcName "show") &/ content of
     [val] -> case injFrom val of
@@ -90,14 +89,14 @@ parsePresence elems = do
       Nothing -> Left $ badRequest "parsePresence: invalid show"
     [] -> return Nothing
     _ -> Left $ badRequest "parsePresence: multiple show values"
-  let presenceStatus = localizedText $ M.fromList $ map readStatus $ cur $/ XC.element (jcName "status") &| curElement
+  presenceStatus <- sequence $ localizedFromElement (jcName "status") elems
   presencePriority <- case cur $/ XC.element (jcName "priority") &/ content of
     [val] -> case readIntMaybe $ T.unpack val of
       Nothing -> Left $ badRequest "parsePresence: invalid priority value"
       Just r -> return r
     [] -> return 0
     _ -> Left $ badRequest "parsePresence: multiple priority values"
-  let presenceChildren = cur $/ checkName (isJust . nameNamespace) &| curElement
+  let presenceExtended = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
   return Presence {..}
 
@@ -131,13 +130,12 @@ presenceSend :: MonadSession m => PresenceRef m -> Presence -> m ()
 presenceSend (PresenceRef {..}) (Presence {..}) =
   void $ stanzaSend presenceSession OutStanza { ostTo = Nothing
                                               , ostType = OutPresence Nothing
-                                              , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceChildren
+                                              , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceExtended
                                               }
 
   where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
         mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
-        statusesList = join $ maybeToList $ fmap (M.toList . localTexts) presenceStatus
-        statuses = map (\(lang, s) -> element (jcName "status") (xmlLangAttr lang) [NodeContent s]) statusesList
+        statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
 
 presencePlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, PresenceRef m)
 presencePlugin presenceSession = do

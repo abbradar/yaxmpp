@@ -56,7 +56,7 @@ parseDiscoEntity re = do
   identities <- mapM getIdentity $ fromElement re $/ XC.element (discoInfoName "identity") &| curElement
   features <- mapM getFeature $ fromElement re $/ XC.element (discoInfoName "feature") &| curElement
 
-  return DiscoEntity { discoIdentities = fmap (fromJust . localizedText) $ M.fromListWith M.union identities
+  return DiscoEntity { discoIdentities = fmap (fromJust . localizedFromText) $ M.fromListWith M.union identities
                      , discoFeatures = S.fromList features
                      }
   where getIdentity e = do
@@ -64,7 +64,7 @@ parseDiscoEntity re = do
           discoType <- requiredAttr "type" e
           let names = case getAttr "name" e of
                 Nothing -> M.empty
-                Just name -> M.singleton (getAttr (xmlName "lang") e) name
+                Just name -> M.singleton (xmlLangGet e) name
 
           return (DiscoIdentity {..}, names)
 
