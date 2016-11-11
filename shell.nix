@@ -11,6 +11,7 @@ let
   haskellPackages_ = haskellPackages.override {
     overrides = self: super: {
       aeson = self.aeson_1_0_2_1;
+      xml-conduit = self.callPackage ./xml/xml-conduit { };
     };
   };
 

@@ -213,7 +213,7 @@ xmppVersion = "1.0"
 startEvents :: Text -> Text -> [Event]
 startEvents from to =
   [ EventBeginDocument
-  , EventBeginElement (streamName "stream")
+  , EventBeginElement (Name "stream" (Just streamNS) (Just "stream"))
     [ (xmlName "lang", [ContentText "en"])
 
     , ("version", [ContentText xmppVersion])
@@ -280,7 +280,7 @@ parseFeatures stream e
           | elementName f == bindName "bind" = return $ Just BindResource
           | elementName f == rosterVerName "ver" = return $ Just RosterVersioning
           | otherwise = do
-              $(logWarn) [qq|"Unknown feature: {showElement f}|]
+              $(logWarn) [qq|Unknown feature: {showElement f}|]
               return Nothing
 
         parseOne _ = return Nothing
@@ -297,7 +297,7 @@ renderStanza from to = do
   mapM_ (yield . Chunk) $ startEvents from to
   yield Flush
   awaitForever $ \e -> do
-    $(logDebug) $ "Sending message: " <> showElement e
+    $(logDebug) [qq|Sending message: {showElement e}|]
     mapM_ (yield . Chunk) $ XMLU.elementToEvents $ toXMLElement e
     yield Flush
   mapM_ (yield . Chunk) stopEvents

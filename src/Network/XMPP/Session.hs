@@ -49,7 +49,7 @@ data ResumptionException = ResumptionException ConnectionInterruptionException R
 
 instance Exception ResumptionException
 
-data ReadSessionData = RSData { rsRecvN :: Maybe Word32
+data ReadSessionData = RSData { rsRecvN :: Word32
                               }
 
 data WriteSessionData = WSData { wsPending :: Seq (Word32, Element)
@@ -63,7 +63,7 @@ data ReconnectInfo = ReconnectInfo { reconnectId :: Text
 data Session m = Session { sessionAddress :: XMPPAddress
                          , sessionReconnect :: Maybe ReconnectInfo
                          , sessionStream :: IORef (Stream m)
-                         , sessionRLock :: MVar ReadSessionData
+                         , sessionRLock :: MVar (Maybe ReadSessionData)
                          , sessionWLock :: MVar (Maybe WriteSessionData)
                          }
 
@@ -77,11 +77,11 @@ applySentH h ws = ws { wsPending = go $ wsPending ws }
 
 tryRestart :: MonadSession m
            => ReconnectInfo
-           -> ReadSessionData
+           -> Maybe ReadSessionData
            -> Maybe WriteSessionData
            -> ConnectionInterruptionException
            -> m (Stream m, WriteSessionData)
-tryRestart ri@(ReconnectInfo {..}) rs@(RSData { rsRecvN = Just recvn }) (Just ws) e = do
+tryRestart ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
   let throwE = throwM . ResumptionException e
   $(logWarn) "Trying to restart the connection"
   ns <- streamCreate reconnectSettings
@@ -89,20 +89,20 @@ tryRestart ri@(ReconnectInfo {..}) rs@(RSData { rsRecvN = Just recvn }) (Just ws
     Left err -> throwE $ ClientErrorException err
     Right s -> do
       unless (any (\case StreamManagement -> True; _ -> False) $ streamFeatures s) $ throwE StreamManagementVanished
-      streamSend s $ element (smName "resume") [("h", T.pack $ show recvn), ("previd", reconnectId)] []
+      streamSend s $ element (smName "resume") [("h", T.pack $ show $ rsRecvN rs), ("previd", reconnectId)] []
       eanswer <- streamRecv s
       if | elementName eanswer == smName "resumed"
            , Just nsent <- readAttr "h" eanswer
            -> do
              let ws' = applySentH nsent ws
-             handle (tryRestart ri rs (Just ws')) $ do
+             handle (tryRestart ri (Just rs) (Just ws')) $ do
                forM_ (wsPending ws') $ \(_, stanza) -> streamSend s stanza
                return (s, ws')
          | otherwise -> throwE ResumptionFailed
 
 tryRestart _ _ _ e = throwM e
 
-modifyRead :: MonadSession m => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
+modifyRead :: MonadSession m => Session m -> (Maybe ReadSessionData -> m (Maybe ReadSessionData, a)) -> m a
 modifyRead (Session {..}) comp = modifyMVar sessionRLock tryRun
 
   where tryRun rs = handle (tryHandle rs) $ comp rs
@@ -146,8 +146,8 @@ sessionThrow sess e = do
   s <- readIORef $ sessionStream sess
   streamThrow s e
 
-handleR :: MonadSession m => ReadSessionData -> Session m -> m ()
-handleR (RSData { rsRecvN = Just n }) sess = sessionSend sess $ element (smName "a") [("h", T.pack $ show n)] []
+handleR :: MonadSession m => Maybe ReadSessionData -> Session m -> m ()
+handleR (Just rs) sess = sessionSend sess $ element (smName "a") [("h", T.pack $ show $ rsRecvN rs)] []
 handleR _ _ = fail "handleQ: impossible"
 
 handleA :: MonadSession m => Session m -> Element -> m ()
@@ -162,7 +162,7 @@ sessionStep sess = do
   (handler, res) <- modifyRead sess $ \ri -> do
     s <- readIORef $ sessionStream sess
     emsg <- streamRecv s
-    let riInc = ri { rsRecvN = (+1) <$> rsRecvN ri }
+    let riInc = fmap (\x -> x { rsRecvN = rsRecvN x + 1 }) ri
     if | elementName emsg == smName "r" -> return (ri, (handleR ri sess, Nothing))
        | elementName emsg == smName "a" -> return (ri, (handleA sess emsg, Nothing))
        | otherwise -> return (riInc, (return (), Just emsg))
@@ -224,13 +224,13 @@ initSM csettings s
                $(logInfo) "Stream management with resumption enabled"
                return $ Just ReconnectInfo { .. }
          | otherwise -> do
+             -- FIXME: maybe it's better to just bail out -- resumption-less SM eats traffic without much benefit
              streamSend s $ element (smName "enable") [] []
              esmr2 <- streamRecv s
              if elementName esmr2 == smName "enabled"
-               then do
-                 $(logInfo) "Stream management without resumption enabled"
-                 return Nothing
-               else streamThrow s $ unexpectedInput "initSM: stream management is advertised but cannot be enabled"
+               then $(logInfo) "Stream management without resumption enabled"
+               else $(logWarn) "Stream management is advertised but cannot be enabled"
+             return Nothing
 
 sessionCreate :: MonadSession m => SessionSettings -> m (Either ClientError (Session m))
 sessionCreate (SessionSettings {..}) = do
@@ -244,24 +244,26 @@ sessionCreate (SessionSettings {..}) = do
         _ -> fail "sessionCreate: can't normalize address"
       msm <- initSM ssConn s
       sessionStream <- newIORef s
-      sessionRLock <- newMVar RSData { rsRecvN = 0 <$ msm
-                                     }
+      sessionRLock <- newMVar $ RSData { rsRecvN = 0
+                                      } <$ msm
       sessionWLock <- newMVar $ WSData { wsPending = S.empty
                                        , wsPendingN = 0
                                        } <$ msm
-      return $ Right Session { sessionReconnect = join msm
-                             , ..
-                             }
-
+      let sess = Session { sessionReconnect = join msm
+                         , ..
+                         }
+      return $ Right sess
+      
 sessionClose :: MonadSession m => Session m -> m ()
-sessionClose sess = modifyMVar_ (sessionRLock sess) $ \ri -> modifyMVar (sessionWLock sess) $ \wi -> do
+sessionClose sess = modifyMVar_ (sessionRLock sess) $ \_ -> modifyMVar (sessionWLock sess) $ \_ -> do
   s <- readIORef $ sessionStream sess
   streamClose s
   -- Effectively prevent reconnection
-  return (wi, ri { rsRecvN = Nothing })
+  return (Nothing, Nothing)
 
 sessionPeriodic :: MonadSession m => Session m -> m ()
-sessionPeriodic sess = sessionSend sess $ closedElement $ smName "r"
+sessionPeriodic sess@(Session { sessionReconnect = Just _ }) = sessionSend sess $ closedElement $ smName "r"
+sessionPeriodic _ = return ()
 
 sessionGetStream :: MonadSession m => Session m -> m (Stream m)
 sessionGetStream (Session {..}) = readIORef sessionStream
