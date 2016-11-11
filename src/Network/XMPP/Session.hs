@@ -147,7 +147,7 @@ sessionThrow sess e = do
   streamThrow s e
 
 handleR :: MonadSession m => ReadSessionData -> Session m -> m ()
-handleR (RSData { rsRecvN = Just n }) sess = sessionSend sess $ element (smName "r") [("h", T.pack $ show n)] []
+handleR (RSData { rsRecvN = Just n }) sess = sessionSend sess $ element (smName "a") [("h", T.pack $ show n)] []
 handleR _ _ = fail "handleQ: impossible"
 
 handleA :: MonadSession m => Session m -> Element -> m ()
