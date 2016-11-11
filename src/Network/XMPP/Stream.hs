@@ -210,10 +210,13 @@ data StreamSettings = StreamSettings { ssFrom :: Text
 xmppVersion :: Text
 xmppVersion = "1.0"
 
+streamOutTag :: Name
+streamOutTag = Name "stream" (Just streamNS) (Just "stream")
+
 startEvents :: Text -> Text -> [Event]
 startEvents from to =
   [ EventBeginDocument
-  , EventBeginElement (Name "stream" (Just streamNS) (Just "stream"))
+  , EventBeginElement streamOutTag
     [ (xmlName "lang", [ContentText "en"])
 
     , ("version", [ContentText xmppVersion])
@@ -225,7 +228,7 @@ startEvents from to =
 
 stopEvents :: [Event]
 stopEvents =
-  [ EventEndElement (streamName "stream")
+  [ EventEndElement streamOutTag
   , EventEndDocument
   ]
 
