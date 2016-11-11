@@ -9,6 +9,7 @@ import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
 import qualified Data.Set as S
+import qualified Data.Map.Strict as M
 import Control.Monad.IO.Class
 import Control.Monad.Catch
 import Control.Concurrent.Lifted
@@ -26,6 +27,7 @@ import Network.XMPP.Plugin
 import Network.XMPP.Roster
 import Network.XMPP.Address
 import Network.XMPP.Subscription
+import Network.XMPP.Presence
 import Network.XMPP.XEP.Disco
 import Network.SASL
 
@@ -79,6 +81,7 @@ main = runStderrLoggingT $ do
       oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
       (rosterP, rosterRef) <- rosterPlugin oldRoster sess
       (subscrP, subscrRef) <- subscriptionPlugin sess $ \addr -> return $ Just False
+      (presP, presRef) <- presencePlugin sess
 
       let saveRoster = do
             roster <- rosterTryGet rosterRef
@@ -90,7 +93,18 @@ main = runStderrLoggingT $ do
         rosterSubscribe rosterRef $ \roster -> do
           $(logInfo) [qq|Got roster update: $roster|]
 
-        _ <- fork $ insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
+        presenceSubscribe presRef $ \(addr, pres) -> do
+          $(logInfo) [qq|Got presence update for $addr: $pres|]
+          insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
+
+        _ <- fork $ do
+          _ <- rosterTryGet rosterRef
+          $(logInfo) [qq|Got initial roster, announcing presence|]
+          presenceSend presRef Presence { presenceShow = Nothing
+                                        , presenceStatus = M.empty
+                                        , presencePriority = 0
+                                        , presenceChildren = []
+                                        }
 
         _ <- fork $ do
           topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
@@ -98,5 +112,5 @@ main = runStderrLoggingT $ do
             Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
             Right r -> $(logDebug) [qq|Discovery result: $r|]
 
-        let plugins = [rosterP, subscrP]
+        let plugins = [rosterP, subscrP, presP]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

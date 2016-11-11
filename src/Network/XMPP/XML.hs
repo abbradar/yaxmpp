@@ -76,3 +76,6 @@ readAttr n e = do
 
 fromElement :: Element -> Cursor
 fromElement = XC.fromNode . NodeElement
+
+fromChildren :: [Element] -> Cursor
+fromChildren = fromElement . element (error "fromChildren: undefined name") (error "fromChildren: undefined attributes") . map NodeElement

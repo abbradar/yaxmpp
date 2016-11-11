@@ -129,14 +129,14 @@ deleteRoster (RosterRef {..}) jid = do
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
         item = element "item" [("jid", showXMPPAddress jid), ("subscription", "remove")] []
 
-getInitialEntry :: Element -> Either Text (XMPPAddress, RosterEntry)
-getInitialEntry e = do
-  unless (elementName e == rosterName "item") $ Left [qq|getInitialEntry: invalid roster item $e|]
+parseInitial :: Element -> Either Text (XMPPAddress, RosterEntry)
+parseInitial e = do
+  unless (elementName e == rosterName "item") $ Left [qq|parseInitial: invalid roster item $e|]
   jid <- case getAttr "jid" e >>= readXMPPAddress of
-    Nothing -> Left "getInitialEntry: malformed jid"
+    Nothing -> Left "parseInitial: malformed jid"
     Just r -> return r
   rentrySubscription <- case injFrom $ fromMaybe "none" $ getAttr "subscription" e of
-    Nothing -> Left "getInitialEntry: invalid subscription type"
+    Nothing -> Left "parseInitial: invalid subscription type"
     Just r -> return r
   let entry = RosterEntry { rentryName = getAttr "name" e
                           , rentryGroups = S.fromList $ fromElement e $/ XC.element (rosterName "group") &/ content
@@ -150,7 +150,7 @@ handleFirstRequest (RosterRef {..}) mold resp = do
         (_, Left (err, _)) -> error [qq|handleFirstRequest: error while requesting roster: $err|]
         (Just old, Right []) | isJust $ rosterVersion old  -> old
         (_, Right [res]) | elementName res == rosterName "query" ->
-                     case sequence $ map getInitialEntry $ fromElement res $/ curAnyElement of
+                     case sequence $ map parseInitial $ fromElement res $/ curAnyElement of
                        Left e -> error $ T.unpack e
                        Right entries -> Roster { rosterVersion = getAttr "ver" res
                                               , rosterEntries = M.fromList entries

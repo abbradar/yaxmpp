@@ -63,8 +63,7 @@ subscriptionPlugin :: MonadSession m => StanzaSession m -> (XMPPAddress -> m (Ma
 subscriptionPlugin subscriptionSession subscriptionHandler = do
   subscriptionSignal <- Signal.empty
   let subscriptionRef = SubscriptionRef {..}
-
-  let plugin = XMPPPlugin { pluginInHandler = subscriptionInHandler subscriptionRef
+      plugin = XMPPPlugin { pluginInHandler = subscriptionInHandler subscriptionRef
                           , pluginRequestIqHandler = \_ -> return Nothing
                           }
   return (plugin, subscriptionRef)
