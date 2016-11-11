@@ -28,6 +28,7 @@ library
                      , Network.XMPP.XML
                      , Network.XMPP.Plugin
                      , Network.XMPP.Roster
+                     , Network.XMPP.Subscription
                      , Network.XMPP.XEP.Disco
   -- other-modules:       
   -- other-extensions:    
@@ -72,6 +73,7 @@ library
                      , ConstraintKinds
                      , MultiParamTypeClasses
                      , ExistentialQuantification
+                     , NamedFieldPuns
                      , DeriveGeneric
                      , TemplateHaskell
                      , QuasiQuotes

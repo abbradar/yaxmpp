@@ -25,6 +25,7 @@ import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Roster
 import Network.XMPP.Address
+import Network.XMPP.Subscription
 import Network.XMPP.XEP.Disco
 import Network.SASL
 
@@ -77,23 +78,19 @@ main = runStderrLoggingT $ do
       $(logInfo) "Session successfully created!"
       oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
       (rosterP, rosterRef) <- rosterPlugin oldRoster sess
+      (subscrP, subscrRef) <- subscriptionPlugin sess $ \addr -> return $ Just False
 
       let saveRoster = do
-            roster <- tryGetRoster rosterRef
+            roster <- rosterTryGet rosterRef
             case roster of
               Just r | Just _ <- rosterVersion r -> liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode r
               _ -> return ()
 
       flip finally saveRoster $ do
-        subscribeRoster rosterRef $ \roster -> do
+        rosterSubscribe rosterRef $ \roster -> do
           $(logInfo) [qq|Got roster update: $roster|]
 
-        _ <- fork $ do
-          let entry = RosterEntry { rentryName = Just "Best pal"
-                                  , rentrySubscription = SubNone
-                                  , rentryGroups = S.fromList [ "Pals" ]
-                                  }
-          insertRoster (pal settings) entry rosterRef
+        _ <- fork $ insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
 
         _ <- fork $ do
           topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
@@ -101,5 +98,5 @@ main = runStderrLoggingT $ do
             Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
             Right r -> $(logDebug) [qq|Discovery result: $r|]
 
-        let plugins = [rosterP]
+        let plugins = [rosterP, subscrP]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

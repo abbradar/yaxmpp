@@ -183,6 +183,7 @@ data OutStanzaType = OutMessage MessageType
 
 data OutStanza = OutStanza { ostTo :: Maybe XMPPAddress
                            , ostType :: OutStanzaType
+                           , ostChildren :: [Element]
                            }
                deriving (Show, Eq)
 
@@ -247,8 +248,8 @@ data StanzaSession m = StanzaSession { ssSession :: Session m
                                      , ssRequests :: MVar (Map Integer (ResponseIQHandler m))
                                      }
 
-stanzaSend :: MonadSession m => StanzaSession m -> OutStanza -> [Element] -> m Integer
-stanzaSend (StanzaSession {..}) (OutStanza {..}) body = do
+stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m Integer
+stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
   sid <- modifyMVar ssReqIds (return . ID.get)
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)
@@ -256,7 +257,7 @@ stanzaSend (StanzaSession {..}) (OutStanza {..}) body = do
       attrs = [ ("id", T.pack $ show sid)
               ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) ostTo)
                 ++ maybeToList (fmap ("type", ) mtype)
-      msg = element (jcName mname) attrs $ map NodeElement body
+      msg = element (jcName mname) attrs $ map NodeElement ostChildren
   sessionSend ssSession msg
   return sid
 
@@ -296,7 +297,6 @@ type RequestIQHandler m = InRequestIQ -> m (Either StanzaError [Element])
 
 getStanzaError :: Element -> (StanzaError, [Element])
 getStanzaError e = (StanzaError {..}, others)
-
   where cur = fromElement e
 
         szeType = fromMaybe SzCancel $ do

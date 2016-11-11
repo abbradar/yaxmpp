@@ -1,14 +1,13 @@
 module Network.XMPP.Roster
   ( SubscriptionType(..)
-
   , RosterEntry(..)
   , Roster
   , rosterVersion
   , rosterEntries
   , RosterRef
-  , subscribeRoster
-  , getRoster
-  , tryGetRoster
+  , rosterSubscribe
+  , rosterGet
+  , rosterTryGet
   , insertRoster
   , deleteRoster
   , rosterPlugin
@@ -62,9 +61,12 @@ instance ToJSON SubscriptionType where
   toJSON = injToJSON
 
 
-data RosterEntry = RosterEntry { rentryName :: Maybe Text
+type RosterName = Text
+type RosterGroup = Text
+
+data RosterEntry = RosterEntry { rentryName :: Maybe RosterName
                                , rentrySubscription :: SubscriptionType
-                               , rentryGroups :: Set Text
+                               , rentryGroups :: Set RosterGroup
                                }
                  deriving (Show, Eq, Generic)
 
@@ -108,20 +110,19 @@ data RosterRef m = RosterRef { rref :: MVar Roster
                              , rrefSession :: StanzaSession m
                              }
 
-insertRoster :: MonadSession m => XMPPAddress -> RosterEntry -> RosterRef m -> m ()
-insertRoster jid (RosterEntry {..}) (RosterRef {..}) = do
+insertRoster :: MonadSession m => RosterRef m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
+insertRoster (RosterRef {..}) jid name groups = do
   void $ readMVar rref
   stanzaRequest rrefSession request okHandler
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
         item = element "item"
                ([ ("jid", showXMPPAddress jid)
-                , ("subscription", injTo rentrySubscription)
-                ] ++ maybeToList (fmap ("name", ) rentryName)
-               ) $ map (\g -> NodeElement $ element "group" [] [NodeContent g]) $ S.toList rentryGroups
+                ] ++ maybeToList (fmap ("name", ) name)
+               ) $ map (\g -> NodeElement $ element "group" [] [NodeContent g]) $ S.toList groups
 
-deleteRoster :: MonadSession m => XMPPAddress -> RosterRef m -> m ()
-deleteRoster jid (RosterRef {..}) = do
+deleteRoster :: MonadSession m => RosterRef m -> XMPPAddress -> m ()
+deleteRoster (RosterRef {..}) jid = do
   void $ readMVar rref
   stanzaRequest rrefSession request okHandler
 
@@ -177,10 +178,8 @@ applyUpdate entries e = do
     _ -> Left $ badRequest "applyUpdate: invalid subscription attribute"
 
 rosterIqHandler :: MonadSession m => RosterRef m -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
-rosterIqHandler (RosterRef {..}) iq
-  | iriType iq == IQSet
-  , [req] <- iriChildren iq
-  , elementName req == rosterName "query" = fmap Just $ do
+rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] })
+  | elementName req == rosterName "query" = fmap Just $ do
       mroster <- modifyMVar rref $ \roster -> do
         let newEntries = foldM applyUpdate (rosterEntries roster) $ fromElement req $/ curAnyElement
         case newEntries of
@@ -196,15 +195,15 @@ rosterIqHandler (RosterRef {..}) iq
           Signal.emit rrefSignal roster'
           return $ Right []
 rosterIqHandler _ _ = return Nothing
-  
-subscribeRoster :: MonadSession m => RosterRef m -> (Roster -> m ()) -> m ()
-subscribeRoster (RosterRef {..}) = Signal.subscribe rrefSignal
 
-getRoster :: MonadSession m => RosterRef m -> m Roster
-getRoster = readMVar . rref
+rosterSubscribe :: MonadSession m => RosterRef m -> (Roster -> m ()) -> m ()
+rosterSubscribe (RosterRef {..}) = Signal.subscribe rrefSignal
 
-tryGetRoster :: MonadSession m => RosterRef m -> m (Maybe Roster)
-tryGetRoster = tryReadMVar . rref
+rosterGet :: MonadSession m => RosterRef m -> m Roster
+rosterGet = readMVar . rref
+
+rosterTryGet :: MonadSession m => RosterRef m -> m (Maybe Roster)
+rosterTryGet = tryReadMVar . rref
 
 rosterPlugin :: MonadSession m => Maybe Roster -> StanzaSession m -> m (XMPPPlugin m, RosterRef m)
 rosterPlugin old rrefSession = do
