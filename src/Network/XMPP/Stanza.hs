@@ -297,21 +297,23 @@ type RequestIQHandler m = InRequestIQ -> m (Either StanzaError [Element])
 
 getStanzaError :: Element -> (StanzaError, [Element])
 getStanzaError e = (StanzaError {..}, others)
-  where cur = fromElement e
+  where topCur = fromElement e
+        errorE = case topCur $/ XC.element (jcName "error") &| curElement of
+          (err:_) -> err
+          _ -> closedElement "error"
+        cur = fromElement errorE
 
-        szeType = fromMaybe SzCancel $ do
-          ttype <- listToMaybe $ cur $/ XC.element "error" &/ attribute "type"
-          injFrom ttype
+        szeType = fromMaybe SzCancel $ getAttr "type" errorE >>= injFrom
 
         szeCondition = fromMaybe ScUndefinedCondition $ do
-          en <- listToMaybe $ cur $/ XC.element "error" &/ curAnyElement
+          en <- listToMaybe $ cur $/ curAnyElement
           injFrom $ nameLocalName $ elementName en
 
-        szeText = listToMaybe $ cur $/ XC.element "error" &/ XC.element (stanzaName "text") &/ content
+        szeText = listToMaybe $ cur $/ XC.element (stanzaName "text") &/ content
 
-        szeChildren = map (\(node -> NodeElement ec) -> ec) $ cur $/ XC.element "error" &/ checkName (\n -> n /= stanzaName (injTo szeCondition) && n /= stanzaName "text")
+        szeChildren = cur $/ checkName (\n -> n /= stanzaName (injTo szeCondition) && n /= stanzaName "text") &| curElement
 
-        others = map (\(node -> NodeElement ce) -> ce) $ cur $/ checkName (/= "error")
+        others = topCur $/ checkName (/= jcName "error") &| curElement
 
 checkOrFail :: Monad m => Maybe a -> m () -> MaybeT m a
 checkOrFail Nothing finalize = MaybeT $ finalize >> return Nothing
