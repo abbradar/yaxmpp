@@ -36,6 +36,7 @@ import Text.InterpolatedString.Perl6 (qq)
 import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Address
+import Network.XMPP.Utils
 
 type MonadSession m = (MonadStream m, MonadBaseControl IO m)
 
@@ -239,7 +240,7 @@ sessionCreate (SessionSettings {..}) = do
     Left e -> return $ Left e
     Right s -> flip onException (streamClose s) $ do
       address <- bindResource ssResource s
-      sessionAddress <- case readXMPPAddress address of
+      sessionAddress <- case parseValue xmppAddress address of
         Just r | isJust (xmppLocal r) && isJust (xmppResource r) -> return r
         _ -> fail "sessionCreate: can't normalize address"
       msm <- initSM ssConn s

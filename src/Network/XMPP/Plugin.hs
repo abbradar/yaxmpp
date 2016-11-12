@@ -14,11 +14,8 @@ data XMPPPlugin m = XMPPPlugin { pluginInHandler ::  InStanza -> m (Maybe (Maybe
 pluginsInHandler :: MonadSession m => [XMPPPlugin m] -> InHandler m
 pluginsInHandler [] msg = do
   $(logWarn) [qq|Unhandled stanza: $msg|]
-  case istType msg of
-    InMessage (Right _) -> return $ Just $ featureNotImplemented "Unsupported message"
-    InPresence (Right _) -> return $ Just $ featureNotImplemented "Unsupported presence"
-    -- Error: shouldn't reply.
-    _ -> return Nothing
+  -- Shouldn't reply to unknown messages/presences.
+  return Nothing
 pluginsInHandler ((XMPPPlugin {..}):plugins) msg = do
   res <- pluginInHandler msg
   case res of

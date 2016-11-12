@@ -52,6 +52,7 @@ import Data.ID (IDGen)
 import qualified Data.ID as ID
 import Network.XMPP.Session
 import Network.XMPP.Address
+import Network.XMPP.Utils
 import Network.XMPP.XML
 
 -- Basic types defined in XMPP CORE and XMPP IM.
@@ -255,7 +256,7 @@ stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
         OutMessage t -> ("message", Just $ injTo t)
         OutPresence t -> ("presence", injTo <$> t)
       attrs = [ ("id", T.pack $ show sid)
-              ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) ostTo)
+              ] ++ maybeToList (fmap (("to", ) . addressToText) ostTo)
                 ++ maybeToList (fmap ("type", ) mtype)
       msg = element (jcName mname) attrs $ map NodeElement ostChildren
   sessionSend ssSession msg
@@ -266,7 +267,7 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
   sid <- modifyMVar ssReqIds (return . ID.get)
   let attrs = [ ("id", T.pack $ show sid)
               , ("type", injTo oriIqType)
-              ] ++ maybeToList (fmap (("to", ) . showXMPPAddress) oriTo)
+              ] ++ maybeToList (fmap (("to", ) . addressToText) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
   sessionSend ssSession msg
   modifyMVar_ ssRequests (return . M.insert (oriTo, sid) handler)
@@ -325,7 +326,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
 
   let sendError = stanzaSendError sess e
       getAddr name = mapM extractAddr $ getAttr name e
-        where extractAddr addr = checkOrFail (readXMPPAddress addr) $ sendError $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
+        where extractAddr addr = checkOrFail (parseValue xmppAddress addr) $ sendError $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
 
       ename = elementName e
       payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e

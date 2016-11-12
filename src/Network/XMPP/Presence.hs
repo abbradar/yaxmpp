@@ -11,7 +11,7 @@ import Data.Maybe
 import Data.Int
 import Control.Monad
 import Text.Read (readMaybe)
-import Control.Concurrent.MVar.Lifted
+import Data.IORef.Lifted
 import Text.XML
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -52,7 +52,7 @@ data Presence = Presence { presenceShow :: Maybe ShowState
 
 type PresenceMap = Map (Text, Text) (Map Text Presence)
 
-data PresenceRef m = PresenceRef { presenceRef :: MVar PresenceMap
+data PresenceRef m = PresenceRef { presenceRef :: IORef PresenceMap
                                  , presenceSignal :: Signal m (XMPPAddress, Maybe Presence)
                                  , presenceSession :: StanzaSession m
                                  }
@@ -105,20 +105,22 @@ presenceInHandler (PresenceRef {..}) (InStanza { istFrom = Just addr, istType = 
   case splitAddress addr of
     Nothing -> return $ Just $ jidMalformed "presenceInHandler: Presence should be announced for a full-specified JID"
     Just (bare, res) -> do
-      ret <- modifyMVar presenceRef $ \pres -> case op of
+      pres <- readIORef presenceRef
+      ret <- case op of
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
             let pres' = M.insertWith M.union bare (M.singleton res p) pres
-            return (pres', Right (addr, Just p))
-          Left e -> return (pres, Left e)
+            return $ Right (pres', (addr, Just p))
+          Left e -> return $ Left e
         PresenceUnset -> do
           let removeRes m = if M.null m' then Nothing else Just m'
                 where m' = M.delete res m
               pres' = M.update removeRes bare pres
-          return (pres', Right (addr, Nothing))
+          return $ Right (pres', (addr, Nothing))
       case ret of
         Left err -> return $ Just err
-        Right r -> do
+        Right (pres', r) -> do
+          writeIORef presenceRef pres'
           Signal.emit presenceSignal r
           return Nothing
 presenceInHandler _ _ = return Nothing
@@ -139,7 +141,7 @@ presenceSend (PresenceRef {..}) (Presence {..}) =
 
 presencePlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, PresenceRef m)
 presencePlugin presenceSession = do
-  presenceRef <- newMVar M.empty
+  presenceRef <- newIORef M.empty
   presenceSignal <- Signal.empty
   let pref = PresenceRef {..}
       plugin = XMPPPlugin { pluginInHandler = presenceInHandler pref

@@ -98,21 +98,19 @@ main = runStderrLoggingT $ do
 
         presenceSubscribe presRef $ \(addr, pres) -> do
           $(logInfo) [qq|Got presence update for $addr: $pres|]
-          requestSubscription subscrRef $ pal settings
 
         imSubscribe imRef $ \(addr, msg) -> do
           $(logInfo) [qq|Got message from $addr: $msg|]
           imSend imRef addr (msg { imExtended = [] })
 
         _ <- fork $ do
-          _ <- rosterTryGet rosterRef
-          $(logInfo) [qq|Got initial roster, announcing presence|]
-          insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
           presenceSend presRef Presence { presenceShow = Nothing
                                         , presenceStatus = Nothing
                                         , presencePriority = 0
                                         , presenceExtended = []
                                         }
+          insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
+          requestSubscription subscrRef $ pal settings
 
         -- _ <- fork $ do
         --   topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing

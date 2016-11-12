@@ -35,6 +35,7 @@ import Control.Signal (Signal)
 import qualified Control.Signal as Signal
 import Data.Injective
 import Network.XMPP.XML
+import Network.XMPP.Utils
 import Network.XMPP.Address
 import Network.XMPP.Stream
 import Network.XMPP.Session
@@ -117,7 +118,7 @@ insertRoster (RosterRef {..}) jid name groups = do
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
         item = element (rosterName "item")
-               ([ ("jid", showXMPPAddress jid)
+               ([ ("jid", addressToText jid)
                 ] ++ maybeToList (fmap ("name", ) name)
                ) $ map (\g -> NodeElement $ element (rosterName "group") [] [NodeContent g]) $ S.toList groups
 
@@ -127,12 +128,12 @@ deleteRoster (RosterRef {..}) jid = do
   stanzaRequest rrefSession request okHandler
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
-        item = element (rosterName "item") [("jid", showXMPPAddress jid), ("subscription", "remove")] []
+        item = element (rosterName "item") [("jid", addressToText jid), ("subscription", "remove")] []
 
 parseInitial :: Element -> Either Text (XMPPAddress, RosterEntry)
 parseInitial e = do
   unless (elementName e == rosterName "item") $ Left [qq|parseInitial: invalid roster item $e|]
-  jid <- case getAttr "jid" e >>= readXMPPAddress of
+  jid <- case getAttr "jid" e >>= parseValue xmppAddress of
     Nothing -> Left "parseInitial: malformed jid"
     Just r -> return r
   rentrySubscription <- case injFrom $ fromMaybe "none" $ getAttr "subscription" e of
@@ -163,7 +164,7 @@ handleFirstRequest (RosterRef {..}) mold resp = do
 applyUpdate :: Map XMPPAddress RosterEntry -> Element -> Either StanzaError (Map XMPPAddress RosterEntry)
 applyUpdate entries e = do
   unless (elementName e == rosterName "item") $ Left $ badRequest [qq|applyUpdate: invalid roster item $e|]
-  jid <- case getAttr "jid" e >>= readXMPPAddress of
+  jid <- case getAttr "jid" e >>= parseValue xmppAddress of
     Nothing -> Left $ jidMalformed "applyUpdate: invalid jid in roster push"
     Just r -> return r
   let subscr = fromMaybe "none" (getAttr "subscription" e)

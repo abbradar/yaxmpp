@@ -25,6 +25,7 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Text.InterpolatedString.Perl6 (qq)
 
+import Network.XMPP.Utils
 import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
@@ -92,7 +93,7 @@ parseDiscoItems :: Element -> Either StanzaError DiscoItems
 parseDiscoItems re = fmap (M.fromListWith (<|>)) $ mapM getItem $ fromElement re $/ XC.element (discoItemsName "item") &| curElement
   where getItem e = do
           address' <- requiredAttr "jid" e
-          address <- case readXMPPAddress address' of
+          address <- case parseValue xmppAddress address' of
             Nothing -> Left $ jidMalformed [qq|parseDiscoItems: malformed jid {address'}|]
             Just r -> return r
           let name = getAttr "name" e
