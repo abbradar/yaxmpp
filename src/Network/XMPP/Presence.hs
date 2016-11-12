@@ -19,6 +19,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
+import Data.Default.Class
 
 import Data.Injective
 import Control.Signal (Signal)
@@ -49,6 +50,13 @@ data Presence = Presence { presenceShow :: Maybe ShowState
                          , presenceExtended :: [Element]
                          }
               deriving (Show, Eq)
+
+instance Default Presence where
+  def = Presence { presenceShow = Nothing
+                 , presenceStatus = Nothing
+                 , presencePriority = 0
+                 , presenceExtended = []
+                 }
 
 type PresenceMap = Map (Text, Text) (Map Text Presence)
 
@@ -144,7 +152,5 @@ presencePlugin presenceSession = do
   presenceRef <- newIORef M.empty
   presenceSignal <- Signal.empty
   let pref = PresenceRef {..}
-      plugin = XMPPPlugin { pluginInHandler = presenceInHandler pref
-                          , pluginRequestIqHandler = \_ -> return Nothing
-                          }
+      plugin = def { pluginInHandler = presenceInHandler pref }
   return (plugin, pref)

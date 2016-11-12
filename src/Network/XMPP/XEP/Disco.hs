@@ -1,6 +1,5 @@
 module Network.XMPP.XEP.Disco
   ( DiscoIdentity(..)
-  , DiscoName
   , DiscoFeature
   , DiscoEntity(..)
   , getDiscoEntity
@@ -8,9 +7,10 @@ module Network.XMPP.XEP.Disco
   , getDiscoItems
   , DiscoTopo(..)
   , getDiscoTopo
+  , discoPlugin
   ) where
 
-import Control.Applicative
+import Control.Arrow
 import Control.Monad
 import Data.Maybe
 import Data.Text (Text)
@@ -24,9 +24,12 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Text.InterpolatedString.Perl6 (qq)
+import Data.Default.Class
 
 import Network.XMPP.Utils
 import Network.XMPP.XML
+import Network.XMPP.Plugin
+import Network.XMPP.Session
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Address
@@ -39,10 +42,15 @@ data DiscoIdentity = DiscoIdentity { discoCategory :: Text
 
 type DiscoFeature = Text
 
-data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity LocalizedText
+data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity (Maybe LocalizedText)
                                , discoFeatures :: Set DiscoFeature
                                }
                  deriving (Show, Eq)
+
+instance Default DiscoEntity where
+  def = DiscoEntity { discoIdentities = M.empty
+                    , discoFeatures = S.empty
+                    }
 
 discoInfoName :: Text -> Name
 discoInfoName = nsName "http://jabber.org/protocol/disco#info"
@@ -52,22 +60,32 @@ requiredAttr name e = case getAttr name e of
   Nothing -> Left $ badRequest [qq|requiredAttr: no $name attribute in {elementName e}|]
   Just r -> return r
 
+parseNamed :: (Show k, Ord k) => Element -> Name -> (Element -> Either StanzaError k) -> Either StanzaError (Map k (Maybe LocalizedText))
+parseNamed root name getKey = do
+  items <- mapM getElem $ fromElement root $/ XC.element name &| curElement
+  namedMap <- sequence $ fmap sequence $ M.fromListWithKey (\k -> M.unionWith $ conflict k) $ fmap (second $ fmap return) items
+  return $ fmap localizedFromText namedMap
+  
+  where getElem e = do
+          k <- getKey e
+          let names = case getAttr "name" e of
+                Nothing -> M.empty
+                Just text -> M.singleton (xmlLangGet e) text
+          return (k, names)
+        conflict feature _ _ = Left $ badRequest [qq|parseNamed: conflicting feature $feature|]
+
 parseDiscoEntity :: Element -> Either StanzaError DiscoEntity
 parseDiscoEntity re = do
-  identities <- mapM getIdentity $ fromElement re $/ XC.element (discoInfoName "identity") &| curElement
+  discoIdentities <- parseNamed re (discoInfoName "identity") getIdentity
   features <- mapM getFeature $ fromElement re $/ XC.element (discoInfoName "feature") &| curElement
 
-  return DiscoEntity { discoIdentities = fmap (fromJust . localizedFromText) $ M.fromListWith M.union identities
-                     , discoFeatures = S.fromList features
+  return DiscoEntity { discoFeatures = S.fromList features
+                     , ..
                      }
   where getIdentity e = do
           discoCategory <- requiredAttr "category" e
           discoType <- requiredAttr "type" e
-          let names = case getAttr "name" e of
-                Nothing -> M.empty
-                Just name -> M.singleton (xmlLangGet e) name
-
-          return (DiscoIdentity {..}, names)
+          return DiscoIdentity {..}
 
         getFeature e = requiredAttr "var" e
 
@@ -83,22 +101,20 @@ getDiscoEntity sess addr node = do
     _ -> Left $ badRequest "getDiscoEntity: multiple elements in response"
 
 type DiscoNode = Text
-type DiscoName = Text
-type DiscoItems = Map (XMPPAddress, Maybe DiscoNode) (Maybe DiscoName)
+type DiscoItems = Map (XMPPAddress, Maybe DiscoNode) (Maybe LocalizedText)
 
 discoItemsName :: Text -> Name
 discoItemsName = nsName "http://jabber.org/protocol/disco#items"
 
 parseDiscoItems :: Element -> Either StanzaError DiscoItems
-parseDiscoItems re = fmap (M.fromListWith (<|>)) $ mapM getItem $ fromElement re $/ XC.element (discoItemsName "item") &| curElement
+parseDiscoItems re = parseNamed re (discoItemsName "item") getItem
   where getItem e = do
           address' <- requiredAttr "jid" e
           address <- case parseValue xmppAddress address' of
             Nothing -> Left $ jidMalformed [qq|parseDiscoItems: malformed jid {address'}|]
             Just r -> return r
-          let name = getAttr "name" e
           let node = getAttr "node" e
-          return ((address, node), name)
+          return (address, node)
 
 getDiscoItems :: MonadStream m => StanzaSession m -> XMPPAddress -> m (Either StanzaError DiscoItems)
 getDiscoItems sess addr = do
@@ -112,7 +128,7 @@ getDiscoItems sess addr = do
     _ -> Left $ badRequest "getDiscoItems: multiple elements in response"
 
 data DiscoTopo = DiscoTopo { discoRoot :: DiscoEntity
-                           , discoItems :: Map (XMPPAddress, Maybe DiscoNode) (Maybe DiscoName, Either StanzaError DiscoTopo)
+                           , discoItems :: Map (XMPPAddress, Maybe DiscoNode) (Maybe LocalizedText, Either StanzaError DiscoTopo)
                            }
                deriving (Show, Eq)
 
@@ -130,3 +146,27 @@ getDiscoTopo sess addr node = runEitherT $ do
     Just _ -> return DiscoTopo { discoItems = M.empty
                               , ..
                               }
+
+
+emitNamed :: Map k (Maybe LocalizedText) -> Name -> (k -> [(Name, Text)]) -> [Element]
+emitNamed elems name toAttrs = concatMap toNamed $ M.toAscList elems
+  where toNamed (k, Nothing) = [element name (toAttrs k) []]
+        toNamed (k, Just names) = map toOne $ M.toAscList $ localTexts names
+          where toOne (lang, text) = element name ([("name", text)] ++ xmlLangAttr lang ++ toAttrs k) []
+
+discoIqHandler :: MonadSession m =>  DiscoEntity -> DiscoItems -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+discoIqHandler (DiscoEntity {..}) items (InRequestIQ { iriType = IQSet, iriChildren = [req] })
+  | elementName req == discoInfoName "query" = Just <$> do
+      let makeIdentityAttr (DiscoIdentity {..}) = [("category", discoCategory), ("type", discoType)]
+          identities = emitNamed discoIdentities (discoInfoName "identity") makeIdentityAttr
+
+          features = map (\f -> element (discoInfoName "feature") [("var", f)] []) $ S.toAscList discoFeatures
+
+      return $ Right $ identities ++ features
+  | elementName req == discoItemsName "query" = Just <$> do
+      let makeItemAttr (addr, mNode) = [("jid", addressToText addr)] ++ maybeToList (fmap ("node", ) mNode)
+      return $ Right $ emitNamed items (discoItemsName "item") makeItemAttr
+discoIqHandler _  _ _ = return Nothing
+
+discoPlugin :: MonadSession m => DiscoEntity -> DiscoItems -> XMPPPlugin m
+discoPlugin entity items = def { pluginRequestIqHandler = discoIqHandler entity items }

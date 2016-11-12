@@ -180,7 +180,7 @@ applyUpdate entries e = do
 
 rosterIqHandler :: MonadSession m => RosterRef m -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
 rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] })
-  | elementName req == rosterName "query" = fmap Just $ do
+  | elementName req == rosterName "query" = Just <$> do
       mroster <- modifyMVar rref $ \roster -> do
         let newEntries = foldM applyUpdate (rosterEntries roster) $ fromElement req $/ curAnyElement
         case newEntries of
@@ -220,7 +220,5 @@ rosterPlugin old rrefSession = do
       req = serverRequest IQGet [element (rosterName "query") (maybeToList $ fmap ("ver", ) ver) []]
 
   stanzaRequest rrefSession req $ handleFirstRequest rosterRef old
-  let plugin = XMPPPlugin { pluginInHandler = \_ -> return Nothing
-                          , pluginRequestIqHandler = rosterIqHandler rosterRef
-                          }
+  let plugin = def { pluginRequestIqHandler = rosterIqHandler rosterRef }
   return (plugin, rosterRef)

@@ -7,6 +7,7 @@ module Network.XMPP.Subscription
   ) where
 
 import Control.Concurrent.Lifted
+import Data.Default.Class
 
 import Control.Monad
 import Control.Signal (Signal)
@@ -63,7 +64,5 @@ subscriptionPlugin :: MonadSession m => StanzaSession m -> (XMPPAddress -> m (Ma
 subscriptionPlugin subscriptionSession subscriptionHandler = do
   subscriptionSignal <- Signal.empty
   let subscriptionRef = SubscriptionRef {..}
-      plugin = XMPPPlugin { pluginInHandler = subscriptionInHandler subscriptionRef
-                          , pluginRequestIqHandler = \_ -> return Nothing
-                          }
+      plugin = def { pluginInHandler = subscriptionInHandler subscriptionRef }
   return (plugin, subscriptionRef)

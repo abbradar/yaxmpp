@@ -59,7 +59,7 @@ library
                      , conduit-extra
                      , connection
                      , tls
-                     , data-default
+                     , data-default-class
                      , stringprep
                      , interpolatedstring-perl6
                      , aeson >= 1.0.0.0
@@ -101,6 +101,7 @@ executable test
                      , interpolatedstring-perl6
                      , yaml
                      , aeson
+                     , data-default-class
   hs-source-dirs:      exe
   main-is:             Test.hs
   default-language:    Haskell2010

@@ -7,6 +7,7 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad.IO.Class
 import Control.Monad.Catch
@@ -16,6 +17,7 @@ import Network.DNS
 import Network.Connection
 import Control.Monad.Logger
 import Text.InterpolatedString.Perl6 (qq)
+import Data.Default.Class
 
 import Network.XMPP.Connection
 import Network.XMPP.Stream
@@ -104,11 +106,7 @@ main = runStderrLoggingT $ do
           imSend imRef addr (msg { imExtended = [] })
 
         _ <- fork $ do
-          presenceSend presRef Presence { presenceShow = Nothing
-                                        , presenceStatus = Nothing
-                                        , presencePriority = 0
-                                        , presenceExtended = []
-                                        }
+          presenceSend presRef def
           insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings
 
@@ -118,5 +116,7 @@ main = runStderrLoggingT $ do
         --     Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
         --     Right r -> $(logDebug) [qq|Discovery result: $r|]
 
-        let plugins = [rosterP, subscrP, presP, imP]
+        let plugins' = [rosterP, subscrP, presP, imP]
+            discoP = discoPlugin (def { discoFeatures = pluginsFeatures plugins' }) M.empty
+            plugins = discoP : plugins'
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

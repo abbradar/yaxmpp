@@ -11,6 +11,7 @@ module Network.XMPP.Language
   ) where
 
 import Data.Maybe
+import Control.Arrow
 import Data.Text (Text)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -34,13 +35,17 @@ localizedFromText m
 localizedFromElement :: Name -> [Element] -> Maybe (Either StanzaError LocalizedText)
 localizedFromElement name elems = case fromChildren elems $/ XC.element name &| curElement of
   [] -> Nothing
-  bodies -> Just $ fmap (LocalizedText . M.fromList) $ mapM getOneBody bodies
+  bodies -> Just $ do
+    texts <- mapM getOneBody bodies
+    textsMap <- sequence $ M.fromListWithKey conflict $ fmap (second return) texts
+    return $ LocalizedText textsMap
   
   where getOneBody e = do
           cont <- fmap mconcat $ mapM getBodyContent $ elementNodes e
           return (xmlLangGet e, cont)
         getBodyContent (NodeContent t) = return t
         getBodyContent _ = Left $ badRequest [qq|localizedElement: $name element should contain only textual data|]
+        conflict lang _ _ = Left $ badRequest [qq|localizedElement: conflicting textual data for language $lang|]
 
 xmlLangGet :: Element -> XMLLang
 xmlLangGet = getAttr $ xmlName "lang"

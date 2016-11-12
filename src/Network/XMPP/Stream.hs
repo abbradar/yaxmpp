@@ -44,7 +44,7 @@ import Data.Conduit.ByteString.Builder
 import Network.Connection
 import Network.TLS (TLSException)
 import Data.ByteString (ByteString)
-import Data.Default
+import Data.Default.Class
 import Text.XML
 import Data.XML.Types (Event(..), Content(..))
 import qualified Text.XML.Unresolved as XMLU

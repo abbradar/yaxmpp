@@ -1,6 +1,7 @@
 module Network.XMPP.Message
   ( IMThread(..)
   , IMMessage(..)
+  , plainIMMessage
   , imSubscribe
   , imSend
   , imPlugin
@@ -10,6 +11,7 @@ import Data.Maybe
 import Control.Monad
 import Control.Monad.Trans.Except
 import Data.Text (Text)
+import qualified Data.Map as M
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -35,6 +37,14 @@ data IMMessage = IMMessage { imType :: MessageType
                            , imExtended :: [Element]
                            }
                deriving (Show, Eq)
+
+plainIMMessage :: Text -> IMMessage
+plainIMMessage txt = IMMessage { imType = MessageChat
+                               , imSubject = Nothing
+                               , imBody = fromJust $ localizedFromText $ M.singleton Nothing txt
+                               , imThread = Nothing
+                               , imExtended = []
+                               }
 
 data IMRef m = IMRef { imSignal :: Signal m (XMPPAddress, IMMessage)
                      , imSession :: StanzaSession m
@@ -85,7 +95,5 @@ imPlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, IMRef m)
 imPlugin imSession = do
   imSignal <- Signal.empty
   let pref = IMRef {..}
-      plugin = XMPPPlugin { pluginInHandler = imInHandler pref
-                          , pluginRequestIqHandler = \_ -> return Nothing
-                          }
+      plugin = def { pluginInHandler = imInHandler pref }
   return (plugin, pref)
