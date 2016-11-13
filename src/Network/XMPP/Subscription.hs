@@ -1,6 +1,7 @@
 module Network.XMPP.Subscription
   ( SubscriptionStatus(..)
   , SubscriptionRef
+  , subscriptionSession
   , subSubscribe
   , requestSubscription
   , subscriptionPlugin
@@ -28,7 +29,7 @@ data SubscriptionRef m = SubscriptionRef { subscriptionSignal :: Signal m (XMPPA
                                          , subscriptionHandler :: XMPPAddress -> m (Maybe Bool)
                                          }
 
-subscriptionInHandler :: MonadSession m => SubscriptionRef m -> InStanza -> m (Maybe (Maybe StanzaError))
+subscriptionInHandler :: MonadSession m => SubscriptionRef m -> PluginInHandler m
 subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just addr })
   | typ == PresenceSubscribed = do
       Signal.emit subscriptionSignal (addr, WeSubscribed)

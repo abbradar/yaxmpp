@@ -178,7 +178,7 @@ applyUpdate entries e = do
     Nothing | subscr == "remove" -> return $ M.delete jid entries
     _ -> Left $ badRequest "applyUpdate: invalid subscription attribute"
 
-rosterIqHandler :: MonadSession m => RosterRef m -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+rosterIqHandler :: MonadSession m => RosterRef m -> PluginRequestIQHandler m
 rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] })
   | elementName req == rosterName "query" = Just <$> do
       mroster <- modifyMVar rref $ \roster -> do

@@ -27,6 +27,8 @@ import Network.XMPP.Roster
 import Network.XMPP.Address
 import Network.XMPP.Subscription
 import Network.XMPP.Presence
+import Network.XMPP.Presence.Myself
+import Network.XMPP.Presence.Roster
 import Network.XMPP.Message
 import Network.XMPP.XEP.Disco
 import Network.SASL
@@ -81,7 +83,9 @@ main = runStderrLoggingT $ do
       oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
       (rosterP, rosterRef) <- rosterPlugin oldRoster sess
       (subscrP, subscrRef) <- subscriptionPlugin sess $ \_ -> return $ Just True
-      (presP, presRef) <- presencePlugin sess
+      (rpresH, rpresRef) <- rpresencePlugin rosterRef
+      (myPresH, myPresRef) <- myPresencePlugin sess
+      presP <- presencePlugin [rpresH, myPresH]
       (imP, imRef) <- imPlugin sess
       discoP <- discoPlugin []
 
@@ -98,15 +102,18 @@ main = runStderrLoggingT $ do
         subSubscribe subscrRef $ \(addr, stat) -> do
           $(logInfo) [qq|Got subscription update for $addr: $stat|]
 
-        presenceSubscribe presRef $ \(addr, pres) -> do
-          $(logInfo) [qq|Got presence update for $addr: $pres|]
+        myPresenceSubscribe myPresRef $ \(res, pres) -> do
+          $(logInfo) [qq|Got presence update for myself, resource $res: $pres|]
+
+        rpresenceSubscribe rpresRef $ \(addr, pres) -> do
+          $(logInfo) [qq|Got presence update for roster item {fullJidAddress addr}: $pres|]
 
         imSubscribe imRef $ \(addr, msg) -> do
           $(logInfo) [qq|Got message from $addr: $msg|]
           imSend imRef addr (msg { imExtended = [] })
 
         _ <- fork $ do
-          presenceSend presRef def
+          myPresenceSend myPresRef def
           insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings
 

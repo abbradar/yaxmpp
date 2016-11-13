@@ -11,8 +11,11 @@ import Network.XMPP.Stanza
 
 type XMPPFeature = Text
 
-data XMPPPlugin m = XMPPPlugin { pluginInHandler ::  InStanza -> m (Maybe (Maybe StanzaError))
-                               , pluginRequestIqHandler ::  InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+type PluginInHandler m = InStanza -> m (Maybe (Maybe StanzaError))
+type PluginRequestIQHandler m = InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+
+data XMPPPlugin m = XMPPPlugin { pluginInHandler :: PluginInHandler m
+                               , pluginRequestIqHandler :: PluginRequestIQHandler m
                                }
 
 instance Monad m => Default (XMPPPlugin m) where

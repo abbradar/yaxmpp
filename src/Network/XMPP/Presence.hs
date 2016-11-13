@@ -1,29 +1,27 @@
 module Network.XMPP.Presence
   ( ShowState(..)
+  , BareJID
+  , FullJID
+  , fullJidAddress
+  , bareJidAddress
+  , PresenceHandler
   , Presence(..)
-  , PresenceRef
-  , presenceSubscribe
-  , presenceSend
   , presencePlugin
   ) where
 
-import Data.Maybe
 import Data.Int
 import Control.Monad
 import Text.Read (readMaybe)
-import Data.IORef.Lifted
 import Text.XML
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
+import Control.Monad.Logger
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Data.Default.Class
+import Text.InterpolatedString.Perl6 (qq)
 
 import Data.Injective
-import Control.Signal (Signal)
-import qualified Control.Signal as Signal
 import Network.XMPP.XML
 import Network.XMPP.Session
 import Network.XMPP.Stanza
@@ -58,18 +56,20 @@ instance Default Presence where
                  , presenceExtended = []
                  }
 
-type PresenceMap = Map (XMPPLocal, XMPPDomain) (Map XMPPResource Presence)
+type BareJID = (XMPPLocal, XMPPDomain)
 
-data PresenceRef m = PresenceRef { presenceRef :: IORef PresenceMap
-                                 , presenceSignal :: Signal m (XMPPAddress, Maybe Presence)
-                                 , presenceSession :: StanzaSession m
+type FullJID = (BareJID, XMPPResource)
+
+fullJidAddress :: FullJID -> XMPPAddress
+fullJidAddress ((local, domain), res) = XMPPAddress (Just local) domain (Just res)
+
+bareJidAddress :: BareJID -> XMPPAddress
+bareJidAddress (local, domain) = XMPPAddress (Just local) domain Nothing
+
+type PresenceHandler m = FullJID -> Maybe Presence -> m Bool
+
+data PresenceRef m = PresenceRef { presenceHandlers :: [PresenceHandler m]
                                  }
-
-splitAddress :: XMPPAddress -> Maybe ((XMPPLocal, XMPPDomain), XMPPResource)
-splitAddress addr = do
-  local <- addressLocal addr
-  resource <- addressResource addr
-  return ((local, addressDomain addr), resource)
 
 data PresenceOp = PresenceSet
                 | PresenceUnset
@@ -86,6 +86,13 @@ readIntMaybe str = do
   when (i < fromIntegral (minBound :: a)) $ fail "readIntMaybe: too small"
   when (i > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
   return $ fromIntegral i
+
+emitPresence :: MonadSession m => PresenceRef m -> FullJID -> Maybe Presence -> m ()
+emitPresence pref addr pres = tryHandlers $ presenceHandlers pref
+  where tryHandlers [] = $(logWarn) [qq|Unhandled presence update for $addr: $pres|]
+        tryHandlers (handler:handlers) = do
+          r <- handler addr pres
+          if r then return () else tryHandlers handlers
 
 parsePresence :: [Element] -> Either StanzaError Presence
 parsePresence elems = do
@@ -108,49 +115,30 @@ parsePresence elems = do
 
   return Presence {..}
 
-presenceInHandler :: MonadSession m => PresenceRef m -> InStanza -> m (Maybe (Maybe StanzaError))
-presenceInHandler (PresenceRef {..}) (InStanza { istFrom = Just addr, istType = InPresence (Right (presenceOp -> Just op)), istChildren }) = Just <$> do
+splitAddress :: XMPPAddress -> Maybe FullJID
+splitAddress addr = do
+  local <- addressLocal addr
+  resource <- addressResource addr
+  return ((local, addressDomain addr), resource)
+
+presenceInHandler :: MonadSession m => PresenceRef m -> PluginInHandler m
+presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istType = InPresence (Right (presenceOp -> Just op)), istChildren }) = Just <$> do
   case splitAddress addr of
     Nothing -> return $ Just $ jidMalformed "presenceInHandler: Presence should be announced for a full-specified JID"
-    Just (bare, res) -> do
-      pres <- readIORef presenceRef
-      ret <- case op of
+    Just faddr ->
+      case op of
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
-            let pres' = M.insertWith M.union bare (M.singleton res p) pres
-            return $ Right (pres', (addr, Just p))
-          Left e -> return $ Left e
+            emitPresence pref faddr $ Just p
+            return Nothing
+          Left e -> return $ Just e
         PresenceUnset -> do
-          let removeRes m = if M.null m' then Nothing else Just m'
-                where m' = M.delete res m
-              pres' = M.update removeRes bare pres
-          return $ Right (pres', (addr, Nothing))
-      case ret of
-        Left err -> return $ Just err
-        Right (pres', r) -> do
-          writeIORef presenceRef pres'
-          Signal.emit presenceSignal r
-          return Nothing
+            emitPresence pref faddr Nothing
+            return Nothing
 presenceInHandler _ _ = return Nothing
 
-presenceSubscribe :: MonadSession m => PresenceRef m -> ((XMPPAddress, Maybe Presence) -> m ()) -> m ()
-presenceSubscribe (PresenceRef {..}) = Signal.subscribe presenceSignal
-
-presenceSend :: MonadSession m => PresenceRef m -> Presence -> m ()
-presenceSend (PresenceRef {..}) (Presence {..}) =
-  void $ stanzaSend presenceSession OutStanza { ostTo = Nothing
-                                              , ostType = OutPresence Nothing
-                                              , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceExtended
-                                              }
-
-  where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
-        mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
-        statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
-
-presencePlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, PresenceRef m)
-presencePlugin presenceSession = do
-  presenceRef <- newIORef M.empty
-  presenceSignal <- Signal.empty
+presencePlugin :: MonadSession m => [PresenceHandler m] -> m (XMPPPlugin m)
+presencePlugin presenceHandlers = do
   let pref = PresenceRef {..}
       plugin = def { pluginInHandler = presenceInHandler pref }
-  return (plugin, pref)
+  return plugin

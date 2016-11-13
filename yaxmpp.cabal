@@ -32,6 +32,8 @@ library
                      , Network.XMPP.Roster
                      , Network.XMPP.Subscription
                      , Network.XMPP.Presence
+                     , Network.XMPP.Presence.Myself
+                     , Network.XMPP.Presence.Roster
                      , Network.XMPP.Message
                      , Network.XMPP.XEP.Disco
                      , Network.XMPP.XEP.DateTime
