@@ -2,6 +2,7 @@ module Network.XMPP.Language
   ( XMLLang
   , LocalizedText
   , localTexts
+  , localizedFromTexts
   , localizedFromText
   , localizedFromElement
   , xmlLangGet
@@ -11,7 +12,6 @@ module Network.XMPP.Language
   ) where
 
 import Data.Maybe
-import Control.Arrow
 import Data.Text (Text)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -21,23 +21,29 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
 import Network.XMPP.XML
+import Network.XMPP.Utils
 import Network.XMPP.Stanza
 
 type XMLLang = Maybe Text
 newtype LocalizedText = LocalizedText { localTexts :: Map XMLLang Text }
                       deriving (Show, Eq)
 
-localizedFromText :: Map XMLLang Text -> Maybe LocalizedText
-localizedFromText m
+localizedFromTexts :: Map XMLLang Text -> Maybe LocalizedText
+localizedFromTexts m
   | M.null m = Nothing
   | otherwise = Just $ LocalizedText m
+
+localizedFromText :: Text -> LocalizedText
+localizedFromText = LocalizedText . M.singleton Nothing
 
 localizedFromElement :: Name -> [Element] -> Maybe (Either StanzaError LocalizedText)
 localizedFromElement name elems = case fromChildren elems $/ XC.element name &| curElement of
   [] -> Nothing
   bodies -> Just $ do
     texts <- mapM getOneBody bodies
-    textsMap <- sequence $ M.fromListWithKey conflict $ fmap (second return) texts
+    textsMap <- case mapDisjointFromList texts of
+      Nothing -> Left $ badRequest [qq|localizedElement: conflicting textual data for language|]
+      Just r -> return r
     return $ LocalizedText textsMap
   
   where getOneBody e = do
@@ -45,7 +51,6 @@ localizedFromElement name elems = case fromChildren elems $/ XC.element name &| 
           return (xmlLangGet e, cont)
         getBodyContent (NodeContent t) = return t
         getBodyContent _ = Left $ badRequest [qq|localizedElement: $name element should contain only textual data|]
-        conflict lang _ _ = Left $ badRequest [qq|localizedElement: conflicting textual data for language $lang|]
 
 xmlLangGet :: Element -> XMLLang
 xmlLangGet = getAttr $ xmlName "lang"

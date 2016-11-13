@@ -241,7 +241,7 @@ sessionCreate (SessionSettings {..}) = do
     Right s -> flip onException (streamClose s) $ do
       address <- bindResource ssResource s
       sessionAddress <- case parseValue xmppAddress address of
-        Just r | isJust (xmppLocal r) && isJust (xmppResource r) -> return r
+        Just r | isJust (addressLocal r) && isJust (addressResource r) -> return r
         _ -> fail "sessionCreate: can't normalize address"
       msm <- initSM ssConn s
       sessionStream <- newIORef s

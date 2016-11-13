@@ -5,6 +5,8 @@ module Network.XMPP.Stanza
   , badRequest
   , jidMalformed
   , featureNotImplemented
+  , serviceUnavailable
+  , itemNotFound
 
   , MessageType(..)
   , PresenceType(..)
@@ -46,6 +48,7 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Text.InterpolatedString.Perl6 (qq)
+import Data.Default.Class
 
 import Data.Injective
 import Data.ID (IDGen)
@@ -127,26 +130,39 @@ data StanzaError = StanzaError { szeType :: StanzaErrorType
                                }
                  deriving (Show, Eq)
 
+instance Default StanzaError where
+  def = StanzaError { szeType = SzCancel
+                    , szeCondition = ScUndefinedCondition
+                    , szeText = Nothing
+                    , szeChildren = []
+                    }
+
 badRequest :: Text -> StanzaError
-badRequest desc = StanzaError { szeType = SzCancel
-                              , szeCondition = ScBadRequest
-                              , szeText = Just desc
-                              , szeChildren = []
-                              }
+badRequest desc = def { szeType = SzModify
+                      , szeCondition = ScBadRequest
+                      , szeText = Just desc
+                      }
 
 jidMalformed :: Text -> StanzaError
-jidMalformed jid = StanzaError { szeType = SzCancel
-                               , szeCondition = ScJidMalformed
-                               , szeText = Just jid
-                               , szeChildren = []
-                               }
+jidMalformed jid = def { szeType = SzModify
+                       , szeCondition = ScJidMalformed
+                       , szeText = Just jid
+                       }
 
 featureNotImplemented :: Text -> StanzaError
-featureNotImplemented desc = StanzaError { szeType = SzCancel
-                                         , szeCondition = ScFeatureNotImplemented
-                                         , szeText = Just desc
-                                         , szeChildren = []
-                                         }
+featureNotImplemented desc = def { szeCondition = ScFeatureNotImplemented
+                                 , szeText = Just desc
+                                 }
+
+serviceUnavailable :: Text -> StanzaError
+serviceUnavailable desc = def { szeCondition = ScServiceUnavailable
+                              , szeText = Just desc
+                              }
+
+itemNotFound :: Text -> StanzaError
+itemNotFound desc = def { szeCondition = ScItemNotFound
+                        , szeText = Just desc
+                        }
 
 data MessageType = MessageChat
                  | MessageGroupchat
@@ -269,8 +285,9 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . addressToText) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
-  sessionSend ssSession msg
-  modifyMVar_ ssRequests (return . M.insert (oriTo, sid) handler)
+  modifyMVar_ ssRequests $ \reqs -> do
+    sessionSend ssSession msg
+    return $ M.insert (oriTo, sid) handler reqs
 
 stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
 stanzaSyncRequest session req = do

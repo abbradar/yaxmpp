@@ -79,6 +79,7 @@ library
                      , ConstraintKinds
                      , MultiParamTypeClasses
                      , ExistentialQuantification
+                     , GeneralizedNewtypeDeriving
                      , NamedFieldPuns
                      , DeriveGeneric
                      , TemplateHaskell

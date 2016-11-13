@@ -6,10 +6,11 @@ module Network.XMPP.Subscription
   , subscriptionPlugin
   ) where
 
+import Data.Maybe
+import Control.Monad
 import Control.Concurrent.Lifted
 import Data.Default.Class
 
-import Control.Monad
 import Control.Signal (Signal)
 import qualified Control.Signal as Signal
 import Network.XMPP.Address
@@ -54,11 +55,13 @@ subSubscribe :: MonadSession m => SubscriptionRef m -> ((XMPPAddress, Subscripti
 subSubscribe (SubscriptionRef {..}) = Signal.subscribe subscriptionSignal
 
 requestSubscription :: MonadSession m => SubscriptionRef m -> XMPPAddress -> m ()
-requestSubscription (SubscriptionRef {..}) addr =
-  void $ stanzaSend subscriptionSession OutStanza { ostTo = Just addr
-                                                  , ostType = OutPresence $ Just PresenceSubscribe
-                                                  , ostChildren = []
-                                                  }
+requestSubscription (SubscriptionRef {..}) addr
+  | isNothing $ addressResource addr =
+      void $ stanzaSend subscriptionSession OutStanza { ostTo = Just addr
+                                                      , ostType = OutPresence $ Just PresenceSubscribe
+                                                      , ostChildren = []
+                                                      }
+  | otherwise = fail "requestSubscription: resource shouldn't be specified"
 
 subscriptionPlugin :: MonadSession m => StanzaSession m -> (XMPPAddress -> m (Maybe Bool)) -> m (XMPPPlugin m, SubscriptionRef m)
 subscriptionPlugin subscriptionSession subscriptionHandler = do

@@ -159,45 +159,46 @@ data StreamError = StreamError { smeType :: StreamErrorType
                                }
                  deriving (Show, Eq)
 
+instance Default StreamError where
+  def = StreamError { smeType = StUndefinedCondition
+                    , smeText = Nothing
+                    , smeChildren = []
+                    }
+
 intersperse :: (Foldable t, Monoid s) => s -> t s -> s
 intersperse sep = foldr1 (\a b -> a <> sep <> b)
 
 unexpectedStanza :: Name -> [Name] -> StreamError
 unexpectedStanza got expected =
-  StreamError { smeType = StInvalidXml
-              , smeText = Just $ [qq|Unexpected stanza: got <{nameLocalName got}>, expected one of |] <>
-                         intersperse ", " (map (\n -> [qq|<{nameLocalName n}>|]) expected)
-              , smeChildren = []
-              }
+  def { smeType = StInvalidXml
+      , smeText = Just $ [qq|Unexpected stanza: got <{nameLocalName got}>, expected one of |] <>
+                  intersperse ", " (map (\n -> [qq|<{nameLocalName n}>|]) expected)
+      }
 
 unexpectedInput :: Text -> StreamError
 unexpectedInput str =
-  StreamError { smeType = StInvalidXml
-              , smeText = Just [qq|Stanza error: $str|]
-              , smeChildren = []
-              }
+  def { smeType = StInvalidXml
+      , smeText = Just [qq|Stanza error: $str|]
+      }
 
 xmlError :: XMLException -> StreamError
 xmlError e =
-  StreamError { smeType = StInvalidXml
-              , smeText = Just [qq|XML parse error: $e|]
-              , smeChildren = []
-              }
+  def { smeType = StInvalidXml
+      , smeText = Just [qq|XML parse error: $e|]
+      }
 
 unresolvedEntity :: Set Text -> StreamError
 unresolvedEntity entities =
-  StreamError { smeType = StInvalidXml
-              , smeText = Just $ "Unresolved XML entities: " <>
-                         intersperse ", " (S.toList entities)
-              , smeChildren = []
-              }
+  def { smeType = StInvalidXml
+      , smeText = Just $ "Unresolved XML entities: " <>
+                  intersperse ", " (S.toList entities)
+      }
 
 unsupportedVersion :: Text -> StreamError
 unsupportedVersion ver =
-  StreamError { smeType = StUnsupportedVersion
-              , smeText = Just [qq|Supported version: $xmppVersion, got $ver|]
-              , smeChildren = []
-              }
+  def { smeType = StUnsupportedVersion
+      , smeText = Just [qq|Supported version: $xmppVersion, got $ver|]
+      }
 
 
 data StreamSettings = StreamSettings { ssFrom :: Text

@@ -58,18 +58,18 @@ instance Default Presence where
                  , presenceExtended = []
                  }
 
-type PresenceMap = Map (Text, Text) (Map Text Presence)
+type PresenceMap = Map (XMPPLocal, XMPPDomain) (Map XMPPResource Presence)
 
 data PresenceRef m = PresenceRef { presenceRef :: IORef PresenceMap
                                  , presenceSignal :: Signal m (XMPPAddress, Maybe Presence)
                                  , presenceSession :: StanzaSession m
                                  }
 
-splitAddress :: XMPPAddress -> Maybe ((Text, Text), Text)
+splitAddress :: XMPPAddress -> Maybe ((XMPPLocal, XMPPDomain), XMPPResource)
 splitAddress addr = do
-  local <- xmppLocal addr
-  resource <- xmppResource addr
-  return ((local, xmppDomain addr), resource)
+  local <- addressLocal addr
+  resource <- addressResource addr
+  return ((local, addressDomain addr), resource)
 
 data PresenceOp = PresenceSet
                 | PresenceUnset

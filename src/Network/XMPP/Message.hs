@@ -41,7 +41,7 @@ data IMMessage = IMMessage { imType :: MessageType
 plainIMMessage :: Text -> IMMessage
 plainIMMessage txt = IMMessage { imType = MessageChat
                                , imSubject = Nothing
-                               , imBody = fromJust $ localizedFromText $ M.singleton Nothing txt
+                               , imBody = localizedFromText txt
                                , imThread = Nothing
                                , imExtended = []
                                }

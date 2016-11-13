@@ -1,11 +1,17 @@
 module Network.XMPP.Address
-       ( XMPPAddress
-       , xmppLocal
-       , xmppDomain
-       , xmppResource
+       ( XMPPLocal
+       , localText
+       , localFromText
+       , XMPPDomain
+       , domainText
+       , domainFromText
+       , XMPPResource
+       , resourceText
+       , resourceFromText
+       , XMPPAddress(..)
        , xmppAddress
-       , addressFromText
        , addressToText
+       , addressBare
        ) where
 
 import Data.Monoid
@@ -19,9 +25,27 @@ import Text.StringPrep.Profiles
 
 import Network.XMPP.Utils
 
-data XMPPAddress = XMPPAddress { xmppLocal :: Maybe Text
-                               , xmppDomain :: Text
-                               , xmppResource :: Maybe Text
+newtype XMPPLocal = XMPPLocal { localText :: Text }
+                  deriving (Eq, Ord, Show)
+
+localFromText :: Text -> Maybe XMPPLocal
+localFromText t = XMPPLocal <$> runStringPrep nodePrepProfile t
+
+newtype XMPPDomain = XMPPDomain { domainText :: Text }
+                   deriving (Eq, Ord, Show)
+
+domainFromText :: Text -> Maybe XMPPDomain
+domainFromText t = XMPPDomain <$> runStringPrep xmppNamePrepProfile t
+
+newtype XMPPResource = XMPPResource { resourceText :: Text }
+                     deriving (Eq, Ord, Show)
+
+resourceFromText :: Text -> Maybe XMPPResource
+resourceFromText t = XMPPResource <$> runStringPrep resourcePrepProfile t
+
+data XMPPAddress = XMPPAddress { addressLocal :: Maybe XMPPLocal
+                               , addressDomain :: XMPPDomain
+                               , addressResource :: Maybe XMPPResource
                                }
                  deriving (Eq, Ord)
 
@@ -81,41 +105,42 @@ xmppAddress = do
   sep <- optional anyChar
   case sep of
     Just '@' -> do
-      xmppLocal <- Just <$> checkLocal first
-      xmppDomain <- takeTill (== '/') >>= checkDomain
+      addressLocal <- Just <$> checkLocal first
+      addressDomain <- takeTill (== '/') >>= checkDomain
       sep2 <- optional anyChar
       case sep2 of
         Just '/' -> do
-          xmppResource <- Just <$> (takeText >>= checkResource)
+          addressResource <- Just <$> (takeText >>= checkResource)
           return XMPPAddress { .. }
-        Nothing -> return XMPPAddress { xmppResource = Nothing
+        Nothing -> return XMPPAddress { addressResource = Nothing
                                      , ..
                                      }
         _ -> error "xmppAddress: impossible second separator"
     Just '/' -> do
-      xmppDomain <- checkDomain first
-      xmppResource <- Just <$> (takeText >>= checkResource)
-      return XMPPAddress { xmppLocal = Nothing
+      addressDomain <- checkDomain first
+      addressResource <- Just <$> (takeText >>= checkResource)
+      return XMPPAddress { addressLocal = Nothing
                          , ..
                          }
     Nothing -> do
-      xmppDomain <- checkDomain first
-      return XMPPAddress { xmppLocal = Nothing
-                         , xmppResource = Nothing
+      addressDomain <- checkDomain first
+      return XMPPAddress { addressLocal = Nothing
+                         , addressResource = Nothing
                          , ..
                          }
     _ -> error "xmppAddress: impossible first separator"
 
-  where checkLocal = maybeFail "xmppAddress: localpart doesn't satisfy Nodeprep profile of stringprep" . runStringPrep nodePrepProfile
-        checkDomain = maybeFail "xmppAddress: domainpart doesn't satisfy Nameprep profile of stringprep" . runStringPrep xmppNamePrepProfile
-        checkResource = maybeFail "xmppAddress: resourcepart doesn't satisfy Resourceprep profile of stringprep" . runStringPrep resourcePrepProfile
-
-addressFromText :: Maybe Text -> Text -> Maybe Text -> Maybe XMPPAddress
-addressFromText local domain resource = do
-  xmppLocal <- mapM (runStringPrep nodePrepProfile) local
-  xmppDomain <- runStringPrep xmppNamePrepProfile domain
-  xmppResource <- mapM (runStringPrep resourcePrepProfile) resource
-  return XMPPAddress {..}
+  where checkLocal = maybeFail "xmppAddress: localpart doesn't satisfy Nodeprep profile of stringprep" . localFromText
+        checkDomain = maybeFail "xmppAddress: domainpart doesn't satisfy Nameprep profile of stringprep" . domainFromText
+        checkResource = maybeFail "xmppAddress: resourcepart doesn't satisfy Resourceprep profile of stringprep" . resourceFromText
 
 addressToText :: XMPPAddress -> Text
-addressToText (XMPPAddress {..}) = maybe mempty (<> "@") xmppLocal <> xmppDomain <> maybe mempty ("/" <>) xmppResource
+addressToText (XMPPAddress {..}) =
+  maybe mempty ((<> "@") . localText) addressLocal
+  <> domainText addressDomain
+  <> maybe mempty (("/" <>) . resourceText) addressResource
+
+addressBare :: XMPPAddress -> XMPPAddress
+addressBare (XMPPAddress {..}) = XMPPAddress { addressResource = Nothing
+                                             , ..
+                                             }
