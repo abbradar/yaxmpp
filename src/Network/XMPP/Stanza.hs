@@ -352,7 +352,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
   let tmid = getAttr "id" e
   tfrom' <- getAddr "from"
   -- Workaround for ejabberd that sometimes uses bare JID as "from" for server responses.
-  let tfrom = tfrom' >>= \from -> if from == addressBare (sessionAddress ssSession) then Nothing else return from
+  let tfrom = tfrom' >>= \from -> if from == fullJidAddress (sessionAddress ssSession) then Nothing else return from
   tto <- getAddr "to"
 
   if | ename == jcName "iq" -> do

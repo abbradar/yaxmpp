@@ -31,10 +31,10 @@ data MyPresenceRef m = MyPresenceRef { myPresenceSignal :: Signal m (XMPPResourc
                                      }
 
 myPresenceHandler :: MonadSession m => MyPresenceRef m -> PresenceHandler m
-myPresenceHandler (MyPresenceRef {..}) (bare, res) pres
-  | myBareAddress == bare = do
-      modifyIORef myPresence $ M.update (const pres) res
-      Signal.emit myPresenceSignal (res, pres)
+myPresenceHandler (MyPresenceRef {..}) (FullJID {..}) pres
+  | myBareAddress == fullBare = do
+      modifyIORef myPresence $ M.update (const pres) fullResource
+      Signal.emit myPresenceSignal (fullResource, pres)
       return True
 myPresenceHandler _ _ _ = return False
 
@@ -59,8 +59,7 @@ myPresencePlugin :: MonadSession m => StanzaSession m -> m (PresenceHandler m, M
 myPresencePlugin myPresenceSession = do
   myPresence <- newIORef M.empty
   myPresenceSignal <- Signal.empty
-  let addr@(XMPPAddress { addressLocal = Just local }) = sessionAddress $ ssSession myPresenceSession
-      myBareAddress = (local, addressDomain addr)
+  let myBareAddress = fullBare $ sessionAddress $ ssSession myPresenceSession
       pref = MyPresenceRef {..}
       phandler = myPresenceHandler pref
   return (phandler, pref)

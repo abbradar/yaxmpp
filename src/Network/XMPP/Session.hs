@@ -13,7 +13,6 @@ module Network.XMPP.Session
        , sessionGetStream
        ) where
 
-import Data.Maybe
 import Data.Word
 import Text.Read
 import Data.Typeable
@@ -61,7 +60,7 @@ data ReconnectInfo = ReconnectInfo { reconnectId :: Text
                                    , reconnectSettings :: ConnectionSettings
                                    }
 
-data Session m = Session { sessionAddress :: XMPPAddress
+data Session m = Session { sessionAddress :: FullJID
                          , sessionReconnect :: Maybe ReconnectInfo
                          , sessionStream :: IORef (Stream m)
                          , sessionRLock :: MVar (Maybe ReadSessionData)
@@ -240,8 +239,8 @@ sessionCreate (SessionSettings {..}) = do
     Left e -> return $ Left e
     Right s -> flip onException (streamClose s) $ do
       address <- bindResource ssResource s
-      sessionAddress <- case parseValue xmppAddress address of
-        Just r | isJust (addressLocal r) && isJust (addressResource r) -> return r
+      sessionAddress <- case parseValue xmppAddress address >>= fullJidGet of
+        Just r -> return r
         _ -> fail "sessionCreate: can't normalize address"
       msm <- initSM ssConn s
       sessionStream <- newIORef s

@@ -7,7 +7,6 @@ module Network.XMPP.Subscription
   , subscriptionPlugin
   ) where
 
-import Data.Maybe
 import Control.Monad
 import Control.Concurrent.Lifted
 import Data.Default.Class
@@ -24,13 +23,13 @@ data SubscriptionStatus = WeSubscribed
                         | TheyUnsubscribed
                         deriving (Show, Eq)
 
-data SubscriptionRef m = SubscriptionRef { subscriptionSignal :: Signal m (XMPPAddress, SubscriptionStatus)
+data SubscriptionRef m = SubscriptionRef { subscriptionSignal :: Signal m (BareJID, SubscriptionStatus)
                                          , subscriptionSession :: StanzaSession m
-                                         , subscriptionHandler :: XMPPAddress -> m (Maybe Bool)
+                                         , subscriptionHandler :: BareJID -> m (Maybe Bool)
                                          }
 
 subscriptionInHandler :: MonadSession m => SubscriptionRef m -> PluginInHandler m
-subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just addr })
+subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr) })
   | typ == PresenceSubscribed = do
       Signal.emit subscriptionSignal (addr, WeSubscribed)
       return $ Just Nothing
@@ -41,7 +40,7 @@ subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (R
       _ <- fork $ do
         mr <- subscriptionHandler addr
         case mr of
-          Just r -> void $ stanzaSend subscriptionSession OutStanza { ostTo = Just addr
+          Just r -> void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
                                                                    , ostType = OutPresence $ Just $ if r then PresenceSubscribed else PresenceUnsubscribed
                                                                    , ostChildren = []
                                                                    }
@@ -52,19 +51,17 @@ subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (R
       return $ Just Nothing
 subscriptionInHandler _ _ = return Nothing
 
-subSubscribe :: MonadSession m => SubscriptionRef m -> ((XMPPAddress, SubscriptionStatus) -> m ()) -> m ()
+subSubscribe :: MonadSession m => SubscriptionRef m -> ((BareJID, SubscriptionStatus) -> m ()) -> m ()
 subSubscribe (SubscriptionRef {..}) = Signal.subscribe subscriptionSignal
 
-requestSubscription :: MonadSession m => SubscriptionRef m -> XMPPAddress -> m ()
-requestSubscription (SubscriptionRef {..}) addr
-  | isNothing $ addressResource addr =
-      void $ stanzaSend subscriptionSession OutStanza { ostTo = Just addr
-                                                      , ostType = OutPresence $ Just PresenceSubscribe
-                                                      , ostChildren = []
-                                                      }
-  | otherwise = fail "requestSubscription: resource shouldn't be specified"
+requestSubscription :: MonadSession m => SubscriptionRef m -> BareJID -> m ()
+requestSubscription (SubscriptionRef {..}) addr =
+  void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
+                                                  , ostType = OutPresence $ Just PresenceSubscribe
+                                                  , ostChildren = []
+                                                  }
 
-subscriptionPlugin :: MonadSession m => StanzaSession m -> (XMPPAddress -> m (Maybe Bool)) -> m (XMPPPlugin m, SubscriptionRef m)
+subscriptionPlugin :: MonadSession m => StanzaSession m -> (BareJID -> m (Maybe Bool)) -> m (XMPPPlugin m, SubscriptionRef m)
 subscriptionPlugin subscriptionSession subscriptionHandler = do
   subscriptionSignal <- Signal.empty
   let subscriptionRef = SubscriptionRef {..}

@@ -38,7 +38,7 @@ data Settings = Settings { server :: Text
                          , password :: Text
                          , resource :: Text
                          , rosterCache :: FilePath
-                         , pal :: XMPPAddress
+                         , pal :: BareJID
                          }
                 deriving (Show, Eq, Generic)
 
@@ -114,7 +114,7 @@ main = runStderrLoggingT $ do
 
         _ <- fork $ do
           myPresenceSend myPresRef def
-          insertRoster rosterRef (pal settings) (Just "Best pal") (S.fromList ["Pals"])
+          insertRoster rosterRef (bareJidAddress $ pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings
 
         -- _ <- fork $ do

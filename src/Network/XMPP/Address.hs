@@ -12,6 +12,12 @@ module Network.XMPP.Address
        , xmppAddress
        , addressToText
        , addressBare
+       , BareJID(..)
+       , bareJidGet
+       , bareJidAddress
+       , FullJID(..)
+       , fullJidGet
+       , fullJidAddress
        ) where
 
 import Data.Monoid
@@ -144,3 +150,58 @@ addressBare :: XMPPAddress -> XMPPAddress
 addressBare (XMPPAddress {..}) = XMPPAddress { addressResource = Nothing
                                              , ..
                                              }
+
+data BareJID = BareJID { bareLocal :: XMPPLocal
+                       , bareDomain :: XMPPDomain
+                       }
+             deriving (Eq, Ord)
+
+instance Show BareJID where
+  show = show . bareJidAddress
+
+instance FromJSON BareJID where
+  parseJSON v = do
+    addr <- parseJSON v
+    case bareJidGet addr of
+      Nothing -> fail "BareJID"
+      Just r -> return r
+
+instance ToJSON BareJID where
+  toJSON = toJSON . bareJidAddress
+
+bareJidGet :: XMPPAddress -> Maybe BareJID
+bareJidGet addr = do
+  bareLocal <- addressLocal addr
+  return BareJID { bareDomain = addressDomain addr
+                 , ..
+                 }
+
+bareJidAddress :: BareJID -> XMPPAddress
+bareJidAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
+
+data FullJID = FullJID { fullBare :: BareJID
+                       , fullResource :: XMPPResource
+                       }
+             deriving (Eq, Ord)
+
+instance Show FullJID where
+  show = show . fullJidAddress
+
+instance FromJSON FullJID where
+  parseJSON v = do
+    addr <- parseJSON v
+    case fullJidGet addr of
+      Nothing -> fail "FullJID"
+      Just r -> return r
+
+instance ToJSON FullJID where
+  toJSON = toJSON . fullJidAddress
+
+fullJidGet :: XMPPAddress -> Maybe FullJID
+fullJidGet addr = do
+  fullBare <- bareJidGet addr
+  fullResource <- addressResource addr
+  return FullJID {..}
+
+fullJidAddress :: FullJID -> XMPPAddress
+fullJidAddress (FullJID {..}) = XMPPAddress (Just $ bareLocal fullBare) (bareDomain fullBare) (Just fullResource)

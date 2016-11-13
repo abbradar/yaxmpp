@@ -1,9 +1,5 @@
 module Network.XMPP.Presence
   ( ShowState(..)
-  , BareJID
-  , FullJID
-  , fullJidAddress
-  , bareJidAddress
   , PresenceHandler
   , Presence(..)
   , presencePlugin
@@ -56,16 +52,6 @@ instance Default Presence where
                  , presenceExtended = []
                  }
 
-type BareJID = (XMPPLocal, XMPPDomain)
-
-type FullJID = (BareJID, XMPPResource)
-
-fullJidAddress :: FullJID -> XMPPAddress
-fullJidAddress ((local, domain), res) = XMPPAddress (Just local) domain (Just res)
-
-bareJidAddress :: BareJID -> XMPPAddress
-bareJidAddress (local, domain) = XMPPAddress (Just local) domain Nothing
-
 type PresenceHandler m = FullJID -> Maybe Presence -> m Bool
 
 data PresenceRef m = PresenceRef { presenceHandlers :: [PresenceHandler m]
@@ -115,15 +101,9 @@ parsePresence elems = do
 
   return Presence {..}
 
-splitAddress :: XMPPAddress -> Maybe FullJID
-splitAddress addr = do
-  local <- addressLocal addr
-  resource <- addressResource addr
-  return ((local, addressDomain addr), resource)
-
 presenceInHandler :: MonadSession m => PresenceRef m -> PluginInHandler m
 presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istType = InPresence (Right (presenceOp -> Just op)), istChildren }) = Just <$> do
-  case splitAddress addr of
+  case fullJidGet addr of
     Nothing -> return $ Just $ jidMalformed "presenceInHandler: Presence should be announced for a full-specified JID"
     Just faddr ->
       case op of

@@ -24,16 +24,16 @@ data RosterPresenceRef m = RosterPresenceRef { rpresenceRef :: IORef RosterPrese
                                              }
 
 rpresenceHandler :: MonadSession m => RosterPresenceRef m -> PresenceHandler m
-rpresenceHandler (RosterPresenceRef {..}) full@(bare, res) presUpd = do
+rpresenceHandler (RosterPresenceRef {..}) full@(FullJID {..}) presUpd = do
   roster <- rosterEntries <$> rosterGet rpresenceRoster
-  if bareJidAddress bare `M.member` roster
+  if bareJidAddress fullBare `M.member` roster
     then do
       let updateEntry m = case presUpd of
-            Just pres -> Just $ M.insert res pres m
+            Just pres -> Just $ M.insert fullResource pres m
             Nothing ->
-              let m' = M.delete res m
+              let m' = M.delete fullResource m
               in if M.null m' then Nothing else Just m'
-      modifyIORef rpresenceRef $ M.update updateEntry bare
+      modifyIORef rpresenceRef $ M.update updateEntry fullBare
       Signal.emit rpresenceSignal (full, presUpd)
       return True
     else return False

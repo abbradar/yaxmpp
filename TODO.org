@@ -51,8 +51,3 @@
 [ ] XEP-0203 (Delayed Delivery) [http://xmpp.org/extensions/xep-0203.html]
 [ ] XEP-0004 (Data Forms) [http://xmpp.org/extensions/xep-0004.html]
 [ ] XEP-0077 (In-Band Registration) [http://xmpp.org/extensions/xep-0077.html]
-
-** Architecture
-[ ] Split Presence plugin into general presence (which doesn't store status),
-    roster presence (which stores it) and MUC presence (embedded into MUC
-    plugin).
