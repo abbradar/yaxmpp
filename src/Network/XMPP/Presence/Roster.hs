@@ -1,16 +1,16 @@
 module Network.XMPP.Presence.Roster
   ( RosterPresenceMap
   , RosterPresenceRef
-  , rpresenceSubscribe
+  , rpresenceSetHandler
   , rpresencePlugin
   ) where
 
 import Data.IORef.Lifted
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-
-import Control.Signal (Signal)
-import qualified Control.Signal as Signal
+  
+import Control.Handler (Handler)
+import qualified Control.Handler as Handler
 import Network.XMPP.Session
 import Network.XMPP.Address
 import Network.XMPP.Presence
@@ -20,11 +20,11 @@ type RosterPresenceMap = Map BareJID (Map XMPPResource Presence)
 
 data RosterPresenceRef m = RosterPresenceRef { rpresenceRef :: IORef RosterPresenceMap
                                              , rpresenceRoster :: RosterRef m
-                                             , rpresenceSignal :: Signal m (FullJID, Maybe Presence)
+                                             , rpresenceHandler :: Handler m (FullJID, Maybe Presence)
                                              }
 
-rpresenceHandler :: MonadSession m => RosterPresenceRef m -> PresenceHandler m
-rpresenceHandler (RosterPresenceRef {..}) full@(FullJID {..}) presUpd = do
+rpresencePHandler :: MonadSession m => RosterPresenceRef m -> PresenceHandler m
+rpresencePHandler (RosterPresenceRef {..}) full@(FullJID {..}) presUpd = do
   roster <- rosterEntries <$> rosterGet rpresenceRoster
   if bareJidAddress fullBare `M.member` roster
     then do
@@ -34,17 +34,17 @@ rpresenceHandler (RosterPresenceRef {..}) full@(FullJID {..}) presUpd = do
               let m' = M.delete fullResource m
               in if M.null m' then Nothing else Just m'
       modifyIORef rpresenceRef $ M.update updateEntry fullBare
-      Signal.emit rpresenceSignal (full, presUpd)
+      Handler.call rpresenceHandler (full, presUpd)
       return True
     else return False
 
-rpresenceSubscribe :: MonadSession m => RosterPresenceRef m -> ((FullJID, Maybe Presence) -> m ()) -> m ()
-rpresenceSubscribe (RosterPresenceRef {..}) = Signal.subscribe rpresenceSignal
+rpresenceSetHandler :: MonadSession m => RosterPresenceRef m -> ((FullJID, Maybe Presence) -> m ()) -> m ()
+rpresenceSetHandler (RosterPresenceRef {..}) = Handler.set rpresenceHandler
 
-rpresencePlugin :: MonadSession m => RosterRef m -> m (PresenceHandler m, RosterPresenceRef m)
+rpresencePlugin :: MonadSession m => RosterRef m ->  m (PresenceHandler m, RosterPresenceRef m)
 rpresencePlugin rpresenceRoster = do
   rpresenceRef <- newIORef M.empty
-  rpresenceSignal <- Signal.empty
+  rpresenceHandler <- Handler.new
   let pref = RosterPresenceRef {..}
-      phandler = rpresenceHandler pref
+      phandler = rpresencePHandler pref
   return (phandler, pref)

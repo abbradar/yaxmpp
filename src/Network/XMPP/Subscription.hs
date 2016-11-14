@@ -1,9 +1,10 @@
 module Network.XMPP.Subscription
   ( SubscriptionStatus(..)
+  , SubscriptionReqHandler
   , SubscriptionRef
   , subscriptionSession
-  , subSubscribe
   , requestSubscription
+  , subscriptionSetHandler
   , subscriptionPlugin
   ) where
 
@@ -11,8 +12,8 @@ import Control.Monad
 import Control.Concurrent.Lifted
 import Data.Default.Class
 
-import Control.Signal (Signal)
-import qualified Control.Signal as Signal
+import Control.Handler (Handler)
+import qualified Control.Handler as Handler
 import Network.XMPP.Address
 import Network.XMPP.Session
 import Network.XMPP.Stanza
@@ -23,22 +24,24 @@ data SubscriptionStatus = WeSubscribed
                         | TheyUnsubscribed
                         deriving (Show, Eq)
 
-data SubscriptionRef m = SubscriptionRef { subscriptionSignal :: Signal m (BareJID, SubscriptionStatus)
+type SubscriptionReqHandler m = BareJID -> m (Maybe Bool)
+
+data SubscriptionRef m = SubscriptionRef { subscriptionHandler :: Handler m (BareJID, SubscriptionStatus)
                                          , subscriptionSession :: StanzaSession m
-                                         , subscriptionHandler :: BareJID -> m (Maybe Bool)
+                                         , subscriptionReqHandler :: SubscriptionReqHandler m
                                          }
 
 subscriptionInHandler :: MonadSession m => SubscriptionRef m -> PluginInHandler m
 subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr) })
   | typ == PresenceSubscribed = do
-      Signal.emit subscriptionSignal (addr, WeSubscribed)
+      Handler.call subscriptionHandler (addr, WeUnsubscribed)
       return $ Just Nothing
   | typ == PresenceUnsubscribed = do
-      Signal.emit subscriptionSignal (addr, WeUnsubscribed)
+      Handler.call subscriptionHandler (addr, WeUnsubscribed)
       return $ Just Nothing
   | typ == PresenceSubscribe = do
       _ <- fork $ do
-        mr <- subscriptionHandler addr
+        mr <- subscriptionReqHandler addr
         case mr of
           Just r -> void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
                                                                    , ostType = OutPresence $ Just $ if r then PresenceSubscribed else PresenceUnsubscribed
@@ -47,12 +50,9 @@ subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (R
           Nothing -> return ()
       return $ Just Nothing
   | typ == PresenceUnsubscribe = do
-      Signal.emit subscriptionSignal (addr, TheyUnsubscribed)
+      Handler.call subscriptionHandler (addr, TheyUnsubscribed)
       return $ Just Nothing
 subscriptionInHandler _ _ = return Nothing
-
-subSubscribe :: MonadSession m => SubscriptionRef m -> ((BareJID, SubscriptionStatus) -> m ()) -> m ()
-subSubscribe (SubscriptionRef {..}) = Signal.subscribe subscriptionSignal
 
 requestSubscription :: MonadSession m => SubscriptionRef m -> BareJID -> m ()
 requestSubscription (SubscriptionRef {..}) addr =
@@ -61,9 +61,12 @@ requestSubscription (SubscriptionRef {..}) addr =
                                                   , ostChildren = []
                                                   }
 
-subscriptionPlugin :: MonadSession m => StanzaSession m -> (BareJID -> m (Maybe Bool)) -> m (XMPPPlugin m, SubscriptionRef m)
-subscriptionPlugin subscriptionSession subscriptionHandler = do
-  subscriptionSignal <- Signal.empty
+subscriptionSetHandler :: MonadSession m => SubscriptionRef m -> ((BareJID, SubscriptionStatus) -> m ()) -> m ()
+subscriptionSetHandler (SubscriptionRef {..}) = Handler.set subscriptionHandler
+
+subscriptionPlugin :: MonadSession m => StanzaSession m -> SubscriptionReqHandler m -> m (XMPPPlugin m, SubscriptionRef m)
+subscriptionPlugin subscriptionSession subscriptionReqHandler = do
+  subscriptionHandler <- Handler.new
   let subscriptionRef = SubscriptionRef {..}
       plugin = def { pluginInHandler = subscriptionInHandler subscriptionRef }
   return (plugin, subscriptionRef)

@@ -17,9 +17,9 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Network.SASL
+                     , Control.Handler
                      , Data.ID
                      , Data.Injective
-                     , Control.Signal
                      , Network.XMPP.Utils
                      , Network.XMPP.XML
                      , Network.XMPP.Connection

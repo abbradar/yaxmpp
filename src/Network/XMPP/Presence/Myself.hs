@@ -1,8 +1,8 @@
 module Network.XMPP.Presence.Myself
   ( MyPresenceRef
   , myPresenceGet
+  , myPresenceSetHandler
   , myPresenceSend
-  , myPresenceSubscribe
   , myPresencePlugin
   ) where
 
@@ -14,9 +14,9 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.IORef.Lifted
 
+import Control.Handler (Handler)
+import qualified Control.Handler as Handler
 import Data.Injective
-import Control.Signal (Signal)
-import qualified Control.Signal as Signal
 import Network.XMPP.XML
 import Network.XMPP.Session
 import Network.XMPP.Stanza
@@ -24,22 +24,25 @@ import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Presence
 
-data MyPresenceRef m = MyPresenceRef { myPresenceSignal :: Signal m (XMPPResource, Maybe Presence)
+data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (XMPPResource, Maybe Presence)
                                      , myPresence :: IORef (Map XMPPResource Presence)
                                      , myPresenceSession :: StanzaSession m
                                      , myBareAddress :: BareJID
                                      }
 
-myPresenceHandler :: MonadSession m => MyPresenceRef m -> PresenceHandler m
-myPresenceHandler (MyPresenceRef {..}) (FullJID {..}) pres
+myPresencePHandler :: MonadSession m => MyPresenceRef m -> PresenceHandler m
+myPresencePHandler (MyPresenceRef {..}) (FullJID {..}) pres
   | myBareAddress == fullBare = do
       modifyIORef myPresence $ M.update (const pres) fullResource
-      Signal.emit myPresenceSignal (fullResource, pres)
+      Handler.call myPresenceHandler (fullResource, pres)
       return True
-myPresenceHandler _ _ _ = return False
+myPresencePHandler _ _ _ = return False
 
 myPresenceGet :: MonadSession m => MyPresenceRef m -> m (Map XMPPResource Presence)
 myPresenceGet = readIORef . myPresence
+
+myPresenceSetHandler :: MonadSession m => MyPresenceRef m -> ((XMPPResource, Maybe Presence) -> m ()) -> m ()
+myPresenceSetHandler (MyPresenceRef {..}) = Handler.set myPresenceHandler
 
 myPresenceSend :: MonadSession m => MyPresenceRef m -> Presence -> m ()
 myPresenceSend (MyPresenceRef {..}) (Presence {..}) =
@@ -52,14 +55,11 @@ myPresenceSend (MyPresenceRef {..}) (Presence {..}) =
         mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
         statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
 
-myPresenceSubscribe :: MonadSession m => MyPresenceRef m -> ((XMPPResource, Maybe Presence) -> m ()) -> m ()
-myPresenceSubscribe (MyPresenceRef {..}) = Signal.subscribe myPresenceSignal
-
 myPresencePlugin :: MonadSession m => StanzaSession m -> m (PresenceHandler m, MyPresenceRef m)
 myPresencePlugin myPresenceSession = do
   myPresence <- newIORef M.empty
-  myPresenceSignal <- Signal.empty
+  myPresenceHandler <- Handler.new
   let myBareAddress = fullBare $ sessionAddress $ ssSession myPresenceSession
       pref = MyPresenceRef {..}
-      phandler = myPresenceHandler pref
+      phandler = myPresencePHandler pref
   return (phandler, pref)

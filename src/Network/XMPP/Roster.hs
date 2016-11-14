@@ -1,15 +1,16 @@
 module Network.XMPP.Roster
   ( SubscriptionType(..)
   , RosterEntry(..)
+  , RosterEntries
   , Roster
   , rosterVersion
   , rosterEntries
   , RosterRef
-  , rosterSubscribe
   , rosterGet
   , rosterTryGet
   , insertRoster
   , deleteRoster
+  , rosterSetHandler
   , rosterPlugin
   ) where
 
@@ -31,8 +32,8 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Text.InterpolatedString.Perl6 (qq)
 
-import Control.Signal (Signal)
-import qualified Control.Signal as Signal
+import Control.Handler (Handler)
+import qualified Control.Handler as Handler
 import Data.Injective
 import Network.XMPP.XML
 import Network.XMPP.Utils
@@ -84,8 +85,10 @@ instance ToJSON RosterEntry where
   toJSON = genericToJSON rosterEntryOptions
   toEncoding = genericToEncoding rosterEntryOptions
 
+type RosterEntries = Map XMPPAddress RosterEntry
+
 data Roster = Roster { rosterVersion :: Maybe Text
-                     , rosterEntries :: Map XMPPAddress RosterEntry
+                     , rosterEntries :: RosterEntries
                      }
             deriving (Show, Eq, Generic)
 
@@ -106,8 +109,12 @@ okHandler :: MonadSession m => ResponseIQHandler m
 okHandler (Left (err, _)) = fail [qq|okHandler: error while updating a roster: $err|]
 okHandler (Right _) = return ()
 
+data RosterEvent = RosterInsert XMPPAddress RosterEntry
+                 | RosterDelete XMPPAddress
+                 deriving (Show, Eq)
+
 data RosterRef m = RosterRef { rref :: MVar Roster
-                             , rrefSignal :: Signal m Roster
+                             , rrefHandler :: Handler m (RosterEntries, RosterEvent)
                              , rrefSession :: StanzaSession m
                              }
 
@@ -159,13 +166,12 @@ handleFirstRequest (RosterRef {..}) mold resp = do
         _ -> error "handleFirstRequest: invalid roster response"
 
   putMVar rref roster'
-  Signal.emit rrefSignal roster'
 
-applyUpdate :: Map XMPPAddress RosterEntry -> Element -> Either StanzaError (Map XMPPAddress RosterEntry)
-applyUpdate entries e = do
-  unless (elementName e == rosterName "item") $ Left $ badRequest [qq|applyUpdate: invalid roster item $e|]
+getRosterEvent :: Element -> Either StanzaError RosterEvent
+getRosterEvent e = do
+  unless (elementName e == rosterName "item") $ Left $ badRequest [qq|getRosterEvent: invalid roster item $e|]
   jid <- case getAttr "jid" e >>= parseValue xmppAddress of
-    Nothing -> Left $ jidMalformed "applyUpdate: invalid jid in roster push"
+    Nothing -> Left $ jidMalformed "getRosterEvent: invalid jid in roster push"
     Just r -> return r
   let subscr = fromMaybe "none" (getAttr "subscription" e)
   case injFrom subscr of
@@ -174,31 +180,33 @@ applyUpdate entries e = do
                                , rentryGroups = S.fromList $ fromElement e $/ XC.element (rosterName "group") &/ content
                                , ..
                                }
-      return $ M.insert jid entry' entries
-    Nothing | subscr == "remove" -> return $ M.delete jid entries
-    _ -> Left $ badRequest "applyUpdate: invalid subscription attribute"
+      return $ RosterInsert jid entry'
+    Nothing | subscr == "remove" -> return $ RosterDelete jid
+    _ -> Left $ badRequest "getRosterEvent: invalid subscription attribute"
+
+applyRosterEvent :: RosterEntries -> RosterEvent -> RosterEntries
+applyRosterEvent roster (RosterInsert jid entry) = M.insert jid entry roster
+applyRosterEvent roster (RosterDelete jid) = M.delete jid roster
 
 rosterIqHandler :: MonadSession m => RosterRef m -> PluginRequestIQHandler m
 rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] })
   | elementName req == rosterName "query" = Just <$> do
       mroster <- modifyMVar rref $ \roster -> do
-        let newEntries = foldM applyUpdate (rosterEntries roster) $ fromElement req $/ curAnyElement
+        let newEntries = mapM getRosterEvent $ fromElement req $/ curAnyElement
         case newEntries of
           Left err -> return (roster, Left err)
-          Right rosterEntries -> do
+          Right events -> do
+            let rosters = tail $ scanl applyRosterEvent (rosterEntries roster) events
             let roster' = Roster { rosterVersion = getAttr "ver" req
-                                 , ..
+                                 , rosterEntries = last rosters
                                  }
-            return (roster', Right roster')
+            return (roster', Right $ zip rosters events)
       case mroster of
         Left err -> return $ Left err
-        Right roster' -> do
-          Signal.emit rrefSignal roster'
+        Right revents -> do
+          mapM_ (Handler.call rrefHandler) revents
           return $ Right []
 rosterIqHandler _ _ = return Nothing
-
-rosterSubscribe :: MonadSession m => RosterRef m -> (Roster -> m ()) -> m ()
-rosterSubscribe (RosterRef {..}) = Signal.subscribe rrefSignal
 
 rosterGet :: MonadSession m => RosterRef m -> m Roster
 rosterGet = readMVar . rref
@@ -206,10 +214,13 @@ rosterGet = readMVar . rref
 rosterTryGet :: MonadSession m => RosterRef m -> m (Maybe Roster)
 rosterTryGet = tryReadMVar . rref
 
-rosterPlugin :: MonadSession m => Maybe Roster -> StanzaSession m -> m (XMPPPlugin m, RosterRef m)
-rosterPlugin old rrefSession = do
+rosterSetHandler :: MonadSession m => RosterRef m -> ((RosterEntries, RosterEvent) -> m ()) -> m ()
+rosterSetHandler (RosterRef {..}) = Handler.set rrefHandler
+
+rosterPlugin :: MonadSession m => StanzaSession m -> Maybe Roster -> m (XMPPPlugin m, RosterRef m)
+rosterPlugin rrefSession old = do
   rref <- newEmptyMVar
-  rrefSignal <- Signal.empty
+  rrefHandler <- Handler.new
   let rosterRef = RosterRef {..}
 
   stream <- sessionGetStream $ ssSession rrefSession

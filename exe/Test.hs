@@ -81,7 +81,7 @@ main = runStderrLoggingT $ do
     bracket (fork $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
       oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
-      (rosterP, rosterRef) <- rosterPlugin oldRoster sess
+      (rosterP, rosterRef) <- rosterPlugin sess oldRoster
       (subscrP, subscrRef) <- subscriptionPlugin sess $ \_ -> return $ Just True
       (rpresH, rpresRef) <- rpresencePlugin rosterRef
       (myPresH, myPresRef) <- myPresencePlugin sess
@@ -96,23 +96,24 @@ main = runStderrLoggingT $ do
               _ -> return ()
 
       flip finally saveRoster $ do
-        rosterSubscribe rosterRef $ \roster -> do
+        rosterSetHandler rosterRef $ \roster -> do
           $(logInfo) [qq|Got roster update: $roster|]
 
-        subSubscribe subscrRef $ \(addr, stat) -> do
+        subscriptionSetHandler subscrRef $ \(addr, stat) -> do
           $(logInfo) [qq|Got subscription update for $addr: $stat|]
 
-        myPresenceSubscribe myPresRef $ \(res, pres) -> do
+        myPresenceSetHandler myPresRef $ \(res, pres) -> do
           $(logInfo) [qq|Got presence update for myself, resource $res: $pres|]
 
-        rpresenceSubscribe rpresRef $ \(addr, pres) -> do
+        rpresenceSetHandler rpresRef $ \(addr, pres) -> do
           $(logInfo) [qq|Got presence update for roster item {fullJidAddress addr}: $pres|]
 
-        imSubscribe imRef $ \(addr, msg) -> do
+        imSetHandler imRef $ \(addr, msg) -> do
           $(logInfo) [qq|Got message from $addr: $msg|]
           imSend imRef addr (msg { imExtended = [] })
 
         _ <- fork $ do
+          _ <- rosterGet rosterRef
           myPresenceSend myPresRef def
           insertRoster rosterRef (bareJidAddress $ pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings

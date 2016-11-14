@@ -2,7 +2,7 @@ module Network.XMPP.Message
   ( IMThread(..)
   , IMMessage(..)
   , plainIMMessage
-  , imSubscribe
+  , imSetHandler
   , imSend
   , imPlugin
   ) where
@@ -15,8 +15,8 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import Control.Signal (Signal)
-import qualified Control.Signal as Signal
+import Control.Handler (Handler)
+import qualified Control.Handler as Handler
 import Network.XMPP.XML
 import Network.XMPP.Session
 import Network.XMPP.Stanza
@@ -45,7 +45,7 @@ plainIMMessage txt = IMMessage { imType = MessageChat
                                , imExtended = []
                                }
 
-data IMRef m = IMRef { imSignal :: Signal m (XMPPAddress, IMMessage)
+data IMRef m = IMRef { imHandler :: Handler m (XMPPAddress, IMMessage)
                      , imSession :: StanzaSession m
                      }
 
@@ -64,7 +64,7 @@ imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (R
       case res of
         Left e -> return $ Just e
         Right msg -> do
-          Signal.emit imSignal (from, msg)
+          Handler.call imHandler (from, msg)
           return Nothing
         
   where cur = fromChildren istChildren
@@ -76,8 +76,8 @@ imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (R
 
 imInHandler _ _ = return Nothing
 
-imSubscribe :: MonadSession m => IMRef m -> ((XMPPAddress, IMMessage) -> m ()) -> m ()
-imSubscribe (IMRef {..}) = Signal.subscribe imSignal
+imSetHandler :: MonadSession m => IMRef m -> ((XMPPAddress, IMMessage) -> m ()) -> m ()
+imSetHandler (IMRef {..}) = Handler.set imHandler
 
 imSend :: MonadSession m => IMRef m -> XMPPAddress -> IMMessage -> m ()
 imSend (IMRef {..}) to (IMMessage {..}) =
@@ -92,7 +92,7 @@ imSend (IMRef {..}) to (IMMessage {..}) =
 
 imPlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, IMRef m)
 imPlugin imSession = do
-  imSignal <- Signal.empty
+  imHandler <- Handler.new
   let pref = IMRef {..}
       plugin = def { pluginInHandler = imInHandler pref }
   return (plugin, pref)
