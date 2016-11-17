@@ -22,7 +22,7 @@
   - [X] Outgoing requests
   - [X] Incoming requests
 - [X] [[http://xmpp.org/extensions/xep-0082.html][XEP-0082 (XMPP Date and Time Profiles)]]
-- [-] [[http://xmpp.org/extensions/xep-0045.html][XEP-0045 (Multi-User Chat)]] [1/22]
+- [-] [[http://xmpp.org/extensions/xep-0045.html][XEP-0045 (Multi-User Chat)]] [2/22]
   - [X] Nick requesting
   - [X] Join/leave
   - [ ] Nickname change

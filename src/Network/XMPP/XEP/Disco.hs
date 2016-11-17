@@ -190,7 +190,7 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
   where makeItemAttr (addr, mNode) = [("jid", addressToText addr)] ++ maybeToList (fmap ("node", ) mNode)
 
 discoIqHandler :: MonadSession m => DiscoPlugin -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
-discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] }) = do
+discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] }) = do
   let infoName = discoInfoName "query"
       itemsName = discoItemsName "query"
   res <- if
@@ -198,7 +198,7 @@ discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQSet, iriChildren = 
         Nothing -> return $ Just $ emitDiscoEntity discoPEntity
         Just node | Just (entity, _) <- M.lookup node discoPChildren -> return $ Just $ emitDiscoEntity entity
         _ -> return Nothing
-    | elementName req == discoItemsName "query" -> Just <$> fmap (itemsName, ) <$> case getAttr "node" req of
+    | elementName req == itemsName -> Just <$> fmap (itemsName, ) <$> case getAttr "node" req of
         Nothing -> return $ Just $ emitDiscoItems discoPItems
         Just node | Just (_, items) <- M.lookup node discoPChildren -> return $ Just $ emitDiscoItems items
         _ -> return Nothing

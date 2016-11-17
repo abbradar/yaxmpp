@@ -131,14 +131,14 @@ presencePlugin presenceHandlers = do
   return plugin
 
 data PresenceEvent k = Added k Presence
-                  | Updated k Presence
-                  | Removed k [Element]
-                  deriving (Show, Eq)
+                     | Updated k Presence
+                     | Removed k [Element]
+                     deriving (Show, Eq)
 
 presenceUpdate :: Ord k => k -> Either [Element] Presence -> Map k Presence -> Maybe (Map k Presence, PresenceEvent k)
 presenceUpdate k (Right v) m
-  | M.member k m = Just (M.insert k v m, Added k v)
-  | otherwise = Just (M.insert k v m, Updated k v)
+  | otherwise = Just (M.insert k v m, Added k v)
+  | M.member k m = Just (M.insert k v m, Updated k v)
 presenceUpdate k (Left e) m
   | M.member k m = Just (M.delete k m, Removed k e)
   | otherwise = Nothing

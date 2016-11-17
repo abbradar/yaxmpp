@@ -40,6 +40,7 @@ data Settings = Settings { server :: Text
                          , resource :: Text
                          , rosterCache :: FilePath
                          , pal :: BareJID
+                         , conference :: FullJID
                          }
                 deriving (Show, Eq, Generic)
 
@@ -114,12 +115,17 @@ main = runStderrLoggingT $ do
           $(logInfo) [qq|Got message from $addr: $msg|]
           imSend imRef addr (msg { imExtended = [] })
 
+        mucSetHandler mucRef $ \event -> do
+          $(logInfo) [qq|Got MUC event: $event|]
+
         _ <- fork $ do
           rst <- rosterGet rosterRef
           $(logInfo) [qq|Got initial roster: $rst|]
           myPresenceSend myPresRef def
           insertRoster rosterRef (bareJidAddress $ pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings
+          mucJoin mucRef (conference settings) $ \_ event -> do
+            $(logInfo) [qq|Got event from MUC room that I joined: $event|]
 
         -- _ <- fork $ do
         --   topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing

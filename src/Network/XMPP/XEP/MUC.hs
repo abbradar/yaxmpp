@@ -30,14 +30,14 @@ import Network.XMPP.Plugin
 import Network.XMPP.Presence
 import Network.XMPP.XEP.Disco
 
-data MUCEvent = MUCJoined FullJID
-              | MUCReady FullJID MUC
+data MUCEvent = MUCJoined FullJID MUC
               | MUCRejected FullJID StanzaError
               | MUCLeft FullJID [Element]
               deriving (Show, Eq)
 
 data RoomEvent = RoomPresence (PresenceEvent XMPPResource)
                | RoomSubject
+               deriving (Show, Eq)
 
 type MUCHandler m = MUC -> RoomEvent -> m ()
 
@@ -114,24 +114,14 @@ mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr),
       let bare = fullBare addr
           resource = fullResource addr
           subj = mconcat $ fromElement subjE $/ content
-      pHandled <- modifyMVar mucPending $ \pending ->
-        case M.lookup bare pending of
-          Just (room, handler) | mucNick room == resource -> return (M.delete bare pending, Just (room { mucSubject = subj }, handler))
-          _ -> return (pending, Nothing)
-      case pHandled of
-        Just (room, handler) -> do
-          modifyIORef mucRooms $ M.insert bare (room, handler)
-          Handler.call mucEventHandler $ MUCReady addr room
-          return $ Just Nothing
-        Nothing -> do
-          rooms <- readIORef mucRooms
-          case M.lookup bare rooms of
-            Just (room, handler) | mucNick room == resource -> do
-                                     let room' = room { mucSubject = subj }
-                                     writeIORef mucRooms $ M.insert bare (room', handler) rooms
-                                     handler room' RoomSubject
-                                     return $ Just Nothing
-            _ -> return Nothing
+      rooms <- readIORef mucRooms
+      case M.lookup bare rooms of
+        Just (room, handler) | mucNick room == resource -> do
+                                 let room' = room { mucSubject = subj }
+                                 writeIORef mucRooms $ M.insert bare (room', handler) rooms
+                                 handler room' RoomSubject
+                                 return $ Just Nothing
+        _ -> return Nothing
     _ -> return Nothing
 mucInHandler _ _ = return Nothing
 
@@ -139,27 +129,30 @@ mucPresenceHandler :: MonadSession m => MUCRef m -> PresenceHandler m
 mucPresenceHandler (MUCRef {..}) addr mpres = do
   let bare = fullBare addr
       resource = fullResource addr
-  pHandled <- modifyMVar mucPending $ \pending ->
+  mProcessed <- modifyMVar mucPending $ \pending ->
     case M.lookup bare pending of
       Just (room@(MUC {..}), handler) -> case mpres of
         Right pres ->
           let members = M.insert resource pres mucMembers
               room' = room { mucMembers = members }
-              msg = if M.null mucMembers
-                    then Just $ MUCJoined addr
-                    else Nothing
-          in return (M.insert bare (room', handler) pending, Just msg)
-        Left err | resource == mucNick -> return (M.delete bare pending, Just $ Just $ MUCLeft addr err)
+          in if resource == mucNick
+             then return (M.delete bare pending, Just (Just (room', handler), Just $ MUCJoined addr room'))
+             else return (M.insert bare (room', handler) pending, Nothing)
+        Left err | resource == mucNick -> return (M.delete bare pending, Just (Nothing, Just $ MUCLeft addr err))
         Left _ ->
           let members = M.delete resource mucMembers
               room' = room { mucMembers = members }
-          in return (M.insert bare (room', handler) pending, Just Nothing)
+          in return (M.insert bare (room', handler) pending, Just (Nothing, Nothing))
       Nothing -> return (pending, Nothing)
-  case pHandled of
-    Just (Just msg) -> do
-      Handler.call mucEventHandler msg
+  case mProcessed of
+    Just (mRoomItem, mMsg) -> do
+      case mRoomItem of
+        Just roomItem -> modifyIORef mucRooms $ M.insert bare roomItem
+        Nothing -> return ()
+      case mMsg of
+        Just msg -> Handler.call mucEventHandler msg
+        Nothing -> return ()
       return True
-    Just Nothing -> return True
     Nothing -> do
       rooms <- readIORef mucRooms
       case M.lookup bare rooms of
