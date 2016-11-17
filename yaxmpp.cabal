@@ -37,6 +37,7 @@ library
                      , Network.XMPP.Message
                      , Network.XMPP.XEP.Disco
                      , Network.XMPP.XEP.DateTime
+                     , Network.XMPP.XEP.MUC
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8

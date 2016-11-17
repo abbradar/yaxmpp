@@ -31,6 +31,7 @@ import Network.XMPP.Presence.Myself
 import Network.XMPP.Presence.Roster
 import Network.XMPP.Message
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.MUC
 import Network.SASL
 
 data Settings = Settings { server :: Text
@@ -85,9 +86,10 @@ main = runStderrLoggingT $ do
       (subscrP, subscrRef) <- subscriptionPlugin sess $ \_ -> return $ Just True
       (rpresH, rpresRef) <- rpresencePlugin rosterRef
       (myPresH, myPresRef) <- myPresencePlugin sess
-      presP <- presencePlugin [rpresH, myPresH]
       (imP, imRef) <- imPlugin sess
-      discoP <- discoPlugin []
+      (mucP, mucPresH, mucDiscoH, mucRef) <- mucPlugin sess
+      presP <- presencePlugin [rpresH, myPresH, mucPresH]
+      discoP <- discoPlugin [mucDiscoH]
 
       let saveRoster = do
             roster <- rosterTryGet rosterRef
@@ -96,24 +98,25 @@ main = runStderrLoggingT $ do
               _ -> return ()
 
       flip finally saveRoster $ do
-        rosterSetHandler rosterRef $ \roster -> do
-          $(logInfo) [qq|Got roster update: $roster|]
+        rosterSetHandler rosterRef $ \(_, event) -> do
+          $(logInfo) [qq|Got roster update: $event|]
 
         subscriptionSetHandler subscrRef $ \(addr, stat) -> do
           $(logInfo) [qq|Got subscription update for $addr: $stat|]
 
-        myPresenceSetHandler myPresRef $ \(res, pres) -> do
-          $(logInfo) [qq|Got presence update for myself, resource $res: $pres|]
+        myPresenceSetHandler myPresRef $ \event -> do
+          $(logInfo) [qq|Got presence update for myself: $event|]
 
-        rpresenceSetHandler rpresRef $ \(addr, pres) -> do
-          $(logInfo) [qq|Got presence update for roster item {fullJidAddress addr}: $pres|]
+        rpresenceSetHandler rpresRef $ \event -> do
+          $(logInfo) [qq|Got presence update for roster: $event|]
 
         imSetHandler imRef $ \(addr, msg) -> do
           $(logInfo) [qq|Got message from $addr: $msg|]
           imSend imRef addr (msg { imExtended = [] })
 
         _ <- fork $ do
-          _ <- rosterGet rosterRef
+          rst <- rosterGet rosterRef
+          $(logInfo) [qq|Got initial roster: $rst|]
           myPresenceSend myPresRef def
           insertRoster rosterRef (bareJidAddress $ pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings
@@ -124,5 +127,5 @@ main = runStderrLoggingT $ do
         --     Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
         --     Right r -> $(logDebug) [qq|Discovery result: $r|]
 
-        let plugins = [rosterP, subscrP, presP, imP, discoP]
+        let plugins = [rosterP, subscrP, presP, imP, discoP, mucP]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

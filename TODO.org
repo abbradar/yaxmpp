@@ -24,7 +24,8 @@
 - [X] [[http://xmpp.org/extensions/xep-0082.html][XEP-0082 (XMPP Date and Time Profiles)]]
 - [-] [[http://xmpp.org/extensions/xep-0045.html][XEP-0045 (Multi-User Chat)]] [1/22]
   - [X] Nick requesting
-  - [ ] Join/leave
+  - [X] Join/leave
+  - [ ] Nickname change
   - [ ] Availability status (presence)
   - [ ] Extended presence (affiliation, kick reasons etc.)
   - [ ] History sending management
@@ -33,7 +34,6 @@
   - [ ] Conversion of chat to a conference
   - [ ] Invitations
   - [ ] Room subject modification
-  - [ ] Nickname change
   - [ ] Voice requesting
   - [ ] Voice list management
   - [ ] Kicks

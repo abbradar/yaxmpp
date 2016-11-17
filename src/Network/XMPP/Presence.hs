@@ -3,6 +3,8 @@ module Network.XMPP.Presence
   , PresenceHandler
   , Presence(..)
   , presencePlugin
+  , PresenceEvent(..)
+  , presenceUpdate
   ) where
 
 import Data.Int
@@ -16,6 +18,8 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Data.Default.Class
 import Text.InterpolatedString.Perl6 (qq)
+import Data.Map (Map)
+import qualified Data.Map as M
 
 import Data.Injective
 import Network.XMPP.XML
@@ -52,7 +56,7 @@ instance Default Presence where
                  , presenceExtended = []
                  }
 
-type PresenceHandler m = FullJID -> Maybe Presence -> m Bool
+type PresenceHandler m = FullJID -> Either [Element] Presence -> m Bool
 
 data PresenceRef m = PresenceRef { presenceHandlers :: [PresenceHandler m]
                                  }
@@ -73,7 +77,7 @@ readIntMaybe str = do
   when (i > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
   return $ fromIntegral i
 
-emitPresence :: MonadSession m => PresenceRef m -> FullJID -> Maybe Presence -> m ()
+emitPresence :: MonadSession m => PresenceRef m -> FullJID -> Either [Element] Presence -> m ()
 emitPresence pref addr pres = tryHandlers $ presenceHandlers pref
   where tryHandlers [] = $(logWarn) [qq|Unhandled presence update for $addr: $pres|]
         tryHandlers (handler:handlers) = do
@@ -97,9 +101,12 @@ parsePresence elems = do
       Just r -> return r
     [] -> return 0
     _ -> Left $ badRequest "parsePresence: multiple priority values"
-  let presenceExtended = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
+  let presenceExtended = parseExtended elems
 
   return Presence {..}
+
+parseExtended :: [Element] -> [Element]
+parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
 presenceInHandler :: MonadSession m => PresenceRef m -> PluginInHandler m
 presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istType = InPresence (Right (presenceOp -> Just op)), istChildren }) = Just <$> do
@@ -109,11 +116,11 @@ presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istTy
       case op of
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
-            emitPresence pref faddr $ Just p
+            emitPresence pref faddr $ Right p
             return Nothing
           Left e -> return $ Just e
         PresenceUnset -> do
-            emitPresence pref faddr Nothing
+            emitPresence pref faddr $ Left $ parseExtended istChildren
             return Nothing
 presenceInHandler _ _ = return Nothing
 
@@ -122,3 +129,16 @@ presencePlugin presenceHandlers = do
   let pref = PresenceRef {..}
       plugin = def { pluginInHandler = presenceInHandler pref }
   return plugin
+
+data PresenceEvent k = Added k Presence
+                  | Updated k Presence
+                  | Removed k [Element]
+                  deriving (Show, Eq)
+
+presenceUpdate :: Ord k => k -> Either [Element] Presence -> Map k Presence -> Maybe (Map k Presence, PresenceEvent k)
+presenceUpdate k (Right v) m
+  | M.member k m = Just (M.insert k v m, Added k v)
+  | otherwise = Just (M.insert k v m, Updated k v)
+presenceUpdate k (Left e) m
+  | M.member k m = Just (M.delete k m, Removed k e)
+  | otherwise = Nothing

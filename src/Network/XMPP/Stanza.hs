@@ -38,6 +38,7 @@ import Data.Maybe
 import Control.Monad
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.IORef.Lifted
 import Control.Concurrent.MVar.Lifted
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
@@ -261,13 +262,13 @@ stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m ()
 
 data StanzaSession m = StanzaSession { ssSession :: Session m
-                                     , ssReqIds :: MVar IDGen
+                                     , ssReqIds :: IORef IDGen
                                      , ssRequests :: MVar (Map (Maybe XMPPAddress, Integer) (ResponseIQHandler m))
                                      }
 
 stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m Integer
 stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
-  sid <- modifyMVar ssReqIds (return . ID.get)
+  sid <- atomicModifyIORef ssReqIds ID.get
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)
         OutPresence t -> ("presence", injTo <$> t)
@@ -280,7 +281,7 @@ stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
 
 stanzaRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
 stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
-  sid <- modifyMVar ssReqIds (return . ID.get)
+  sid <- atomicModifyIORef ssReqIds ID.get
   let attrs = [ ("id", T.pack $ show sid)
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . addressToText) oriTo)
@@ -419,6 +420,6 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
 
 stanzaSessionCreate :: MonadSession m => Session m -> m (StanzaSession m)
 stanzaSessionCreate ssSession = do
-  ssReqIds <- newMVar ID.empty
+  ssReqIds <- newIORef ID.empty
   ssRequests <- newMVar M.empty
   return StanzaSession {..}

@@ -24,7 +24,7 @@ import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Presence
 
-data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (XMPPResource, Maybe Presence)
+data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (PresenceEvent XMPPResource)
                                      , myPresence :: IORef (Map XMPPResource Presence)
                                      , myPresenceSession :: StanzaSession m
                                      , myBareAddress :: BareJID
@@ -33,15 +33,19 @@ data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (XMPPResou
 myPresencePHandler :: MonadSession m => MyPresenceRef m -> PresenceHandler m
 myPresencePHandler (MyPresenceRef {..}) (FullJID {..}) pres
   | myBareAddress == fullBare = do
-      modifyIORef myPresence $ M.update (const pres) fullResource
-      Handler.call myPresenceHandler (fullResource, pres)
-      return True
+      presences <- readIORef myPresence
+      case presenceUpdate fullResource pres presences of
+        Nothing -> return False
+        Just (presences', event) -> do
+          writeIORef myPresence presences'
+          Handler.call myPresenceHandler event
+          return True
 myPresencePHandler _ _ _ = return False
 
 myPresenceGet :: MonadSession m => MyPresenceRef m -> m (Map XMPPResource Presence)
 myPresenceGet = readIORef . myPresence
 
-myPresenceSetHandler :: MonadSession m => MyPresenceRef m -> ((XMPPResource, Maybe Presence) -> m ()) -> m ()
+myPresenceSetHandler :: MonadSession m => MyPresenceRef m -> (PresenceEvent XMPPResource -> m ()) -> m ()
 myPresenceSetHandler (MyPresenceRef {..}) = Handler.set myPresenceHandler
 
 myPresenceSend :: MonadSession m => MyPresenceRef m -> Presence -> m ()

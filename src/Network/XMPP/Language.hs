@@ -59,13 +59,13 @@ xmlLangAttr :: XMLLang -> [(Name, Text)]
 xmlLangAttr Nothing = []
 xmlLangAttr (Just lang) = [(xmlName "lang", lang)]
 
-localizedGet :: LocalizedText -> XMLLang -> Text
-localizedGet lt Nothing = case M.lookup Nothing $ localTexts lt of
+localizedGet :: XMLLang -> LocalizedText -> Text
+localizedGet Nothing lt = case M.lookup Nothing $ localTexts lt of
   Just t -> t
   Nothing -> snd $ head $ M.toAscList $ localTexts lt
-localizedGet lt lang@(Just _) = case M.lookup lang $ localTexts lt of
+localizedGet lang@(Just _) lt = case M.lookup lang $ localTexts lt of
   Just t -> t
-  Nothing -> localizedGet lt Nothing
+  Nothing -> localizedGet Nothing lt
 
 localizedElements :: Name -> LocalizedText -> [Element]
 localizedElements name t =  map toElement $ M.toList $ localTexts t
