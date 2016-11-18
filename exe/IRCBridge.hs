@@ -129,7 +129,7 @@ main = runStderrLoggingT $ do
                     let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
                         otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
                     nick <- getNick
-                    unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ localizedGet Nothing imBody]
+                    unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
                 | otherwise -> $(logWarn) [qq|Got unknown message from $addr: $msg|]
 
               lift $ mucSetHandler mucRef $ \case
@@ -177,8 +177,8 @@ main = runStderrLoggingT $ do
                       ircServReply rpl_WELCOME [nick, "Welcome to the Internet Relay Network " <> nick]
                   | cmd == "PRIVMSG", [channel, msg'] <- params -> do
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
-                          msg = fromMaybe msg' $ fmap ("/me" <>) $ B.stripPrefix "\SOHACTION" msg'
-                          msgText = T.decodeUtf8 $ B.map (\x -> if isControl x then ' ' else x) msg
+                          msg = fromMaybe msg' $ fmap (\x -> "/me" <> B.init x) $ B.stripPrefix "\SOHACTION" msg'
+                          msgText = T.decodeUtf8 msg
                           imMsg = IMMessage { imType = MessageGroupchat
                                             , imSubject = Nothing
                                             , imBody = localizedFromText msgText
@@ -189,8 +189,7 @@ main = runStderrLoggingT $ do
                   | otherwise -> $(logWarn) [qq|Unknown IRC command: $req|]
 
         runGeneralTCPServer (serverSettings (ircPort settings) "*") $ \app -> do
-          let clearReply rep' = do
-                let rep = B.map (\x -> if isControl x then ' ' else x) rep'
+          let clearReply rep = do
                 $(logDebug) [qq|Sending IRC message: $rep|]
                 return (rep <> "\r\n")
               
