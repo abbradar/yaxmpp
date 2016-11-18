@@ -300,7 +300,7 @@ renderStanza from to = do
   mapM_ (yield . Chunk) $ startEvents from to
   yield Flush
   awaitForever $ \e -> do
-    -- $(logDebug) [qq|Sending message: {showElement e}|]
+    $(logDebug) [qq|Sending message: {showElement e}|]
     mapM_ (yield . Chunk) $ XMLU.elementToEvents $ toXMLElement e
     yield Flush
   mapM_ (yield . Chunk) stopEvents
@@ -335,7 +335,7 @@ parseStanza streamcfgR = handle (throwM . InternalStreamException . xmlError) $ 
 
   where tryFromElement e' = case fromXMLElement e' of
           Right e -> do
-            -- $(logDebug) [qq|Received message: {showElement e}|]
+            $(logDebug) [qq|Received message: {showElement e}|]
             return e
           Left unres -> throwM $ InternalStreamException $ unresolvedEntity unres
 

@@ -112,7 +112,7 @@ main = runStderrLoggingT $ do
       let ircReply = liftIO . atomically . writeTQueue backQueue
           conferenceHost = T.encodeUtf8 $ domainText $ conferenceServer settings
           ircServReply cmd args = ircReply $ IRC.Message (Just $ IRC.Server conferenceHost) cmd args
-          ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick Nothing (Just conferenceHost)) cmd args
+          ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick (Just nick) (Just conferenceHost)) cmd args
 
       _ <- fork $ do
         rst <- rosterGet rosterRef
@@ -151,7 +151,9 @@ main = runStderrLoggingT $ do
                 if
                   | cmd == "PING" -> ircServReply "PONG" [conferenceHost]
                   | cmd == "NICK", [newNick] <- params -> do
-                      putMVar nickVar $ fromJust $ resourceFromText $ T.decodeUtf8 newNick
+                      -- FIXME: invalid
+                      testNick <- tryReadMVar nickVar
+                      when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeUtf8 newNick
                   | cmd == "JOIN", [channel] <- params -> do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeUtf8 channel
@@ -168,14 +170,17 @@ main = runStderrLoggingT $ do
                             nick <- getNick
                             ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 mucSubject]
                           _ -> return ()
-                  | cmd == "USER" -> do
+                  | cmd == "USER", (mnick:_) <- params -> do
+                      testNick <- tryReadMVar nickVar
+                      when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeUtf8 mnick
                       nick <- getNick
                       ircServReply rpl_WELCOME [nick, "Welcome to the Internet Relay Network " <> nick]
-                  | cmd == "PRIVMSG", [channel, msg] <- params -> do
+                  | cmd == "PRIVMSG", [channel, msg'] <- params -> do
                       let room = fromJust $ localFromText $ T.tail $ T.decodeUtf8 channel
+                          msg = fromMaybe msg' $ fmap ("/me" <>) $ B.stripPrefix "\SOHACTION" msg'
                           imMsg = IMMessage { imType = MessageGroupchat
                                             , imSubject = Nothing
-                                            , imBody = localizedFromText $ T.decodeUtf8 msg
+                                            , imBody = localizedFromText $ T.decodeUtf8 $ B.map (\x -> if isControl x then ' ' else x) msg
                                             , imThread = Nothing
                                             , imExtended = []
                                             }
