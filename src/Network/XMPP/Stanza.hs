@@ -33,14 +33,12 @@ module Network.XMPP.Stanza
   , stanzaSessionCreate
   ) where
 
-import Text.Read (readMaybe)
 import Data.Maybe
 import Control.Monad
 import Data.Text (Text)
-import qualified Data.Text as T
-import Data.IORef.Lifted
 import Control.Concurrent.MVar.Lifted
 import Control.Monad.Trans.Class
+import Control.Monad.IO.Class
 import Control.Monad.Trans.Maybe
 import Control.Monad.Logger
 import Data.Map (Map)
@@ -50,10 +48,11 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Text.InterpolatedString.Perl6 (qq)
 import Data.Default.Class
+import Data.UUID (UUID)
+import qualified Data.UUID.V4 as UUID
+import qualified Data.UUID as UUID
 
 import Data.Injective
-import Data.ID (IDGen)
-import qualified Data.ID as ID
 import Network.XMPP.Session
 import Network.XMPP.Address
 import Network.XMPP.Utils
@@ -262,17 +261,16 @@ stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m ()
 
 data StanzaSession m = StanzaSession { ssSession :: Session m
-                                     , ssReqIds :: IORef IDGen
-                                     , ssRequests :: MVar (Map (Maybe XMPPAddress, Integer) (ResponseIQHandler m))
+                                     , ssRequests :: MVar (Map (Maybe XMPPAddress, UUID) (ResponseIQHandler m))
                                      }
 
-stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m Integer
+stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m UUID
 stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
-  sid <- atomicModifyIORef ssReqIds ID.get
+  sid <- liftIO $ UUID.nextRandom
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)
         OutPresence t -> ("presence", injTo <$> t)
-      attrs = [ ("id", T.pack $ show sid)
+      attrs = [ ("id", UUID.toText sid)
               ] ++ maybeToList (fmap (("to", ) . addressToText) ostTo)
                 ++ maybeToList (fmap ("type", ) mtype)
       msg = element (jcName mname) attrs $ map NodeElement ostChildren
@@ -281,8 +279,8 @@ stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
 
 stanzaRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
 stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
-  sid <- atomicModifyIORef ssReqIds ID.get
-  let attrs = [ ("id", T.pack $ show sid)
+  sid <- liftIO $ UUID.nextRandom
+  let attrs = [ ("id", UUID.toText sid)
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . addressToText) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
@@ -380,7 +378,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
                  sessionSend ssSession $ element (jcName "iq") attrs $ map NodeElement cres
            Nothing -> case injFrom ttype of
              Just resType -> do
-               nid <- checkOrFail (readMaybe $ T.unpack tid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
+               nid <- checkOrFail (UUID.fromText tid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
                lift $ do
                  mhandler <- modifyMVar ssRequests $ \requests -> case M.lookup (tfrom, nid) requests of
                    Nothing -> return (requests, Nothing)
@@ -420,6 +418,5 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
 
 stanzaSessionCreate :: MonadSession m => Session m -> m (StanzaSession m)
 stanzaSessionCreate ssSession = do
-  ssReqIds <- newIORef ID.empty
   ssRequests <- newMVar M.empty
   return StanzaSession {..}
