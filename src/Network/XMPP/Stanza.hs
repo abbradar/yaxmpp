@@ -341,8 +341,11 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
   e <- MaybeT $ sessionStep ssSession
 
   let sendError = stanzaSendError sess e
+      sendErrorOnIq err
+        | ename == jcName "iq" = sendError err
+        | otherwise = $(logWarn) [qq|Error in received non-IQ stanza: $err|]
       getAddr name = mapM extractAddr $ getAttr name e
-        where extractAddr addr = checkOrFail (parseValue xmppAddress addr) $ sendError $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
+        where extractAddr addr = checkOrFail (parseValue xmppAddress addr) $ sendErrorOnIq $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
 
       ename = elementName e
       payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e
@@ -399,13 +402,13 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
            if | ename == jcName "message" -> do
                   let getType mt = case mt of
                         Nothing -> return MessageNormal
-                        Just t -> checkOrFail (injFrom t) $ sendError $ badRequest "stanzaSessionStep: invalid message type"
+                        Just t -> checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid message type"
                   InMessage <$> mapM getType ttype
               | ename == jcName "presence" -> do
-                  let getType t = checkOrFail (injFrom t) $ sendError $ badRequest "stanzaSessionStep: invalid presence type"
+                  let getType t = checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid presence type"
                   InPresence <$> mapM (mapM getType) ttype
               | otherwise -> do
-                  lift $ sendError $ badRequest "stanzaSessionStep: unknown stanza type"
+                  lift $ sendErrorOnIq $ badRequest "stanzaSessionStep: unknown stanza type"
                   mzero
 
          res <- MaybeT $ inHandler $ InStanza { istFrom = tfrom

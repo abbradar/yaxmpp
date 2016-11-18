@@ -109,7 +109,7 @@ resourcePrepProfile :: StringPrepProfile
 resourcePrepProfile =
   Profile { maps = [b1]
           , shouldNormalize = True
-          , prohibited = [a1, c11, c21, c22, c3, c4, c5, c6, c7, c8, c9]
+          , prohibited = [a1, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9]
           , shouldCheckBidi = True
           }
 

@@ -127,7 +127,7 @@ main = runStderrLoggingT $ do
               lift $ imSetHandler imRef $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) -> if
                 | addressDomain == conferenceServer settings -> do
                     let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
-                        otherNick = T.encodeUtf8 $ resourceText $ fromJust addressResource
+                        otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
                     nick <- getNick
                     unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ localizedGet Nothing imBody]
                 | otherwise -> $(logWarn) [qq|Got unknown message from $addr: $msg|]
@@ -153,10 +153,10 @@ main = runStderrLoggingT $ do
                   | cmd == "NICK", [newNick] <- params -> do
                       -- FIXME: invalid
                       testNick <- tryReadMVar nickVar
-                      when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeUtf8 newNick
+                      when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeLatin1 newNick
                   | cmd == "JOIN", [channel] <- params -> do
                       nick0 <- readMVar nickVar
-                      let room = fromJust $ localFromText $ T.tail $ T.decodeUtf8 channel
+                      let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           joinOpts = def { joinHistory = def { histMaxStanzas = Just 0 } }
                       handle (\MUCAlreadyJoinedError -> return ()) $ mucJoin mucRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
                         case event of
@@ -172,15 +172,16 @@ main = runStderrLoggingT $ do
                           _ -> return ()
                   | cmd == "USER", (mnick:_) <- params -> do
                       testNick <- tryReadMVar nickVar
-                      when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeUtf8 mnick
+                      when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeLatin1 mnick
                       nick <- getNick
                       ircServReply rpl_WELCOME [nick, "Welcome to the Internet Relay Network " <> nick]
                   | cmd == "PRIVMSG", [channel, msg'] <- params -> do
-                      let room = fromJust $ localFromText $ T.tail $ T.decodeUtf8 channel
+                      let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           msg = fromMaybe msg' $ fmap ("/me" <>) $ B.stripPrefix "\SOHACTION" msg'
+                          msgText = T.decodeUtf8 $ B.map (\x -> if isControl x then ' ' else x) msg
                           imMsg = IMMessage { imType = MessageGroupchat
                                             , imSubject = Nothing
-                                            , imBody = localizedFromText $ T.decodeUtf8 $ B.map (\x -> if isControl x then ' ' else x) msg
+                                            , imBody = localizedFromText msgText
                                             , imThread = Nothing
                                             , imExtended = []
                                             }
