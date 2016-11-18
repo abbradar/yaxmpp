@@ -5,6 +5,7 @@ module Network.XMPP.XEP.DateTime
 
   , dayToXmpp
   , timeOfDayToXmpp
+  , utcTimeToXmpp
   , zonedTimeToXmpp
   ) where
 
@@ -14,6 +15,7 @@ import Data.Fixed
 import Control.Applicative
 import Data.Time.LocalTime
 import Data.Time.Calendar
+import Data.Time.Clock
 import Data.Attoparsec.Text
 import Text.InterpolatedString.Perl6 (qq)
 
@@ -77,6 +79,9 @@ timeOfDayToXmpp tz (TimeOfDay {..}) = [qq|{todHour}:{todMin}:{sec}{tzStr}|]
           | timeZoneMinutes tz < 0 = "-"
           | otherwise = "+"
         (tzHour, tzMin) = (abs $ timeZoneMinutes tz) `divMod` 60
+
+utcTimeToXmpp :: UTCTime -> Text
+utcTimeToXmpp t = zonedTimeToXmpp $ ZonedTime (utcToLocalTime utc t) utc
 
 zonedTimeToXmpp :: ZonedTime -> Text
 zonedTimeToXmpp (ZonedTime (LocalTime date time) tz) = [qq|{dayToXmpp date}T{timeOfDayToXmpp tz time}|]

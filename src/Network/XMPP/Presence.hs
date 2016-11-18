@@ -5,9 +5,11 @@ module Network.XMPP.Presence
   , presencePlugin
   , PresenceEvent(..)
   , presenceUpdate
+  , presenceStanza
   ) where
 
 import Data.Int
+import Data.Maybe
 import Control.Monad
 import Text.Read (readMaybe)
 import Text.XML
@@ -142,3 +144,19 @@ presenceUpdate k (Right v) m
 presenceUpdate k (Left e) m
   | M.member k m = Just (M.delete k m, Removed k e)
   | otherwise = Nothing
+
+presenceStanza :: Maybe Presence -> OutStanza
+presenceStanza (Just (Presence {..})) =
+  OutStanza { ostTo = Nothing
+            , ostType = OutPresence Nothing
+            , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceExtended
+            }
+  where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
+        mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
+        statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
+
+presenceStanza Nothing =
+  OutStanza { ostTo = Nothing
+            , ostType = OutPresence (Just PresenceUnavailable)
+            , ostChildren = []
+            }

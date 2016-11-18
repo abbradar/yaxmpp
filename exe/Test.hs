@@ -113,7 +113,9 @@ main = runStderrLoggingT $ do
 
         imSetHandler imRef $ \(addr, msg) -> do
           $(logInfo) [qq|Got message from $addr: $msg|]
-          imSend imRef addr (msg { imExtended = [] })
+          case imType msg of
+            MessageGroupchat -> imSend imRef (addressBare addr) (msg { imExtended = [] })
+            _ -> imSend imRef addr (msg { imExtended = [] })
 
         mucSetHandler mucRef $ \event -> do
           $(logInfo) [qq|Got MUC event: $event|]

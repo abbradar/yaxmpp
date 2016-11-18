@@ -6,22 +6,16 @@ module Network.XMPP.Presence.Myself
   , myPresencePlugin
   ) where
 
-import Data.Maybe
 import Control.Monad
-import Text.XML
-import qualified Data.Text as T
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.IORef.Lifted
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
-import Data.Injective
-import Network.XMPP.XML
 import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Address
-import Network.XMPP.Language
 import Network.XMPP.Presence
 
 data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (PresenceEvent XMPPResource)
@@ -48,16 +42,8 @@ myPresenceGet = readIORef . myPresence
 myPresenceSetHandler :: MonadSession m => MyPresenceRef m -> (PresenceEvent XMPPResource -> m ()) -> m ()
 myPresenceSetHandler (MyPresenceRef {..}) = Handler.set myPresenceHandler
 
-myPresenceSend :: MonadSession m => MyPresenceRef m -> Presence -> m ()
-myPresenceSend (MyPresenceRef {..}) (Presence {..}) =
-  void $ stanzaSend myPresenceSession OutStanza { ostTo = Nothing
-                                                , ostType = OutPresence Nothing
-                                                , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceExtended
-                                                }
-
-  where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
-        mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
-        statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
+myPresenceSend :: MonadSession m => MyPresenceRef m -> Maybe Presence -> m ()
+myPresenceSend (MyPresenceRef {..}) pres = void $ stanzaSend myPresenceSession $ presenceStanza pres
 
 myPresencePlugin :: MonadSession m => StanzaSession m -> m (PresenceHandler m, MyPresenceRef m)
 myPresencePlugin myPresenceSession = do

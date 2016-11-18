@@ -14,6 +14,7 @@ module Network.XMPP.XEP.Disco
 import Control.Arrow
 import Control.Monad
 import Data.Maybe
+import GHC.Generics (Generic)
 import Data.Text (Text)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -46,12 +47,9 @@ type DiscoFeature = Text
 data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity (Maybe LocalizedText)
                                , discoFeatures :: Set DiscoFeature
                                }
-                 deriving (Show, Eq)
+                 deriving (Show, Eq, Generic)
 
 instance Default DiscoEntity where
-  def = DiscoEntity { discoIdentities = M.empty
-                    , discoFeatures = S.empty
-                    }
 
 discoEntityUnion :: DiscoEntity -> DiscoEntity -> Maybe DiscoEntity
 discoEntityUnion a b = do

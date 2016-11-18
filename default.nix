@@ -1,9 +1,10 @@
 { mkDerivation, aeson, attoparsec, base, base64-bytestring
 , blaze-builder, bytestring, conduit, conduit-extra, connection
-, containers, data-default, dns, either, exceptions
-, interpolatedstring-perl6, iproute, lifted-base, monad-control
-, monad-logger, stdenv, stringprep, text, tls, transformers
-, transformers-base, xml-conduit, xml-types, yaml
+, containers, data-default-class, dns, either, exceptions
+, interpolatedstring-perl6, iproute, irc-conduit, lifted-base
+, monad-control, monad-logger, stdenv, stm-conduit, stringprep
+, text, time, tls, transformers, transformers-base, xml-conduit
+, xml-types, yaml
 }:
 mkDerivation {
   pname = "yaxmpp";
@@ -13,14 +14,15 @@ mkDerivation {
   isExecutable = true;
   libraryHaskellDepends = [
     aeson attoparsec base base64-bytestring blaze-builder bytestring
-    conduit conduit-extra connection containers data-default dns either
-    exceptions interpolatedstring-perl6 iproute lifted-base
-    monad-control monad-logger stringprep text tls transformers
+    conduit conduit-extra connection containers data-default-class dns
+    either exceptions interpolatedstring-perl6 iproute lifted-base
+    monad-control monad-logger stringprep text time tls transformers
     transformers-base xml-conduit xml-types
   ];
   executableHaskellDepends = [
-    base bytestring connection dns either exceptions
-    interpolatedstring-perl6 lifted-base monad-logger text transformers
+    aeson base bytestring conduit conduit-extra connection containers
+    data-default-class dns either exceptions interpolatedstring-perl6
+    irc-conduit lifted-base monad-logger stm-conduit text transformers
     yaml
   ];
   description = "Yet another XMPP implementation for Haskell";

@@ -40,6 +40,14 @@ localFromText t = XMPPLocal <$> runStringPrep nodePrepProfile t
 newtype XMPPDomain = XMPPDomain { domainText :: Text }
                    deriving (Eq, Ord, Show)
 
+instance FromJSON XMPPDomain where
+  parseJSON = withText "XMPPDomain" $ \t -> case domainFromText t of
+    Nothing -> fail "XMPPDomain"
+    Just r -> return r
+
+instance ToJSON XMPPDomain where
+  toJSON = toJSON . domainText
+
 domainFromText :: Text -> Maybe XMPPDomain
 domainFromText t = XMPPDomain <$> runStringPrep xmppNamePrepProfile t
 

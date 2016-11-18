@@ -1,15 +1,27 @@
 module Network.XMPP.XEP.MUC
   ( MUCEvent(..)
+  , RoomEvent(..)
   , MUCHandler
   , MUC(..)
   , MUCRef
+  , MUCAlreadyJoinedError(..)
+  , MUCHistorySettings(..)
+  , MUCJoinSettings(..)
   , mucJoin
+  , MUCAlreadyLeftError(..)
+  , mucSendPresence
   , mucSetHandler
   , mucPlugin
   ) where
 
+import Data.Maybe
 import Control.Monad
+import Data.Typeable
+import Control.Exception.Lifted (Exception, throw)
+import GHC.Generics (Generic)
+import Data.Time.Clock
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -18,6 +30,7 @@ import Data.IORef.Lifted
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
+import Data.Default.Class
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
@@ -28,6 +41,7 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
+import Network.XMPP.XEP.DateTime
 import Network.XMPP.XEP.Disco
 
 data MUCEvent = MUCJoined FullJID MUC
@@ -73,10 +87,29 @@ mucNickIdentity = DiscoIdentity { discoCategory = "conference"
                                 , discoType = "text"
                                 }
 
-mucJoin :: MonadSession m => MUCRef m -> FullJID -> MUCHandler m -> m ()
-mucJoin (MUCRef {..}) addr handler = do
-  rooms <- readIORef mucRooms
-  when (M.member (fullBare addr) rooms) $ fail "mucJoin: already present in the room"
+data MUCAlreadyJoinedError = MUCAlreadyJoinedError
+                           deriving (Show, Typeable)
+
+instance Exception MUCAlreadyJoinedError where
+
+data MUCHistorySettings = MUCHistorySettings { histMaxChars :: Maybe Integer
+                                             , histMaxStanzas :: Maybe Integer
+                                             , histSeconds :: Maybe Integer
+                                             , histSince :: Maybe UTCTime
+                                             }
+                        deriving (Show, Eq, Generic)
+
+instance Default MUCHistorySettings where
+
+data MUCJoinSettings = MUCJoinSettings { joinHistory :: MUCHistorySettings
+                                       , joinPresence :: Presence
+                                       }
+                     deriving (Show, Eq, Generic)
+
+instance Default MUCJoinSettings where
+
+mucJoin :: MonadSession m => MUCRef m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m ()
+mucJoin (MUCRef {..}) addr (MUCJoinSettings { joinHistory = MUCHistorySettings {..}, .. }) handler = do
   nickResp <- getDiscoEntity mucSession (fullJidAddress addr) (Just mucNickNode)
   resource' <- case nickResp of
     Right ent | Just (Just n) <- M.lookup mucNickIdentity $ discoIdentities ent ->
@@ -85,17 +118,42 @@ mucJoin (MUCRef {..}) addr handler = do
                   Just r -> return r
     _ -> return $ fullResource addr
   modifyMVar_ mucPending $ \pending -> do
-    when (M.member (fullBare addr) pending) $ fail "mucJoin: already pending to the room"
-    _ <- stanzaSend mucSession OutStanza { ostTo = Just $ fullJidAddress $ addr { fullResource = resource' }
-                                        , ostType = OutPresence Nothing
-                                        , ostChildren = [closedElement $ mucName "x"]
-                                        }
+    when (M.member (fullBare addr) pending) $ throw MUCAlreadyJoinedError
+    rooms <- readIORef mucRooms
+    when (M.member (fullBare addr) rooms) $ throw MUCAlreadyJoinedError
+    let historyAttrs = catMaybes [ fmap (\i -> ("maxchars", T.pack $ show i)) histMaxChars
+                                 , fmap (\i -> ("maxstanzas", T.pack $ show i)) histMaxStanzas
+                                 , fmap (\i -> ("seconds", T.pack $ show i)) histSeconds
+                                 , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
+                                 ]
+        xElement = element (mucName "x") []
+                   [ NodeElement $ element (mucName "history") historyAttrs []
+                   ]
+        presStanza = presenceStanza $ Just joinPresence { presenceExtended = xElement : presenceExtended joinPresence }
+    _ <- stanzaSend mucSession $ presStanza { ostTo = Just $ fullJidAddress $ addr { fullResource = resource' }
+                                           }
     let pmuc = MUC { mucSubject = ""
                    , mucMembers = M.empty
                    , mucNick = resource'
                    , ..
                    }
     return $ M.insert (fullBare addr) (pmuc, handler) pending
+
+data MUCAlreadyLeftError = MUCAlreadyLeftError
+                         deriving (Show, Typeable)
+
+instance Exception MUCAlreadyLeftError where
+
+mucSendPresence :: MonadSession m => MUCRef m -> BareJID -> Maybe Presence -> m ()
+mucSendPresence (MUCRef {..}) addr pres = do
+  rooms <- readIORef mucRooms
+  case M.lookup addr rooms of
+    Just (room, _) -> do
+      let presStanza = presenceStanza pres
+      _ <- stanzaSend mucSession $ presStanza { ostTo = Just $ fullJidAddress $ FullJID addr (mucNick room)
+                                             }
+      return ()
+    Nothing -> throw MUCAlreadyLeftError
 
 mucInHandler :: MonadSession m => MUCRef m -> PluginInHandler m
 mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err) }) = do
@@ -136,23 +194,21 @@ mucPresenceHandler (MUCRef {..}) addr mpres = do
           let members = M.insert resource pres mucMembers
               room' = room { mucMembers = members }
           in if resource == mucNick
-             then return (M.delete bare pending, Just (Just (room', handler), Just $ MUCJoined addr room'))
-             else return (M.insert bare (room', handler) pending, Nothing)
-        Left err | resource == mucNick -> return (M.delete bare pending, Just (Nothing, Just $ MUCLeft addr err))
+             then do
+               modifyIORef mucRooms $ M.insert bare (room', handler)
+               return (M.delete bare pending, Just $ Just $ MUCJoined addr room')
+             else return (M.insert bare (room', handler) pending, Just Nothing)
+        Left err | resource == mucNick -> return (M.delete bare pending, Just $ Just $ MUCLeft addr err)
         Left _ ->
           let members = M.delete resource mucMembers
               room' = room { mucMembers = members }
-          in return (M.insert bare (room', handler) pending, Just (Nothing, Nothing))
+          in return (M.insert bare (room', handler) pending, Just Nothing)
       Nothing -> return (pending, Nothing)
   case mProcessed of
-    Just (mRoomItem, mMsg) -> do
-      case mRoomItem of
-        Just roomItem -> modifyIORef mucRooms $ M.insert bare roomItem
-        Nothing -> return ()
-      case mMsg of
-        Just msg -> Handler.call mucEventHandler msg
-        Nothing -> return ()
+    Just (Just msg) -> do
+      Handler.call mucEventHandler msg
       return True
+    Just Nothing -> return True
     Nothing -> do
       rooms <- readIORef mucRooms
       case M.lookup bare rooms of
