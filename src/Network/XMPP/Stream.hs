@@ -223,6 +223,8 @@ startEvents from to =
     , ("version", [ContentText xmppVersion])
     , ("from", [ContentText from])
     , ("to", [ContentText to])
+    -- Needed by ejabberd >= 16.12
+    , ("xmlns", [ContentText jcNS])
     ]
   ]
 
