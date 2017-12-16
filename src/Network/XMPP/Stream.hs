@@ -11,6 +11,7 @@ module Network.XMPP.Stream
        , streamRecv
        , streamThrow
        , streamClose
+       , streamKill
        , streamFeatures
        , streamInfo
        , streamIsClosed
@@ -394,7 +395,7 @@ streamRecv' stream@(Stream {..}) = modifyMVar streamSource $ \source ->
   where internalError (InternalStreamException e) = streamThrow stream e
 
 streamRecv :: MonadStream m => Stream m -> m Element
-streamRecv s = streamRecv' s >>= \case
+streamRecv stream@(Stream {..}) = streamRecv' stream >>= \case
   Nothing -> throwM ConnectionClosedException
   Just msg -> return msg
 
@@ -415,9 +416,10 @@ streamClose (Stream {..}) = do
     unless closed $ do
       CL.sourceNull $$ render =$$+- CL.mapMaybe maybeFlush =$= sinkConn streamConn
       atomicWriteIORef streamClosedFlag True
-    return $ newResumableConduit $ do
-      r <- await
-      fail $ "streamClose: stream is already closed, got " ++ show r
+    return $ newResumableConduit $ throwM ConnectionClosedException
+
+streamKill :: MonadStream m => Stream m -> m ()
+streamKill (Stream {..}) = liftIO $ connectionClose streamConn
 
 streamIsClosed :: MonadStream m => Stream m -> m Bool
 streamIsClosed (Stream {..}) = readIORef streamClosedFlag

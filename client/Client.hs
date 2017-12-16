@@ -7,6 +7,7 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.IORef.Lifted
 import Control.Monad.IO.Class
@@ -86,7 +87,7 @@ main = do
             Left e -> fail [qq|Error creating session: $e|]
             Right s -> stanzaSessionCreate s
 
-    bracket initMain (sessionClose . ssSession) $ \sess -> do
+    bracket initMain (sessionKill . ssSession) $ \sess -> do
       let periodicThread unmask =
             unmask (forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess))
             `finally`
@@ -103,9 +104,7 @@ main = do
 
         oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
         (rosterP, rosterRef) <- rosterPlugin sess oldRoster
-        (subscrP, subscrRef) <- subscriptionPlugin sess $ \addr -> do
-          writeMessage [qq|Got subscription request from $addr|]
-          return $ Just True
+        (subscrP, subscrRef) <- subscriptionPlugin sess
         (rpresH, rpresRef) <- rpresencePlugin rosterRef
         (myPresH, myPresRef) <- myPresencePlugin sess
         (imP, imRef) <- imPlugin sess
@@ -125,8 +124,16 @@ main = do
           rosterSetHandler rosterRef $ \(_, event) -> do
             writeMessage [qq|Got roster update: $event|]
 
-          subscriptionSetHandler subscrRef $ \(addr, stat) -> do
+          subscriptionSetHandler subscrRef $ \(addr, stat) -> void $ fork $ do
             writeMessage [qq|Got subscription update for $addr: $stat|]
+            case stat of
+              TheyRequested -> updateSubscriptionFrom subscrRef addr True
+              TheyUnsubscribed -> do
+                -- XXX: Prosody has a bug when it sends "unsubscribed" events without according subscription request.
+                let fullAddr = bareJidAddress addr
+                roster <- rosterGet rosterRef
+                when (fullAddr `M.member` rosterEntries roster) $ deleteRoster rosterRef $ bareJidAddress addr
+              _ -> return ()
 
           myPresenceSetHandler myPresRef $ \event -> do
             writeMessage [qq|Got presence update for myself: $event|]

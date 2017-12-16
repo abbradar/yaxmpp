@@ -1,15 +1,14 @@
 module Network.XMPP.Subscription
   ( SubscriptionStatus(..)
-  , SubscriptionReqHandler
   , SubscriptionRef
   , subscriptionSession
-  , requestSubscription
+  , requestSubscriptionTo
+  , updateSubscriptionFrom
   , subscriptionSetHandler
   , subscriptionPlugin
   ) where
 
 import Control.Monad
-import Control.Concurrent.Lifted
 import Data.Default.Class
 
 import Control.Handler (Handler)
@@ -21,14 +20,12 @@ import Network.XMPP.Plugin
 
 data SubscriptionStatus = WeSubscribed
                         | WeUnsubscribed
+                        | TheyRequested
                         | TheyUnsubscribed
                         deriving (Show, Eq)
 
-type SubscriptionReqHandler m = BareJID -> m (Maybe Bool)
-
 data SubscriptionRef m = SubscriptionRef { subscriptionHandler :: Handler m (BareJID, SubscriptionStatus)
                                          , subscriptionSession :: StanzaSession m
-                                         , subscriptionReqHandler :: SubscriptionReqHandler m
                                          }
 
 subscriptionInHandler :: MonadStream m => SubscriptionRef m -> PluginInHandler m
@@ -40,32 +37,32 @@ subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (R
       Handler.call subscriptionHandler (addr, WeUnsubscribed)
       return $ Just Nothing
   | typ == PresenceSubscribe = do
-      _ <- fork $ do
-        mr <- subscriptionReqHandler addr
-        case mr of
-          Just r -> void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
-                                                                   , ostType = OutPresence $ Just $ if r then PresenceSubscribed else PresenceUnsubscribed
-                                                                   , ostChildren = []
-                                                                   }
-          Nothing -> return ()
+      Handler.call subscriptionHandler (addr, TheyRequested)
       return $ Just Nothing
   | typ == PresenceUnsubscribe = do
       Handler.call subscriptionHandler (addr, TheyUnsubscribed)
       return $ Just Nothing
 subscriptionInHandler _ _ = return Nothing
 
-requestSubscription :: MonadStream m => SubscriptionRef m -> BareJID -> m ()
-requestSubscription (SubscriptionRef {..}) addr =
+requestSubscriptionTo :: MonadStream m => SubscriptionRef m -> BareJID -> Bool -> m ()
+requestSubscriptionTo (SubscriptionRef {..}) addr status =
   void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
-                                                  , ostType = OutPresence $ Just PresenceSubscribe
+                                                  , ostType = OutPresence $ Just $ if status then PresenceSubscribe else PresenceUnsubscribe
+                                                  , ostChildren = []
+                                                  }
+
+updateSubscriptionFrom :: MonadStream m => SubscriptionRef m -> BareJID -> Bool -> m ()
+updateSubscriptionFrom (SubscriptionRef {..}) addr status =
+  void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
+                                                  , ostType = OutPresence $ Just $ if status then PresenceSubscribed else PresenceUnsubscribed
                                                   , ostChildren = []
                                                   }
 
 subscriptionSetHandler :: MonadStream m => SubscriptionRef m -> ((BareJID, SubscriptionStatus) -> m ()) -> m ()
 subscriptionSetHandler (SubscriptionRef {..}) = Handler.set subscriptionHandler
 
-subscriptionPlugin :: MonadStream m => StanzaSession m -> SubscriptionReqHandler m -> m (XMPPPlugin m, SubscriptionRef m)
-subscriptionPlugin subscriptionSession subscriptionReqHandler = do
+subscriptionPlugin :: MonadStream m => StanzaSession m -> m (XMPPPlugin m, SubscriptionRef m)
+subscriptionPlugin subscriptionSession = do
   subscriptionHandler <- Handler.new
   let subscriptionRef = SubscriptionRef {..}
       plugin = def { pluginInHandler = subscriptionInHandler subscriptionRef }

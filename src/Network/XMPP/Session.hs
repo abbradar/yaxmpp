@@ -8,6 +8,7 @@ module Network.XMPP.Session
        , SessionSettings(..)
        , sessionCreate
        , sessionClose
+       , sessionKill
        , sessionIsClosed
        , sessionPeriodic
        , sessionGetStream
@@ -103,6 +104,7 @@ restartOrThrow _ _ _ e = throwM e
 tryRestart :: MonadStream m => Session m -> ReconnectInfo -> Maybe ReadSessionData -> Maybe WriteSessionData -> ConnectionInterruptionException -> m WriteSessionData
 tryRestart (Session {..}) ri rs ws e = do
   s <- readIORef sessionStream
+  streamKill s
   closed <- streamIsClosed s
   if closed
     then throwM e
@@ -269,6 +271,12 @@ sessionClose sess = modifyMVar_ (sessionWLock sess) $ \ws -> do
   s <- readIORef $ sessionStream sess
   streamClose s
   return ws
+
+sessionKill :: MonadStream m => Session m -> m ()
+sessionKill sess = modifyMVar_ (sessionRLock sess) $ \rs -> modifyMVar (sessionWLock sess) $ \ws -> do
+  s <- readIORef $ sessionStream sess
+  streamKill s
+  return (ws, rs)
 
 sessionIsClosed :: MonadStream m => Session m -> m Bool
 sessionIsClosed sess = modifyMVar (sessionWLock sess) $ \ws -> do
