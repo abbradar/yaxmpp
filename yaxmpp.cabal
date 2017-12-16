@@ -68,6 +68,7 @@ library
                      , aeson >= 1.0.0.0
                      , time
                      , uuid
+                     , text-show
   hs-source-dirs:      src
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings

@@ -51,3 +51,5 @@
 - [ ] [[http://xmpp.org/extensions/xep-0203.html][XEP-0203 (Delayed Delivery)]]
 - [ ] [[http://xmpp.org/extensions/xep-0004.html][XEP-0004 (Data Forms)]]
 - [ ] [[http://xmpp.org/extensions/xep-0077.html][XEP-0077 (In-Band Registration)]]
+- [ ] [[https://xmpp.org/extensions/xep-0077.html][XEP-0308 (Last Message Correction)]]
+- [ ] [[https://xmpp.org/extensions/xep-0202.html][XEP-0202 (Entity Time)]]

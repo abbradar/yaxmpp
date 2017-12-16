@@ -5,27 +5,45 @@ module Network.XMPP.XEP.DateTime
 
   , dayToXmpp
   , timeOfDayToXmpp
-  , utcTimeToXmpp
   , zonedTimeToXmpp
+  , utcTimeToXmpp
   ) where
 
+import Prelude hiding (take)
 import Data.Text (Text)
+import qualified Data.Text.Read as TR
+import Data.Int
 import Data.Maybe
 import Data.Fixed
+import Data.Semigroup
 import Control.Applicative
 import Data.Time.LocalTime
 import Data.Time.Calendar
 import Data.Time.Clock
 import Data.Attoparsec.Text
-import Text.InterpolatedString.Perl6 (qq)
+import TextShow
+import TextShow.Data.Integral
+
+fixedDecimal :: Integral a => Int -> Parser a
+fixedDecimal n = do
+  str <- take n
+  case TR.decimal str of
+    Left err -> fail err
+    Right (a, "") -> return a
+    Right (_, _) -> fail "fixedDecimal: leftovers"
+
+-- Expects non-negative numbers.
+showbPaddedDecimal :: Integral a => Int64 -> a -> Builder
+showbPaddedDecimal n int = mtimesDefault (max 0 (n - lengthB str)) (singleton '0') <> str
+  where str = showbIntegralPrec 0 int
 
 xmppDate :: Parser Day
 xmppDate = do
-  year <- decimal
+  year <- fixedDecimal 4
   _ <- char '-'
-  month <- decimal
+  month <- fixedDecimal 2
   _ <- char '-'
-  day <- decimal
+  day <- fixedDecimal 2
   case fromGregorianValid year month day of
     Just r -> return r
     Nothing -> fail "xmppDate: invalid Gregorian date"
@@ -36,21 +54,21 @@ xmppTZ = do
     '+' -> return 1
     '-' -> return (-1)
     _ -> fail "xmppTZ: invalid timezone sign"
-  hour <- decimal
+  hour <- fixedDecimal 2
   _ <- char ':'
-  minute <- decimal
+  minute <- fixedDecimal 2
   return $ minutesToTimeZone $ signC * (60 * hour + minute)
 
 xmppTime :: Parser (TimeZone, TimeOfDay)
 xmppTime = do
-  hour <- decimal
+  hour <- fixedDecimal 2
   _ <- char ':'
-  minute <- decimal
+  minute <- fixedDecimal 2
   _ <- char ':'
-  (sec :: Int) <- decimal
+  (sec :: Int) <- fixedDecimal 2
   (millis :: Milli) <- fmap (fromMaybe 0) $ optional $ do
     _ <- char '.'
-    MkFixed <$> decimal
+    MkFixed <$> fixedDecimal 3
   time <- case makeTimeOfDayValid hour minute (fromIntegral sec + fromRational (toRational millis)) of
     Just t -> return t
     Nothing -> fail "xmppTime: invalid time"
@@ -64,24 +82,42 @@ xmppDateTime = do
   (tz, time) <- xmppTime
   return $ ZonedTime (LocalTime date time) tz
 
-dayToXmpp :: Day -> Text
-dayToXmpp (toGregorian -> (year, month, day)) = [qq|{year}-{month}-{day}|]
+dayToXmpp' :: Day -> Builder
+dayToXmpp' (toGregorian -> (year, month, day)) =
+  showbPaddedDecimal 4 year
+  <> singleton '-' <> showbPaddedDecimal 2 month
+  <> singleton '-' <> showbPaddedDecimal 2 day
 
-timeOfDayToXmpp :: TimeZone -> TimeOfDay -> Text
-timeOfDayToXmpp tz (TimeOfDay {..}) = [qq|{todHour}:{todMin}:{sec}{tzStr}|]
-  where sec = fromRational $ toRational todSec :: Milli
-        tzStr :: Text
+dayToXmpp :: Day -> Text
+dayToXmpp = toText . dayToXmpp'
+
+timeOfDayToXmpp' :: TimeZone -> TimeOfDay -> Builder
+timeOfDayToXmpp' tz (TimeOfDay {..}) =
+  showbPaddedDecimal 2 todHour
+  <> singleton ':' <> showbPaddedDecimal 2 todMin
+  <> singleton ':' <> showbPaddedDecimal 2 todRSec
+  <> singleton '.' <> showbPaddedDecimal 3 todRMsec
+  <> tzStr
+  where MkFixed msec = fromRational $ toRational todSec :: Milli
+        (todRSec, todRMsec) = msec `divMod` 1000
         tzStr
-          | tz == utc = "Z"
-          | otherwise = [qq|{tzSgn}{tzHour}:{tzMin}|]
-        tzSgn :: Text
+          | tz == utc = singleton 'Z'
+          | otherwise =
+            singleton tzSgn <> showbPaddedDecimal 2 tzHour <> singleton ':' <> showbPaddedDecimal 2 tzMin
         tzSgn
-          | timeZoneMinutes tz < 0 = "-"
-          | otherwise = "+"
+          | timeZoneMinutes tz < 0 = '-'
+          | otherwise = '+'
         (tzHour, tzMin) = (abs $ timeZoneMinutes tz) `divMod` 60
 
-utcTimeToXmpp :: UTCTime -> Text
-utcTimeToXmpp t = zonedTimeToXmpp $ ZonedTime (utcToLocalTime utc t) utc
+timeOfDayToXmpp :: TimeZone -> TimeOfDay -> Text
+timeOfDayToXmpp tz tod = toText $ timeOfDayToXmpp' tz tod
+
+zonedTimeToXmpp' :: ZonedTime -> Builder
+zonedTimeToXmpp' (ZonedTime (LocalTime date time) tz) =
+  dayToXmpp' date <> singleton 'T' <> timeOfDayToXmpp' tz time
 
 zonedTimeToXmpp :: ZonedTime -> Text
-zonedTimeToXmpp (ZonedTime (LocalTime date time) tz) = [qq|{dayToXmpp date}T{timeOfDayToXmpp tz time}|]
+zonedTimeToXmpp = toText . zonedTimeToXmpp'
+
+utcTimeToXmpp :: UTCTime -> Text
+utcTimeToXmpp t = zonedTimeToXmpp $ utcToZonedTime utc t

@@ -23,6 +23,7 @@ module Network.XMPP.Stanza
   , StanzaSession
   , ssSession
   , stanzaSend
+  , stanzaSend'
   , stanzaRequest
   , stanzaSyncRequest
 
@@ -265,28 +266,36 @@ data StanzaSession m = StanzaSession { ssSession :: Session m
                                      }
 
 stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m UUID
-stanzaSend (StanzaSession {..}) (OutStanza {..}) = do
+stanzaSend sess stanza = do
   sid <- liftIO $ UUID.nextRandom
+  stanzaSend' sess (UUID.toText sid) stanza
+  return sid
+
+stanzaSend' :: MonadSession m => StanzaSession m -> Text -> OutStanza -> m ()
+stanzaSend' (StanzaSession {..}) sid (OutStanza {..}) = do
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)
         OutPresence t -> ("presence", injTo <$> t)
-      attrs = [ ("id", UUID.toText sid)
+      attrs = [ ("id", sid)
               ] ++ maybeToList (fmap (("to", ) . addressToText) ostTo)
                 ++ maybeToList (fmap ("type", ) mtype)
       msg = element (jcName mname) attrs $ map NodeElement ostChildren
   sessionSend ssSession msg
-  return sid
 
 stanzaRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
-stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = do
-  sid <- liftIO $ UUID.nextRandom
+stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssRequests $ \reqs -> do
+  let findSid = do
+        sid <- liftIO $ UUID.nextRandom
+        if (oriTo, sid) `M.member` reqs
+          then findSid
+          else return sid
+  sid <- findSid
   let attrs = [ ("id", UUID.toText sid)
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . addressToText) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
-  modifyMVar_ ssRequests $ \reqs -> do
-    sessionSend ssSession msg
-    return $ M.insert (oriTo, sid) handler reqs
+  sessionSend ssSession msg
+  return $ M.insert (oriTo, sid) handler reqs
 
 stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
 stanzaSyncRequest session req = do

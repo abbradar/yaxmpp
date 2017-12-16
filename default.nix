@@ -3,7 +3,7 @@
 , containers, data-default-class, dns, either, exceptions
 , interpolatedstring-perl6, iproute, irc, lifted-base
 , monad-control, monad-logger, stdenv, stm, stm-conduit, stringprep
-, text, time, tls, transformers, transformers-base, uuid
+, text, text-show, time, tls, transformers, transformers-base, uuid
 , xml-conduit, xml-types, yaml
 }:
 mkDerivation {
@@ -16,8 +16,8 @@ mkDerivation {
     aeson attoparsec base base64-bytestring blaze-builder bytestring
     conduit conduit-extra connection containers data-default-class dns
     either exceptions interpolatedstring-perl6 iproute lifted-base
-    monad-control monad-logger stringprep text time tls transformers
-    transformers-base uuid xml-conduit xml-types
+    monad-control monad-logger stringprep text text-show time tls
+    transformers transformers-base uuid xml-conduit xml-types
   ];
   executableHaskellDepends = [
     aeson base bytestring conduit conduit-extra connection containers

@@ -131,8 +131,8 @@ main = runStderrLoggingT $ do
           myPresenceSend myPresRef $ Just def
           insertRoster rosterRef (bareJidAddress $ pal settings) (Just "Best pal") (S.fromList ["Pals"])
           requestSubscription subscrRef $ pal settings
-          mucJoin mucRef (conference settings) def $ \_ event -> do
-            $(logInfo) [qq|Got event from MUC room that I joined: $event|]
+          -- mucJoin mucRef (conference settings) def $ \_ event -> do
+          --   $(logInfo) [qq|Got event from MUC room that I joined: $event|]
 
         -- _ <- fork $ do
         --   topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
