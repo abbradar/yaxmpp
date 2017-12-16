@@ -33,6 +33,7 @@ import Network.XMPP.Message
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.MUC
 import Network.XMPP.XEP.Version
+import Network.XMPP.XEP.EntityTime
 import Network.SASL
 
 data Settings = Settings { server :: Text
@@ -94,7 +95,8 @@ main = runStderrLoggingT $ do
       (mucP, mucPresH, mucDiscoH, mucRef) <- mucPlugin sess
       presP <- presencePlugin [rpresH, myPresH, mucPresH]
       (verP, verDiscoH) <- versionPlugin def
-      discoP <- discoPlugin [mucDiscoH, verDiscoH]
+      (timeP, timeDiscoH) <- entityTimePlugin
+      discoP <- discoPlugin [mucDiscoH, verDiscoH, timeDiscoH]
 
       let saveRoster = do
             roster <- rosterTryGet rosterRef
@@ -117,7 +119,8 @@ main = runStderrLoggingT $ do
 
         imSetHandler imRef $ \(addr, msg) -> void $ fork $ do
           ver <- getVersion sess addr
-          $(logInfo) [qq|Got message from $addr: $msg, version: $ver|]
+          time <- getEntityTime sess addr
+          $(logInfo) [qq|Got message from $addr, version: $ver, time $time|]
           case imType msg of
             MessageGroupchat -> imSend imRef (addressBare addr) (msg { imExtended = [] })
             _ -> imSend imRef addr (msg { imExtended = [] })
@@ -140,6 +143,6 @@ main = runStderrLoggingT $ do
         --     Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
         --     Right r -> $(logDebug) [qq|Discovery result: $r|]
 
-        let plugins = [rosterP, subscrP, presP, imP, discoP, mucP, verP]
+        let plugins = [rosterP, subscrP, presP, imP, discoP, mucP, verP, timeP]
         $(logInfo) [qq|Starting to process events|]
         forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

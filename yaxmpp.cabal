@@ -38,6 +38,7 @@ library
                      , Network.XMPP.XEP.DateTime
                      , Network.XMPP.XEP.MUC
                      , Network.XMPP.XEP.Version
+                     , Network.XMPP.XEP.EntityTime
   other-modules:       Paths_yaxmpp
   -- other-extensions:    
   build-depends:       base >=4.8

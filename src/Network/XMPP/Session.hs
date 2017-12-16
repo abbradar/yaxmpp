@@ -1,6 +1,5 @@
 module Network.XMPP.Session
-       ( MonadSession
-       , ResumptionExceptionData(..)
+       ( ResumptionExceptionData(..)
        , ResumptionException(..)
        , Session
        , sessionAddress
@@ -17,7 +16,6 @@ import Data.Word
 import Text.Read
 import Data.Typeable
 import Control.Monad
-import Control.Monad.Trans.Control
 import Control.Concurrent.MVar.Lifted
 import Control.Monad.Logger
 import Data.IORef.Lifted
@@ -36,8 +34,6 @@ import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Address
 import Network.XMPP.Utils
-
-type MonadSession m = (MonadStream m, MonadBaseControl IO m)
 
 data ResumptionExceptionData = ClientErrorException ClientError
                              | StreamManagementVanished
@@ -75,7 +71,7 @@ applySentH h ws = ws { wsPending = go $ wsPending ws }
 
         a <=? b = (b - a) < (maxBound `div` 2)
 
-tryRestart :: MonadSession m
+tryRestart :: MonadStream m
            => ReconnectInfo
            -> Maybe ReadSessionData
            -> Maybe WriteSessionData
@@ -102,7 +98,7 @@ tryRestart ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
 
 tryRestart _ _ _ e = throwM e
 
-modifyRead :: MonadSession m => Session m -> (Maybe ReadSessionData -> m (Maybe ReadSessionData, a)) -> m a
+modifyRead :: MonadStream m => Session m -> (Maybe ReadSessionData -> m (Maybe ReadSessionData, a)) -> m a
 modifyRead (Session {..}) comp = modifyMVar sessionRLock tryRun
 
   where tryRun rs = handle (tryHandle rs) $ comp rs
@@ -115,7 +111,7 @@ modifyRead (Session {..}) comp = modifyMVar sessionRLock tryRun
               return $ Just ws'
             tryRun rs
 
-modifyWrite :: MonadSession m => Session m -> (Maybe WriteSessionData -> m (Maybe WriteSessionData, a)) -> m a
+modifyWrite :: MonadStream m => Session m -> (Maybe WriteSessionData -> m (Maybe WriteSessionData, a)) -> m a
 modifyWrite (Session {..}) comp = modifyMVar sessionWLock tryRun
 
   where tryRun ws = handle (tryHandle ws) $ comp ws
@@ -128,7 +124,7 @@ modifyWrite (Session {..}) comp = modifyMVar sessionWLock tryRun
               return (rs, Just ws')
             tryRun ws'
 
-sessionSend :: MonadSession m => Session m -> Element -> m ()
+sessionSend :: MonadStream m => Session m -> Element -> m ()
 sessionSend sess e = modifyWrite sess $ \ws -> do
   s <- readIORef $ sessionStream sess
   let ws' = case ws of
@@ -141,23 +137,23 @@ sessionSend sess e = modifyWrite sess $ \ws -> do
   streamSend s e
   return (ws', ())
 
-sessionThrow :: MonadSession m => Session m -> StreamError -> m a
+sessionThrow :: MonadStream m => Session m -> StreamError -> m a
 sessionThrow sess e = do
   s <- readIORef $ sessionStream sess
   streamThrow s e
 
-handleR :: MonadSession m => Maybe ReadSessionData -> Session m -> m ()
+handleR :: MonadStream m => Maybe ReadSessionData -> Session m -> m ()
 handleR (Just rs) sess = sessionSend sess $ element (smName "a") [("h", T.pack $ show $ rsRecvN rs)] []
 handleR _ _ = fail "handleQ: impossible"
 
-handleA :: MonadSession m => Session m -> Element -> m ()
+handleA :: MonadStream m => Session m -> Element -> m ()
 handleA sess e = modifyWrite sess $ \ws -> case readAttr "h" e of
   Nothing -> sessionThrow sess $ unexpectedInput "handleR: invalid h"
   Just nsent -> case ws of
     Nothing -> sessionThrow sess $ unexpectedInput "handleR: stream management is not enabled"
     Just wi -> return (Just $ applySentH nsent wi, ())
 
-sessionStep :: MonadSession m => Session m -> m (Maybe Element)
+sessionStep :: MonadStream m => Session m -> m (Maybe Element)
 sessionStep sess = do
   (handler, res) <- modifyRead sess $ \ri -> do
     s <- readIORef $ sessionStream sess
@@ -173,7 +169,7 @@ data SessionSettings = SessionSettings { ssConn :: ConnectionSettings
                                        , ssResource :: Text
                                        }
 
-bindResource :: MonadSession m => Text -> Stream m -> m Text
+bindResource :: MonadStream m => Text -> Stream m -> m Text
 bindResource wantRes s
   | not $ any (\case BindResource -> True; _ -> False) $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
   | otherwise = do
@@ -208,7 +204,7 @@ parseLocation csettings string =
           (T.init -> nhost, readMaybe . T.unpack -> Just nport) -> (nhost, nport)
           _ -> (string, 5222)
 
-initSM :: MonadSession m => ConnectionSettings -> Stream m -> m (Maybe (Maybe ReconnectInfo))
+initSM :: MonadStream m => ConnectionSettings -> Stream m -> m (Maybe (Maybe ReconnectInfo))
 initSM csettings s
   | not $ any (\case StreamManagement -> True; _ -> False) $ streamFeatures s = do
       $(logInfo) "Stream management is not supported"
@@ -232,7 +228,7 @@ initSM csettings s
                else $(logWarn) "Stream management is advertised but cannot be enabled"
              return Nothing
 
-sessionCreate :: MonadSession m => SessionSettings -> m (Either ClientError (Session m))
+sessionCreate :: MonadStream m => SessionSettings -> m (Either ClientError (Session m))
 sessionCreate (SessionSettings {..}) = do
   ms <- streamCreate ssConn
   case ms of
@@ -254,16 +250,16 @@ sessionCreate (SessionSettings {..}) = do
                          }
       return $ Right sess
       
-sessionClose :: MonadSession m => Session m -> m ()
+sessionClose :: MonadStream m => Session m -> m ()
 sessionClose sess = modifyMVar_ (sessionRLock sess) $ \_ -> modifyMVar (sessionWLock sess) $ \_ -> do
   s <- readIORef $ sessionStream sess
   streamClose s
   -- Effectively prevent reconnection
   return (Nothing, Nothing)
 
-sessionPeriodic :: MonadSession m => Session m -> m ()
+sessionPeriodic :: MonadStream m => Session m -> m ()
 sessionPeriodic sess@(Session { sessionReconnect = Just _ }) = sessionSend sess $ closedElement $ smName "r"
 sessionPeriodic _ = return ()
 
-sessionGetStream :: MonadSession m => Session m -> m (Stream m)
+sessionGetStream :: MonadStream m => Session m -> m (Stream m)
 sessionGetStream (Session {..}) = readIORef sessionStream

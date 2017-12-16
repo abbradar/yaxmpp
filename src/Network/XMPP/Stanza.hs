@@ -54,6 +54,7 @@ import qualified Data.UUID.V4 as UUID
 import qualified Data.UUID as UUID
 
 import Data.Injective
+import Network.XMPP.Stream
 import Network.XMPP.Session
 import Network.XMPP.Address
 import Network.XMPP.Utils
@@ -265,13 +266,13 @@ data StanzaSession m = StanzaSession { ssSession :: Session m
                                      , ssRequests :: MVar (Map (Maybe XMPPAddress, UUID) (ResponseIQHandler m))
                                      }
 
-stanzaSend :: MonadSession m => StanzaSession m -> OutStanza ->  m UUID
+stanzaSend :: MonadStream m => StanzaSession m -> OutStanza ->  m UUID
 stanzaSend sess stanza = do
   sid <- liftIO $ UUID.nextRandom
   stanzaSend' sess (UUID.toText sid) stanza
   return sid
 
-stanzaSend' :: MonadSession m => StanzaSession m -> Text -> OutStanza -> m ()
+stanzaSend' :: MonadStream m => StanzaSession m -> Text -> OutStanza -> m ()
 stanzaSend' (StanzaSession {..}) sid (OutStanza {..}) = do
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)
@@ -282,7 +283,7 @@ stanzaSend' (StanzaSession {..}) sid (OutStanza {..}) = do
       msg = element (jcName mname) attrs $ map NodeElement ostChildren
   sessionSend ssSession msg
 
-stanzaRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
+stanzaRequest :: MonadStream m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
 stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssRequests $ \reqs -> do
   let findSid = do
         sid <- liftIO $ UUID.nextRandom
@@ -297,13 +298,13 @@ stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssR
   sessionSend ssSession msg
   return $ M.insert (oriTo, sid) handler reqs
 
-stanzaSyncRequest :: MonadSession m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
+stanzaSyncRequest :: MonadStream m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
 stanzaSyncRequest session req = do
   ret <- newEmptyMVar
   stanzaRequest session req $ \res -> putMVar ret res
   takeMVar ret
 
-stanzaSendError :: MonadSession m => StanzaSession m -> Element -> StanzaError -> m ()
+stanzaSendError :: MonadStream m => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
   $(logWarn) [qq|Stanza error sent: $err|]
   sessionSend ssSession $ element (elementName e) (("type", "error") : catMaybes attrs) (elementNodes e ++ [errorE])
@@ -345,7 +346,7 @@ checkOrFail :: Monad m => Maybe a -> m () -> MaybeT m a
 checkOrFail Nothing finalize = MaybeT $ finalize >> return Nothing
 checkOrFail (Just a) _ = MaybeT $ return $ Just a
 
-stanzaSessionStep :: MonadSession m => StanzaSession m -> InHandler m -> RequestIQHandler m -> m ()
+stanzaSessionStep :: MonadStream m => StanzaSession m -> InHandler m -> RequestIQHandler m -> m ()
 stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMaybeT $ do
   e <- MaybeT $ sessionStep ssSession
 
@@ -428,7 +429,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
                                              }
          lift $ sendError res
 
-stanzaSessionCreate :: MonadSession m => Session m -> m (StanzaSession m)
+stanzaSessionCreate :: MonadStream m => Session m -> m (StanzaSession m)
 stanzaSessionCreate ssSession = do
   ssRequests <- newMVar M.empty
   return StanzaSession {..}

@@ -1,5 +1,5 @@
 module Network.XMPP.XEP.Version
-  ( VersionSettings
+  ( VersionInfo
   , getVersion
   , versionPlugin
   ) where
@@ -18,7 +18,6 @@ import qualified Text.XML.Cursor as XC
 import Paths_yaxmpp (version)
 import Network.XMPP.XML
 import Network.XMPP.Stream
-import Network.XMPP.Session
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Address
@@ -28,29 +27,29 @@ versionNS :: Text
 versionName :: Text -> Name
 (versionNS, versionName) = namePair "jabber:iq:version"
 
-data VersionSettings = VersionSettings { swName :: Text
-                                       , swVersion :: Text
-                                       , swOS :: Maybe Text
-                                       }
-                       deriving (Show, Eq)
+data VersionInfo = VersionInfo { swName :: Text
+                               , swVersion :: Text
+                               , swOS :: Maybe Text
+                               }
+                 deriving (Show, Eq)
 
-instance Default VersionSettings where
-  def = VersionSettings { swName = T.pack "yaxmpp"
-                        , swVersion = T.pack $ showVersion version
-                        , swOS = Just $ T.pack os
-                        }
+instance Default VersionInfo where
+  def = VersionInfo { swName = "yaxmpp"
+                    , swVersion = T.pack $ showVersion version
+                    , swOS = Just $ T.pack os
+                    }
 
-versionIqHandler :: MonadSession m => VersionSettings -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
-versionIqHandler (VersionSettings {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] })
-  | elementName req == queryName =
-      return $ Just $ Right [element queryName [] $ map (\(name, value) -> NodeElement $ element (versionName name) [] [NodeContent value]) result]
-  where queryName = versionName "query"
+versionIqHandler :: MonadStream m => VersionInfo -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+versionIqHandler (VersionInfo {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] })
+  | elementName req == queryTag =
+      return $ Just $ Right [element queryTag [] $ map (\(name, value) -> NodeElement $ element (versionName name) [] [NodeContent value]) result]
+  where queryTag = versionName "query"
         result = [ ("name", swName)
                  , ("version", swVersion)
                  ] ++ maybeToList (fmap ("os", ) swOS)
 versionIqHandler _ _ = return Nothing
 
-getVersion :: MonadStream m => StanzaSession m -> XMPPAddress -> m (Either StanzaError VersionSettings)
+getVersion :: MonadStream m => StanzaSession m -> XMPPAddress -> m (Either StanzaError VersionInfo)
 getVersion sess addr = do
   ret <- stanzaSyncRequest sess OutRequestIQ { oriTo = Just addr
                                             , oriIqType = IQGet
@@ -62,12 +61,12 @@ getVersion sess addr = do
               , [swName] <- getEntry r "name"
               , [swVersion] <- getEntry r "version"
               , swOS <- listToMaybe $ getEntry r "os"
-                -> Right $ VersionSettings {..}
+                -> Right $ VersionInfo {..}
     _ -> Left $ badRequest "getVersion: invalid response"
 
   where getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 
-versionPlugin :: MonadSession m => VersionSettings -> m (XMPPPlugin m, DiscoPlugin)
+versionPlugin :: MonadStream m => VersionInfo -> m (XMPPPlugin m, DiscoPlugin)
 versionPlugin settings = do
   let xmppPlugin = def { pluginRequestIqHandler = versionIqHandler settings
                        }

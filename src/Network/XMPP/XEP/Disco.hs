@@ -31,7 +31,6 @@ import Data.Default.Class
 import Network.XMPP.Utils
 import Network.XMPP.XML
 import Network.XMPP.Plugin
-import Network.XMPP.Session
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Address
@@ -187,7 +186,7 @@ emitDiscoItems :: DiscoItems -> [Element]
 emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
   where makeItemAttr (addr, mNode) = [("jid", addressToText addr)] ++ maybeToList (fmap ("node", ) mNode)
 
-discoIqHandler :: MonadSession m => DiscoPlugin -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+discoIqHandler :: MonadStream m => DiscoPlugin -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
 discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] }) =
   case res of
     Nothing -> return Nothing
@@ -209,7 +208,7 @@ discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQGet, iriChildren = 
           | otherwise = Nothing
 discoIqHandler _ _ = return Nothing
 
-discoPlugin :: MonadSession m => [DiscoPlugin] -> m (XMPPPlugin m)
+discoPlugin :: MonadStream m => [DiscoPlugin] -> m (XMPPPlugin m)
 discoPlugin plugins = do
   plugin <- case foldr (\a acc -> acc >>= discoPluginUnion a) (Just def) plugins of
     Nothing -> fail "discoPlugin: overlapping plugins"

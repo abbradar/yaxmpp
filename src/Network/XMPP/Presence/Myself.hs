@@ -13,6 +13,7 @@ import Data.IORef.Lifted
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
+import Network.XMPP.Stream
 import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Address
@@ -24,7 +25,7 @@ data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (PresenceE
                                      , myBareAddress :: BareJID
                                      }
 
-myPresencePHandler :: MonadSession m => MyPresenceRef m -> PresenceHandler m
+myPresencePHandler :: MonadStream m => MyPresenceRef m -> PresenceHandler m
 myPresencePHandler (MyPresenceRef {..}) (FullJID {..}) pres
   | myBareAddress == fullBare = do
       presences <- readIORef myPresence
@@ -36,16 +37,16 @@ myPresencePHandler (MyPresenceRef {..}) (FullJID {..}) pres
           return True
 myPresencePHandler _ _ _ = return False
 
-myPresenceGet :: MonadSession m => MyPresenceRef m -> m (Map XMPPResource Presence)
+myPresenceGet :: MonadStream m => MyPresenceRef m -> m (Map XMPPResource Presence)
 myPresenceGet = readIORef . myPresence
 
-myPresenceSetHandler :: MonadSession m => MyPresenceRef m -> (PresenceEvent XMPPResource -> m ()) -> m ()
+myPresenceSetHandler :: MonadStream m => MyPresenceRef m -> (PresenceEvent XMPPResource -> m ()) -> m ()
 myPresenceSetHandler (MyPresenceRef {..}) = Handler.set myPresenceHandler
 
-myPresenceSend :: MonadSession m => MyPresenceRef m -> Maybe Presence -> m ()
+myPresenceSend :: MonadStream m => MyPresenceRef m -> Maybe Presence -> m ()
 myPresenceSend (MyPresenceRef {..}) pres = void $ stanzaSend myPresenceSession $ presenceStanza pres
 
-myPresencePlugin :: MonadSession m => StanzaSession m -> m (PresenceHandler m, MyPresenceRef m)
+myPresencePlugin :: MonadStream m => StanzaSession m -> m (PresenceHandler m, MyPresenceRef m)
 myPresencePlugin myPresenceSession = do
   myPresence <- newIORef M.empty
   myPresenceHandler <- Handler.new

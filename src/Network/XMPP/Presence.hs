@@ -25,7 +25,7 @@ import qualified Data.Map as M
 
 import Data.Injective
 import Network.XMPP.XML
-import Network.XMPP.Session
+import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Address
@@ -79,7 +79,7 @@ readIntMaybe str = do
   when (i > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
   return $ fromIntegral i
 
-emitPresence :: MonadSession m => PresenceRef m -> FullJID -> Either [Element] Presence -> m ()
+emitPresence :: MonadStream m => PresenceRef m -> FullJID -> Either [Element] Presence -> m ()
 emitPresence pref addr pres = tryHandlers $ presenceHandlers pref
   where tryHandlers [] = $(logWarn) [qq|Unhandled presence update for $addr: $pres|]
         tryHandlers (handler:handlers) = do
@@ -110,7 +110,7 @@ parsePresence elems = do
 parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
-presenceInHandler :: MonadSession m => PresenceRef m -> PluginInHandler m
+presenceInHandler :: MonadStream m => PresenceRef m -> PluginInHandler m
 presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istType = InPresence (Right (presenceOp -> Just op)), istChildren }) = Just <$> do
   case fullJidGet addr of
     Nothing -> return $ Just $ jidMalformed "presenceInHandler: Presence should be announced for a full-specified JID"
@@ -126,7 +126,7 @@ presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istTy
             return Nothing
 presenceInHandler _ _ = return Nothing
 
-presencePlugin :: MonadSession m => [PresenceHandler m] -> m (XMPPPlugin m)
+presencePlugin :: MonadStream m => [PresenceHandler m] -> m (XMPPPlugin m)
 presencePlugin presenceHandlers = do
   let pref = PresenceRef {..}
       plugin = def { pluginInHandler = presenceInHandler pref }

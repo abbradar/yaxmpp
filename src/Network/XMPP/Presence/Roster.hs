@@ -12,7 +12,7 @@ import Text.XML
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
-import Network.XMPP.Session
+import Network.XMPP.Stream
 import Network.XMPP.Address
 import Network.XMPP.Presence
 import Network.XMPP.Roster
@@ -49,7 +49,7 @@ rosterUpdate full@(FullJID {..}) (Left err) rmap =
                      else Nothing
     Nothing -> Nothing
 
-rpresencePHandler :: MonadSession m => RosterPresenceRef m -> PresenceHandler m
+rpresencePHandler :: MonadStream m => RosterPresenceRef m -> PresenceHandler m
 rpresencePHandler (RosterPresenceRef {..}) full presUpd = do
   roster <- rosterEntries <$> rosterGet rpresenceRoster
   if bareJidAddress (fullBare full) `M.member` roster
@@ -63,10 +63,10 @@ rpresencePHandler (RosterPresenceRef {..}) full presUpd = do
           return True
     else return False
 
-rpresenceSetHandler :: MonadSession m => RosterPresenceRef m -> (RosterPresenceEvent -> m ()) -> m ()
+rpresenceSetHandler :: MonadStream m => RosterPresenceRef m -> (RosterPresenceEvent -> m ()) -> m ()
 rpresenceSetHandler (RosterPresenceRef {..}) = Handler.set rpresenceHandler
 
-rpresencePlugin :: MonadSession m => RosterRef m ->  m (PresenceHandler m, RosterPresenceRef m)
+rpresencePlugin :: MonadStream m => RosterRef m ->  m (PresenceHandler m, RosterPresenceRef m)
 rpresencePlugin rpresenceRoster = do
   rpresenceRef <- newIORef M.empty
   rpresenceHandler <- Handler.new

@@ -15,7 +15,7 @@ import Data.Default.Class
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
 import Network.XMPP.Address
-import Network.XMPP.Session
+import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 
@@ -31,7 +31,7 @@ data SubscriptionRef m = SubscriptionRef { subscriptionHandler :: Handler m (Bar
                                          , subscriptionReqHandler :: SubscriptionReqHandler m
                                          }
 
-subscriptionInHandler :: MonadSession m => SubscriptionRef m -> PluginInHandler m
+subscriptionInHandler :: MonadStream m => SubscriptionRef m -> PluginInHandler m
 subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr) })
   | typ == PresenceSubscribed = do
       Handler.call subscriptionHandler (addr, WeSubscribed)
@@ -54,17 +54,17 @@ subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (R
       return $ Just Nothing
 subscriptionInHandler _ _ = return Nothing
 
-requestSubscription :: MonadSession m => SubscriptionRef m -> BareJID -> m ()
+requestSubscription :: MonadStream m => SubscriptionRef m -> BareJID -> m ()
 requestSubscription (SubscriptionRef {..}) addr =
   void $ stanzaSend subscriptionSession OutStanza { ostTo = Just $ bareJidAddress addr
                                                   , ostType = OutPresence $ Just PresenceSubscribe
                                                   , ostChildren = []
                                                   }
 
-subscriptionSetHandler :: MonadSession m => SubscriptionRef m -> ((BareJID, SubscriptionStatus) -> m ()) -> m ()
+subscriptionSetHandler :: MonadStream m => SubscriptionRef m -> ((BareJID, SubscriptionStatus) -> m ()) -> m ()
 subscriptionSetHandler (SubscriptionRef {..}) = Handler.set subscriptionHandler
 
-subscriptionPlugin :: MonadSession m => StanzaSession m -> SubscriptionReqHandler m -> m (XMPPPlugin m, SubscriptionRef m)
+subscriptionPlugin :: MonadStream m => StanzaSession m -> SubscriptionReqHandler m -> m (XMPPPlugin m, SubscriptionRef m)
 subscriptionPlugin subscriptionSession subscriptionReqHandler = do
   subscriptionHandler <- Handler.new
   let subscriptionRef = SubscriptionRef {..}

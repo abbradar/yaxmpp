@@ -6,7 +6,7 @@ import Text.InterpolatedString.Perl6 (qq)
 import Text.XML
 import Data.Default.Class
 
-import Network.XMPP.Session
+import Network.XMPP.Stream
 import Network.XMPP.Stanza
 
 type XMPPFeature = Text
@@ -23,7 +23,7 @@ instance Monad m => Default (XMPPPlugin m) where
                    , pluginRequestIqHandler = \_ -> return Nothing
                    }
 
-pluginsInHandler :: MonadSession m => [XMPPPlugin m] -> InHandler m
+pluginsInHandler :: MonadStream m => [XMPPPlugin m] -> InHandler m
 pluginsInHandler [] msg = do
   $(logWarn) [qq|Unhandled stanza: $msg|]
   -- Shouldn't reply to unknown messages/presences.
@@ -34,7 +34,7 @@ pluginsInHandler ((XMPPPlugin {..}):plugins) msg = do
     Nothing -> pluginsInHandler plugins msg
     Just r -> return r
 
-pluginsRequestIqHandler :: MonadSession m => [XMPPPlugin m] -> RequestIQHandler m
+pluginsRequestIqHandler :: MonadStream m => [XMPPPlugin m] -> RequestIQHandler m
 pluginsRequestIqHandler [] iq = do
   $(logWarn) [qq|Unhandled request: $iq|]
   return $ Left $ serviceUnavailable "Unsupported request"

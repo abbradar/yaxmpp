@@ -18,7 +18,7 @@ import qualified Text.XML.Cursor as XC
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
 import Network.XMPP.XML
-import Network.XMPP.Session
+import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Language
 import Network.XMPP.Address
@@ -49,7 +49,7 @@ data IMRef m = IMRef { imHandler :: Handler m (XMPPAddress, IMMessage)
                      , imSession :: StanzaSession m
                      }
 
-imInHandler :: MonadSession m => IMRef m -> InStanza -> m (Maybe (Maybe StanzaError))
+imInHandler :: MonadStream m => IMRef m -> InStanza -> m (Maybe (Maybe StanzaError))
 imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (Right imType), istChildren })
   | Just bodyRes <- localizedFromElement (jcName "body") istChildren = Just <$> do
       let res = runExcept $ do
@@ -76,10 +76,10 @@ imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (R
 
 imInHandler _ _ = return Nothing
 
-imSetHandler :: MonadSession m => IMRef m -> ((XMPPAddress, IMMessage) -> m ()) -> m ()
+imSetHandler :: MonadStream m => IMRef m -> ((XMPPAddress, IMMessage) -> m ()) -> m ()
 imSetHandler (IMRef {..}) = Handler.set imHandler
 
-imSend :: MonadSession m => IMRef m -> XMPPAddress -> IMMessage -> m ()
+imSend :: MonadStream m => IMRef m -> XMPPAddress -> IMMessage -> m ()
 imSend (IMRef {..}) to (IMMessage {..}) =
   void $ stanzaSend imSession OutStanza { ostTo = Just to
                                         , ostType = OutMessage imType
@@ -90,7 +90,7 @@ imSend (IMRef {..}) to (IMMessage {..}) =
         bodies = localizedElements (jcName "body") imBody
         mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent", ) imParent) [NodeContent imId]) imThread
 
-imPlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, IMRef m)
+imPlugin :: MonadStream m => StanzaSession m -> m (XMPPPlugin m, IMRef m)
 imPlugin imSession = do
   imHandler <- Handler.new
   let pref = IMRef {..}

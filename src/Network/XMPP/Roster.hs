@@ -105,7 +105,7 @@ instance ToJSON Roster where
 rosterName :: Text -> Name
 rosterName = nsName "jabber:iq:roster"
 
-okHandler :: MonadSession m => ResponseIQHandler m
+okHandler :: MonadStream m => ResponseIQHandler m
 okHandler (Left (err, _)) = fail [qq|okHandler: error while updating a roster: $err|]
 okHandler (Right _) = return ()
 
@@ -118,7 +118,7 @@ data RosterRef m = RosterRef { rref :: MVar Roster
                              , rrefSession :: StanzaSession m
                              }
 
-insertRoster :: MonadSession m => RosterRef m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
+insertRoster :: MonadStream m => RosterRef m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
 insertRoster (RosterRef {..}) jid name groups = do
   void $ readMVar rref
   stanzaRequest rrefSession request okHandler
@@ -129,7 +129,7 @@ insertRoster (RosterRef {..}) jid name groups = do
                 ] ++ maybeToList (fmap ("name", ) name)
                ) $ map (\g -> NodeElement $ element (rosterName "group") [] [NodeContent g]) $ S.toList groups
 
-deleteRoster :: MonadSession m => RosterRef m -> XMPPAddress -> m ()
+deleteRoster :: MonadStream m => RosterRef m -> XMPPAddress -> m ()
 deleteRoster (RosterRef {..}) jid = do
   void $ readMVar rref
   stanzaRequest rrefSession request okHandler
@@ -152,7 +152,7 @@ parseInitial e = do
                           }
   return (jid, entry)
 
-handleFirstRequest :: MonadSession m => RosterRef m -> Maybe Roster -> ResponseIQHandler m
+handleFirstRequest :: MonadStream m => RosterRef m -> Maybe Roster -> ResponseIQHandler m
 handleFirstRequest (RosterRef {..}) mold resp = do
   let roster' = case (mold, resp) of
         (_, Left (err, _)) -> error [qq|handleFirstRequest: error while requesting roster: $err|]
@@ -188,7 +188,7 @@ applyRosterEvent :: RosterEntries -> RosterEvent -> RosterEntries
 applyRosterEvent roster (RosterInsert jid entry) = M.insert jid entry roster
 applyRosterEvent roster (RosterDelete jid) = M.delete jid roster
 
-rosterIqHandler :: MonadSession m => RosterRef m -> PluginRequestIQHandler m
+rosterIqHandler :: MonadStream m => RosterRef m -> PluginRequestIQHandler m
 rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] })
   | elementName req == rosterName "query" = Just <$> do
       mroster <- modifyMVar rref $ \roster -> do
@@ -208,16 +208,16 @@ rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [
           return $ Right []
 rosterIqHandler _ _ = return Nothing
 
-rosterGet :: MonadSession m => RosterRef m -> m Roster
+rosterGet :: MonadStream m => RosterRef m -> m Roster
 rosterGet = readMVar . rref
 
-rosterTryGet :: MonadSession m => RosterRef m -> m (Maybe Roster)
+rosterTryGet :: MonadStream m => RosterRef m -> m (Maybe Roster)
 rosterTryGet = tryReadMVar . rref
 
-rosterSetHandler :: MonadSession m => RosterRef m -> ((RosterEntries, RosterEvent) -> m ()) -> m ()
+rosterSetHandler :: MonadStream m => RosterRef m -> ((RosterEntries, RosterEvent) -> m ()) -> m ()
 rosterSetHandler (RosterRef {..}) = Handler.set rrefHandler
 
-rosterPlugin :: MonadSession m => StanzaSession m -> Maybe Roster -> m (XMPPPlugin m, RosterRef m)
+rosterPlugin :: MonadStream m => StanzaSession m -> Maybe Roster -> m (XMPPPlugin m, RosterRef m)
 rosterPlugin rrefSession old = do
   rref <- newEmptyMVar
   rrefHandler <- Handler.new

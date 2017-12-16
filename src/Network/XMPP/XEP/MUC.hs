@@ -37,7 +37,7 @@ import qualified Control.Handler as Handler
 import Network.XMPP.XML
 import Network.XMPP.Address
 import Network.XMPP.Language
-import Network.XMPP.Session
+import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
@@ -108,7 +108,7 @@ data MUCJoinSettings = MUCJoinSettings { joinHistory :: MUCHistorySettings
 
 instance Default MUCJoinSettings where
 
-mucJoin :: MonadSession m => MUCRef m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m ()
+mucJoin :: MonadStream m => MUCRef m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m ()
 mucJoin (MUCRef {..}) addr (MUCJoinSettings { joinHistory = MUCHistorySettings {..}, .. }) handler = do
   nickResp <- getDiscoEntity mucSession (fullJidAddress addr) (Just mucNickNode)
   resource' <- case nickResp of
@@ -144,7 +144,7 @@ data MUCAlreadyLeftError = MUCAlreadyLeftError
 
 instance Exception MUCAlreadyLeftError where
 
-mucSendPresence :: MonadSession m => MUCRef m -> BareJID -> Maybe Presence -> m ()
+mucSendPresence :: MonadStream m => MUCRef m -> BareJID -> Maybe Presence -> m ()
 mucSendPresence (MUCRef {..}) addr pres = do
   rooms <- readIORef mucRooms
   case M.lookup addr rooms of
@@ -155,7 +155,7 @@ mucSendPresence (MUCRef {..}) addr pres = do
       return ()
     Nothing -> throw MUCAlreadyLeftError
 
-mucInHandler :: MonadSession m => MUCRef m -> PluginInHandler m
+mucInHandler :: MonadStream m => MUCRef m -> PluginInHandler m
 mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err) }) = do
   found <- modifyMVar mucPending $ \pending ->
     if fullBare addr `M.member` pending
@@ -183,7 +183,7 @@ mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr),
     _ -> return Nothing
 mucInHandler _ _ = return Nothing
 
-mucPresenceHandler :: MonadSession m => MUCRef m -> PresenceHandler m
+mucPresenceHandler :: MonadStream m => MUCRef m -> PresenceHandler m
 mucPresenceHandler (MUCRef {..}) addr mpres = do
   let bare = fullBare addr
       resource = fullResource addr
@@ -226,10 +226,10 @@ mucPresenceHandler (MUCRef {..}) addr mpres = do
               return True
         Nothing -> return False
 
-mucSetHandler :: MonadSession m => MUCRef m -> (MUCEvent -> m ()) -> m ()
+mucSetHandler :: MonadStream m => MUCRef m -> (MUCEvent -> m ()) -> m ()
 mucSetHandler (MUCRef {..}) = Handler.set mucEventHandler
 
-mucPlugin :: MonadSession m => StanzaSession m -> m (XMPPPlugin m, PresenceHandler m, DiscoPlugin, MUCRef m)
+mucPlugin :: MonadStream m => StanzaSession m -> m (XMPPPlugin m, PresenceHandler m, DiscoPlugin, MUCRef m)
 mucPlugin mucSession = do
   mucRooms <- newIORef M.empty
   mucPending <- newMVar M.empty
