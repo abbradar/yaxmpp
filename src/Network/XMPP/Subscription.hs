@@ -34,7 +34,7 @@ data SubscriptionRef m = SubscriptionRef { subscriptionHandler :: Handler m (Bar
 subscriptionInHandler :: MonadSession m => SubscriptionRef m -> PluginInHandler m
 subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr) })
   | typ == PresenceSubscribed = do
-      Handler.call subscriptionHandler (addr, WeUnsubscribed)
+      Handler.call subscriptionHandler (addr, WeSubscribed)
       return $ Just Nothing
   | typ == PresenceUnsubscribed = do
       Handler.call subscriptionHandler (addr, WeUnsubscribed)

@@ -235,7 +235,7 @@ stopEvents =
   ]
 
 streamTag :: MonadThrow m => (StreamSettings -> ConduitM Event o m c) -> ConduitM Event o m c
-streamTag = XMLP.force "Stream has not started" . XMLP.tagName (streamName "stream") streamAttrs
+streamTag = XMLP.force "Stream has not started" . XMLP.tag' (XMLP.matching (== streamName "stream")) streamAttrs
   where streamAttrs = do
           ssLang <- XMLP.requireAttr $ xmlName "lang"
           ssId <- XMLP.requireAttr "id"

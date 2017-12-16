@@ -102,8 +102,8 @@ getDiscoEntity sess addr node = do
                                             }
   return $ case ret of
     Left (e, _) -> Left e
-    Right [r] -> parseDiscoEntity r
-    _ -> Left $ badRequest "getDiscoEntity: multiple elements in response"
+    Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
+    _ -> Left $ badRequest "getDiscoEntity: invalid response"
 
 type DiscoNode = Text
 type DiscoItems = Map (XMPPAddress, Maybe DiscoNode) (Maybe LocalizedText)
@@ -188,26 +188,25 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
   where makeItemAttr (addr, mNode) = [("jid", addressToText addr)] ++ maybeToList (fmap ("node", ) mNode)
 
 discoIqHandler :: MonadSession m => DiscoPlugin -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
-discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] }) = do
-  let infoName = discoInfoName "query"
-      itemsName = discoItemsName "query"
-  res <- if
-    | elementName req == infoName -> Just <$> fmap (infoName, ) <$> case getAttr "node" req of
-        Nothing -> return $ Just $ emitDiscoEntity discoPEntity
-        Just node | Just (entity, _) <- M.lookup node discoPChildren -> return $ Just $ emitDiscoEntity entity
-        _ -> return Nothing
-    | elementName req == itemsName -> Just <$> fmap (itemsName, ) <$> case getAttr "node" req of
-        Nothing -> return $ Just $ emitDiscoItems discoPItems
-        Just node | Just (_, items) <- M.lookup node discoPChildren -> return $ Just $ emitDiscoItems items
-        _ -> return Nothing
-    | otherwise -> return Nothing
+discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] }) =
   case res of
-    Nothing ->
-      return Nothing
-    Just Nothing ->
-      return $ Just $ Left $ itemNotFound "discoIqHandler: unknown node"
+    Nothing -> return Nothing
+    Just Nothing -> return $ Just $ Left $ itemNotFound "discoIqHandler: unknown node"
     Just (Just (name, elems)) ->
       return $ Just $ Right [element name (maybeToList $ fmap ("node", ) $ getAttr "node" req) $ map NodeElement elems]
+
+  where infoName = discoInfoName "query"
+        itemsName = discoItemsName "query"
+        res
+          | elementName req == infoName = Just $ fmap (infoName, ) $ case getAttr "node" req of
+              Nothing -> Just $ emitDiscoEntity discoPEntity
+              Just node | Just (entity, _) <- M.lookup node discoPChildren -> Just $ emitDiscoEntity entity
+              _ -> Nothing
+          | elementName req == itemsName = Just $ fmap (itemsName, ) $ case getAttr "node" req of
+              Nothing -> Just $ emitDiscoItems discoPItems
+              Just node | Just (_, items) <- M.lookup node discoPChildren -> Just $ emitDiscoItems items
+              _ -> Nothing
+          | otherwise = Nothing
 discoIqHandler _ _ = return Nothing
 
 discoPlugin :: MonadSession m => [DiscoPlugin] -> m (XMPPPlugin m)

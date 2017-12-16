@@ -37,7 +37,8 @@ library
                      , Network.XMPP.XEP.Disco
                      , Network.XMPP.XEP.DateTime
                      , Network.XMPP.XEP.MUC
-  -- other-modules:       
+                     , Network.XMPP.XEP.Version
+  other-modules:       Paths_yaxmpp
   -- other-extensions:    
   build-depends:       base >=4.8
                      , bytestring
@@ -78,10 +79,8 @@ library
                      , FlexibleContexts
                      , ViewPatterns
                      , ScopedTypeVariables
-                     , PatternSynonyms
                      , ConstraintKinds
                      , MultiParamTypeClasses
-                     , ExistentialQuantification
                      , GeneralizedNewtypeDeriving
                      , NamedFieldPuns
                      , DeriveGeneric
@@ -150,32 +149,4 @@ executable irc-bridge
                      , NoMonomorphismRestriction
                      , FlexibleContexts
                      , RecordWildCards
-  ghc-options:         -Wall
-
-executable gui
-  build-depends:       base >=4.8
-                     , yaxmpp
-                     , hsqml
-                     , containers
-                     , text
-                     , bytestring
-                     , either
-                     , transformers
-                     , monad-logger
-                     , connection
-                     , dns
-                     , exceptions
-                     , lifted-base
-                     , interpolatedstring-perl6
-                     , yaml
-                     , aeson
-                     , data-default-class
-  hs-source-dirs:      gui
-  main-is:             Main.hs
-  default-language:    Haskell2010
-  default-extensions:  OverloadedStrings
-                     , LambdaCase
-                     , DeriveGeneric
-                     , TemplateHaskell
-                     , QuasiQuotes
   ghc-options:         -Wall

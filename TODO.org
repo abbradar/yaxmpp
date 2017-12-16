@@ -46,7 +46,7 @@
   - [ ] Owner list management
   - [ ] Admin list management
 - [ ] [[http://xmpp.org/extensions/xep-0184.html][XEP-0184 (Message Delivery Receipts)]]
-- [ ] [[http://xmpp.org/extensions/xep-0092.html][XEP-0092 (Software Version)]]
+- [x] [[http://xmpp.org/extensions/xep-0092.html][XEP-0092 (Software Version)]]
 - [ ] [[http://xmpp.org/extensions/xep-0115.html][XEP-0115 (Entity Capabilities)]]
 - [ ] [[http://xmpp.org/extensions/xep-0203.html][XEP-0203 (Delayed Delivery)]]
 - [ ] [[http://xmpp.org/extensions/xep-0004.html][XEP-0004 (Data Forms)]]
