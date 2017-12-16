@@ -52,6 +52,7 @@ getEntityTime sess addr = do
               , Right tz <- xmppTimeZone tzoStr
               , [utcStr] <- getEntry r "utc"
               , Right utime <- xmppZonedTime utcStr
+              -- Not strictly required but is a MUST by XEP
               , zonedTimeZone utime == utc
                 -> Right $ utcToZonedTime tz $ zonedTimeToUTC utime
     _ -> Left $ badRequest "getEntityTime: invalid response"

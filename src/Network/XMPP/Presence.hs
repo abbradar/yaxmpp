@@ -22,6 +22,7 @@ import Data.Default.Class
 import Text.InterpolatedString.Perl6 (qq)
 import Data.Map (Map)
 import qualified Data.Map as M
+import TextShow (showt)
 
 import Data.Injective
 import Network.XMPP.XML
@@ -151,7 +152,7 @@ presenceStanza (Just (Presence {..})) =
             , ostType = OutPresence Nothing
             , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceExtended
             }
-  where priority = element (jcName "priority") [] [NodeContent $ T.pack $ show presencePriority]
+  where priority = element (jcName "priority") [] [NodeContent $ showt presencePriority]
         mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
         statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
 

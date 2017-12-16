@@ -21,7 +21,6 @@ import Control.Exception.Lifted (Exception, throw)
 import GHC.Generics (Generic)
 import Data.Time.Clock
 import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -31,6 +30,7 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Data.Default.Class
+import TextShow (showt)
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
@@ -121,9 +121,9 @@ mucJoin (MUCRef {..}) addr (MUCJoinSettings { joinHistory = MUCHistorySettings {
     when (M.member (fullBare addr) pending) $ throw MUCAlreadyJoinedError
     rooms <- readIORef mucRooms
     when (M.member (fullBare addr) rooms) $ throw MUCAlreadyJoinedError
-    let historyAttrs = catMaybes [ fmap (\i -> ("maxchars", T.pack $ show i)) histMaxChars
-                                 , fmap (\i -> ("maxstanzas", T.pack $ show i)) histMaxStanzas
-                                 , fmap (\i -> ("seconds", T.pack $ show i)) histSeconds
+    let historyAttrs = catMaybes [ fmap (\i -> ("maxchars", showt i)) histMaxChars
+                                 , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
+                                 , fmap (\i -> ("seconds", showt i)) histSeconds
                                  , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
                                  ]
         xElement = element (mucName "x") []

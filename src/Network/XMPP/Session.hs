@@ -29,6 +29,7 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Network.Connection
 import Text.InterpolatedString.Perl6 (qq)
+import TextShow
 
 import Network.XMPP.XML
 import Network.XMPP.Stream
@@ -85,7 +86,7 @@ tryRestart ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
     Left err -> throwE $ ClientErrorException err
     Right s -> do
       unless (any (\case StreamManagement -> True; _ -> False) $ streamFeatures s) $ throwE StreamManagementVanished
-      streamSend s $ element (smName "resume") [("h", T.pack $ show $ rsRecvN rs), ("previd", reconnectId)] []
+      streamSend s $ element (smName "resume") [("h", showt $ rsRecvN rs), ("previd", reconnectId)] []
       eanswer <- streamRecv s
       if | elementName eanswer == smName "resumed"
            , Just nsent <- readAttr "h" eanswer
@@ -143,7 +144,7 @@ sessionThrow sess e = do
   streamThrow s e
 
 handleR :: MonadStream m => Maybe ReadSessionData -> Session m -> m ()
-handleR (Just rs) sess = sessionSend sess $ element (smName "a") [("h", T.pack $ show $ rsRecvN rs)] []
+handleR (Just rs) sess = sessionSend sess $ element (smName "a") [("h", showt $ rsRecvN rs)] []
 handleR _ _ = fail "handleQ: impossible"
 
 handleA :: MonadStream m => Session m -> Element -> m ()
