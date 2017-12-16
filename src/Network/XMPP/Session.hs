@@ -8,6 +8,7 @@ module Network.XMPP.Session
        , SessionSettings(..)
        , sessionCreate
        , sessionClose
+       , sessionIsClosed
        , sessionPeriodic
        , sessionGetStream
        ) where
@@ -72,13 +73,13 @@ applySentH h ws = ws { wsPending = go $ wsPending ws }
 
         a <=? b = (b - a) < (maxBound `div` 2)
 
-tryRestart :: MonadStream m
-           => ReconnectInfo
-           -> Maybe ReadSessionData
-           -> Maybe WriteSessionData
-           -> ConnectionInterruptionException
-           -> m (Stream m, WriteSessionData)
-tryRestart ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
+restartOrThrow :: MonadStream m
+               => ReconnectInfo
+               -> Maybe ReadSessionData
+               -> Maybe WriteSessionData
+               -> ConnectionInterruptionException
+               -> m (Stream m, WriteSessionData)
+restartOrThrow ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
   let throwE = throwM . ResumptionException e
   $(logWarn) "Trying to restart the connection"
   ns <- streamCreate reconnectSettings
@@ -92,36 +93,45 @@ tryRestart ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
            , Just nsent <- readAttr "h" eanswer
            -> do
              let ws' = applySentH nsent ws
-             handle (tryRestart ri (Just rs) (Just ws')) $ do
+             handle (restartOrThrow ri (Just rs) (Just ws')) $ do
                forM_ (wsPending ws') $ \(_, stanza) -> streamSend s stanza
                return (s, ws')
          | otherwise -> throwE ResumptionFailed
 
-tryRestart _ _ _ e = throwM e
+restartOrThrow _ _ _ e = throwM e
+
+tryRestart :: MonadStream m => Session m -> ReconnectInfo -> Maybe ReadSessionData -> Maybe WriteSessionData -> ConnectionInterruptionException -> m WriteSessionData
+tryRestart (Session {..}) ri rs ws e = do
+  s <- readIORef sessionStream
+  closed <- streamIsClosed s
+  if closed
+    then throwM e
+    else do
+      (s', ws') <- restartOrThrow ri rs ws e
+      writeIORef sessionStream s'
+      return ws'
 
 modifyRead :: MonadStream m => Session m -> (Maybe ReadSessionData -> m (Maybe ReadSessionData, a)) -> m a
-modifyRead (Session {..}) comp = modifyMVar sessionRLock tryRun
+modifyRead sess@(Session {..}) comp = modifyMVar sessionRLock tryRun
 
   where tryRun rs = handle (tryHandle rs) $ comp rs
         tryHandle rs e = case sessionReconnect of
           Nothing -> throwM e
           Just ri -> do
             modifyMVar_ sessionWLock $ \ws -> do
-              (s', ws') <- tryRestart ri rs ws e
-              writeIORef sessionStream s'
+              ws' <- tryRestart sess ri rs ws e
               return $ Just ws'
             tryRun rs
 
 modifyWrite :: MonadStream m => Session m -> (Maybe WriteSessionData -> m (Maybe WriteSessionData, a)) -> m a
-modifyWrite (Session {..}) comp = modifyMVar sessionWLock tryRun
+modifyWrite sess@(Session {..}) comp = modifyMVar sessionWLock tryRun
 
   where tryRun ws = handle (tryHandle ws) $ comp ws
         tryHandle ws e = case sessionReconnect of
           Nothing -> throwM e
           Just ri -> do
             ws' <- modifyMVar sessionRLock $ \rs -> do
-              (s', ws') <- tryRestart ri rs ws e
-              writeIORef sessionStream s'
+              ws' <- tryRestart sess ri rs ws e
               return (rs, Just ws')
             tryRun ws'
 
@@ -144,7 +154,10 @@ sessionThrow sess e = do
   streamThrow s e
 
 handleR :: MonadStream m => Maybe ReadSessionData -> Session m -> m ()
-handleR (Just rs) sess = sessionSend sess $ element (smName "a") [("h", showt $ rsRecvN rs)] []
+handleR (Just rs) sess = do
+  s <- readIORef $ sessionStream sess
+  closed <- streamIsClosed s
+  unless closed $ sessionSend sess $ element (smName "a") [("h", showt $ rsRecvN rs)] []
 handleR _ _ = fail "handleQ: impossible"
 
 handleA :: MonadStream m => Session m -> Element -> m ()
@@ -252,11 +265,16 @@ sessionCreate (SessionSettings {..}) = do
       return $ Right sess
       
 sessionClose :: MonadStream m => Session m -> m ()
-sessionClose sess = modifyMVar_ (sessionRLock sess) $ \_ -> modifyMVar (sessionWLock sess) $ \_ -> do
+sessionClose sess = modifyMVar_ (sessionWLock sess) $ \ws -> do
   s <- readIORef $ sessionStream sess
   streamClose s
-  -- Effectively prevent reconnection
-  return (Nothing, Nothing)
+  return ws
+
+sessionIsClosed :: MonadStream m => Session m -> m Bool
+sessionIsClosed sess = modifyMVar (sessionWLock sess) $ \ws -> do
+  s <- readIORef $ sessionStream sess
+  closed <- streamIsClosed s
+  return (ws, closed)
 
 sessionPeriodic :: MonadStream m => Session m -> m ()
 sessionPeriodic sess@(Session { sessionReconnect = Just _ }) = sessionSend sess $ closedElement $ smName "r"

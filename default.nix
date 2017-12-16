@@ -1,10 +1,11 @@
 { mkDerivation, aeson, attoparsec, base, base64-bytestring
 , blaze-builder, bytestring, conduit, conduit-extra, connection
 , containers, data-default-class, dns, either, exceptions
-, interpolatedstring-perl6, iproute, irc, lifted-base
-, monad-control, monad-logger, stdenv, stm, stm-conduit, stringprep
-, text, text-show, time, tls, transformers, transformers-base, uuid
-, xml-conduit, xml-types, yaml
+, haskeline, interpolatedstring-perl6, iproute, irc, lifted-base
+, monad-control, monad-logger, persistent, persistent-sqlite
+, stdenv, stm, stm-conduit, stringprep, text, text-show, time, tls
+, transformers, transformers-base, uuid, xml-conduit, xml-types
+, yaml
 }:
 mkDerivation {
   pname = "yaxmpp";
@@ -21,8 +22,9 @@ mkDerivation {
   ];
   executableHaskellDepends = [
     aeson base bytestring conduit conduit-extra connection containers
-    data-default-class dns either exceptions interpolatedstring-perl6
-    irc lifted-base monad-logger stm stm-conduit text transformers yaml
+    data-default-class dns either exceptions haskeline
+    interpolatedstring-perl6 irc lifted-base monad-logger persistent
+    persistent-sqlite stm stm-conduit text transformers yaml
   ];
   description = "Yet another XMPP implementation for Haskell";
   license = stdenv.lib.licenses.bsd3;

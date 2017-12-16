@@ -13,6 +13,7 @@ module Network.XMPP.Stream
        , streamClose
        , streamFeatures
        , streamInfo
+       , streamIsClosed
        , ConnectionSettings(..)
        , ClientError(..)
        , MonadStream
@@ -379,6 +380,7 @@ data Stream m = Stream { streamConn :: Connection
                        , streamRender :: MVar (ResumableConduit Element m (Flush ByteString))
                        , streamFeatures :: [StreamFeature]
                        , streamInfo :: StreamSettings
+                       , streamClosedFlag :: IORef Bool
                        }
 
 streamSend :: MonadStream m => Stream m -> Element -> m ()
@@ -407,12 +409,18 @@ streamThrow stream e@(StreamError {..}) = do
 
 streamClose :: MonadStream m => Stream m -> m ()
 streamClose (Stream {..}) = do
-  $(logInfo) "Closing connection"
-  render <- takeMVar streamRender
-  CL.sourceNull $$ render =$$+- CL.mapMaybe maybeFlush =$= sinkConn streamConn
-  source <- takeMVar streamSource
-  source $$+- CL.sinkNull
-  liftIO $ connectionClose streamConn
+  $(logInfo) "Closing stream"
+  modifyMVar_ streamRender $ \render -> do
+    closed <- readIORef streamClosedFlag
+    unless closed $ do
+      CL.sourceNull $$ render =$$+- CL.mapMaybe maybeFlush =$= sinkConn streamConn
+      atomicWriteIORef streamClosedFlag True
+    return $ newResumableConduit $ do
+      r <- await
+      fail $ "streamClose: stream is already closed, got " ++ show r
+
+streamIsClosed :: MonadStream m => Stream m -> m Bool
+streamIsClosed (Stream {..}) = readIORef streamClosedFlag
 
 saslAuth :: MonadStream m => Stream m -> [SASLAuthenticator r] -> m (Maybe r)
 saslAuth _ [] = return Nothing
@@ -483,6 +491,7 @@ streamCreate csettings@(ConnectionSettings {..}) =
       (streamInfo, streamSource') <- createStreamSource streamConn
       streamRender <- newMVar streamRender'
       streamSource <- newMVar streamSource'
+      streamClosedFlag <- newIORef False
 
       let stream = Stream { streamFeatures = []
                           , ..
