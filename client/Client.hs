@@ -1,5 +1,6 @@
 import Control.Monad
 import System.Environment
+import Data.List (isPrefixOf)
 import GHC.Generics (Generic)
 import qualified Data.Aeson as JSON
 import qualified Data.Yaml as Yaml
@@ -8,6 +9,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Exception (AsyncException(..))
 import Control.Monad.IO.Class
@@ -52,6 +54,10 @@ data Settings = Settings { server :: Text
                          , logFile :: FilePath
                          }
                 deriving (Show, Eq, Generic)
+
+data Command = Command { commandHandler :: (forall a. LoggingT IO a -> HL.InputT IO a) -> [String] -> HL.InputT IO ()
+                       , commandAutocomplete :: [String] -> String -> IO [HL.Completion]
+                       }
 
 instance JSON.FromJSON Settings where
 
@@ -155,62 +161,166 @@ main = do
 
           let plugins = [rosterP, subscrP, presP, imP, discoP, mucP, verP, timeP]
 
-              promptLoop :: (forall a. LoggingT IO a -> HL.InputT IO a) -> HL.InputT IO ()
+              commands = M.fromListWith (\_ _ -> error "Repeating command definitions")
+                [ ( "subscribe_from"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
+                                  runInBase $ updateSubscriptionFrom subscrRef addr should
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "subscribe_to"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
+                                  runInBase $ requestSubscriptionTo subscrRef addr should
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "msg"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                (xmppAddress . T.pack -> Right addr) : msg -> do
+                                  let imsg = plainIMMessage $ T.pack $ unwords msg
+                                  runInBase $ imSend imRef addr imsg
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "roster"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [] -> do
+                                  roster <- runInBase $ rosterGet rosterRef
+                                  HL.outputStrLn $ show roster
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "my_presence"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [] -> do
+                                  pres <- runInBase $ myPresenceGet myPresRef
+                                  HL.outputStrLn $ show pres
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "roster_presence"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [] -> do
+                                  pres <- runInBase $ rpresenceGet rpresRef
+                                  HL.outputStrLn $ show pres
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "set_presence"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(read -> online)] -> do
+                                  runInBase $ myPresenceSend myPresRef $ if online then Just def else Nothing
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "roster_insert"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right addr)] -> do
+                                  runInBase $ insertRoster rosterRef addr Nothing S.empty
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "roster_delete"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right addr)] -> do
+                                  runInBase $ deleteRoster rosterRef addr
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "disco"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right addr)] -> do
+                                  topo <- runInBase $ getDiscoTopo sess addr Nothing
+                                  case topo of
+                                    Left e -> HL.outputStrLn [qq|Failed to perform discovery: $e|]
+                                    Right r -> HL.outputStrLn $ show r
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "version"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right addr)] -> do
+                                  ver <- runInBase $ getVersion sess addr
+                                  HL.outputStrLn $ show ver
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "time"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right addr)] -> do
+                                  time <- runInBase $ getEntityTime sess addr
+                                  HL.outputStrLn $ show time
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "muc_join"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
+                                  runInBase $ mucJoin mucRef addr def $ \_ event -> do
+                                    writeMessage [qq|{bareJidToText $ fullBare addr} event: $event|]
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "mmsg"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                (xmppAddress . T.pack -> Right addr) : msg -> do
+                                  let imsg = (plainIMMessage $ T.pack $ unwords msg) { imType = MessageGroupchat }
+                                  runInBase $ imSend imRef addr imsg
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                , ( "muc_leave"
+                  , Command { commandHandler = \runInBase args -> case args of
+                                [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr))] -> do
+                                  runInBase $ mucSendPresence mucRef addr Nothing
+                                _ -> HL.outputStrLn "Invalid arguments"
+                            , commandAutocomplete = \_ _ -> return []
+                            }
+                  )
+                ]
+
+              inputCompletion = HL.completeWordWithPrev Nothing [' '] $ \prevArgs word -> do
+                case words prevArgs of
+                  [] -> return $ map HL.simpleCompletion $ filter (word `isPrefixOf`) $ M.keys commands
+                  cmd : args ->
+                    case M.lookup cmd commands of
+                      Nothing -> return []
+                      Just handler -> commandAutocomplete handler args word
+              inputSettings = HL.setComplete inputCompletion HL.defaultSettings
+
+              promptLoop :: (forall a. LoggingT IO a -> IO a) -> HL.InputT IO ()
               promptLoop runInBase = HL.getInputLine "> " >>= \case
                 Nothing -> return ()
-                Just "quit" -> return ()
-                Just cmd -> do
-                  HL.handle (\(e :: SomeException) -> HL.outputStrLn [qq|Error while executing command: $e|]) $ case words cmd of
-                    ["subscribe_from", (xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
-                      runInBase $ updateSubscriptionFrom subscrRef addr should
-                    ["subscribe_to", (xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
-                      runInBase $ requestSubscriptionTo subscrRef addr should
-                    "msg" : (xmppAddress . T.pack -> Right addr) : msg -> do
-                      let imsg = plainIMMessage $ T.pack $ unwords msg
-                      runInBase $ imSend imRef addr imsg
-                    ["roster"] -> do
-                      roster <- runInBase $ rosterGet rosterRef
-                      HL.outputStrLn $ show roster
-                    ["my_presence"] -> do
-                      pres <- runInBase $ myPresenceGet myPresRef
-                      HL.outputStrLn $ show pres
-                    ["roster_presence"] -> do
-                      pres <- runInBase $ rpresenceGet rpresRef
-                      HL.outputStrLn $ show pres
-                    ["set_presence", (read -> online)] -> do
-                      runInBase $ myPresenceSend myPresRef $ if online then Just def else Nothing
-                    ["roster_insert", (xmppAddress . T.pack -> Right addr)] -> do
-                      runInBase $ insertRoster rosterRef addr Nothing S.empty
-                    ["roster_delete", (xmppAddress . T.pack -> Right addr)] -> do
-                      runInBase $ deleteRoster rosterRef addr
-                    ["disco", (xmppAddress . T.pack -> Right addr)] -> do
-                      topo <- runInBase $ getDiscoTopo sess addr Nothing
-                      case topo of
-                        Left e -> HL.outputStrLn [qq|Failed to perform discovery: $e|]
-                        Right r -> HL.outputStrLn $ show r
-                    ["version", (xmppAddress . T.pack -> Right addr)] -> do
-                      ver <- runInBase $ getVersion sess addr
-                      HL.outputStrLn $ show ver
-                    ["time", (xmppAddress . T.pack -> Right addr)] -> do
-                      time <- runInBase $ getEntityTime sess addr
-                      HL.outputStrLn $ show time
-                    ["muc_join", (xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
-                      runInBase $ mucJoin mucRef addr def $ \muc event -> do
-                        writeMessage [qq|{bareJidToText $ fullBare addr} event: $event|]
-                    "mmsg" : (xmppAddress . T.pack -> Right addr) : msg -> do
-                      let imsg = (plainIMMessage $ T.pack $ unwords msg) { imType = MessageGroupchat }
-                      runInBase $ imSend imRef addr imsg
-                    ["muc_leave", (xmppAddress . T.pack -> Right (bareJidGet -> Just addr))] -> do
-                      runInBase $ mucSendPresence mucRef addr Nothing
-                    [] -> return ()
-                    _ -> HL.outputStrLn "Unknown command"
-                  promptLoop runInBase
+                Just cmdStr -> case words cmdStr of
+                  [] -> promptLoop runInBase
+                  ["quit"] -> return ()
+                  cmd : args -> case M.lookup cmd commands of
+                    Just handler -> do
+                      HL.handle (\(e :: SomeException) -> HL.outputStrLn [qq|Error while executing command: $e|]) $ commandHandler handler (liftIO . runInBase) args
+                      promptLoop runInBase
+                    Nothing -> HL.outputStrLn "Unknown command"
 
-              promptThread = control $ \runInBase -> HL.runInputT HL.defaultSettings $ do
+              promptThread = control $ \runInBase -> HL.runInputT inputSettings $ do
                 printFunc <- HL.getExternalPrint
                 let writeThread = forever (fmap (++ "\n") (readChan consoleChan) >>= printFunc)
                 HL.bracket (liftIO $ forkWithUnmask $ criticalThread writeThread) (liftIO . killThread) $ \_ -> do
-                  promptLoop (liftIO . runInBase)
+                  promptLoop runInBase
 
           withAsyncWithUnmask (\unmask -> unmask promptThread `finally` terminate) $ \_ -> do
             let checkClosed e@ConnectionClosedException = do
