@@ -112,19 +112,16 @@ parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
 presenceInHandler :: MonadStream m => PresenceRef m -> PluginInHandler m
-presenceInHandler pref@(PresenceRef {..}) (InStanza { istFrom = Just addr, istType = InPresence (Right (presenceOp -> Just op)), istChildren }) = Just <$> do
-  case fullJidGet addr of
-    Nothing -> return $ Just $ jidMalformed "presenceInHandler: Presence should be announced for a full-specified JID"
-    Just faddr ->
-      case op of
-        PresenceSet -> case parsePresence istChildren of
-          Right p -> do
-            emitPresence pref faddr $ Right p
-            return Nothing
-          Left e -> return $ Just e
-        PresenceUnset -> do
-            emitPresence pref faddr $ Left $ parseExtended istChildren
-            return Nothing
+presenceInHandler pref@(PresenceRef {..}) stanza@(InStanza { istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren }) = Just <$> do
+  case op of
+    PresenceSet -> case parsePresence istChildren of
+      Right p -> do
+        emitPresence pref faddr $ Right p
+        return Nothing
+      Left e -> return $ Just e
+    PresenceUnset -> do
+        emitPresence pref faddr $ Left $ parseExtended istChildren
+        return Nothing
 presenceInHandler _ _ = return Nothing
 
 presencePlugin :: MonadStream m => [PresenceHandler m] -> m (XMPPPlugin m)

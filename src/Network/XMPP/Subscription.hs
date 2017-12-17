@@ -20,6 +20,7 @@ import Network.XMPP.Plugin
 
 data SubscriptionStatus = WeSubscribed
                         | WeUnsubscribed
+                        | WePending
                         | TheyRequested
                         | TheyUnsubscribed
                         deriving (Show, Eq)
@@ -29,19 +30,24 @@ data SubscriptionRef m = SubscriptionRef { subscriptionHandler :: Handler m (Bar
                                          }
 
 subscriptionInHandler :: MonadStream m => SubscriptionRef m -> PluginInHandler m
-subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr) })
-  | typ == PresenceSubscribed = do
+subscriptionInHandler (SubscriptionRef {..}) (InStanza { istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr) }) =
+  case typ of
+    PresenceSubscribed -> do
       Handler.call subscriptionHandler (addr, WeSubscribed)
       return $ Just Nothing
-  | typ == PresenceUnsubscribed = do
+    PresenceUnsubscribed -> do
       Handler.call subscriptionHandler (addr, WeUnsubscribed)
       return $ Just Nothing
-  | typ == PresenceSubscribe = do
+    PresenceSubscribe -> do
       Handler.call subscriptionHandler (addr, TheyRequested)
       return $ Just Nothing
-  | typ == PresenceUnsubscribe = do
+    PresenceUnsubscribe -> do
       Handler.call subscriptionHandler (addr, TheyUnsubscribed)
       return $ Just Nothing
+    PresenceUnavailable -> do
+      Handler.call subscriptionHandler (addr, WePending)
+      return $ Just Nothing
+    _ -> return Nothing
 subscriptionInHandler _ _ = return Nothing
 
 requestSubscriptionTo :: MonadStream m => SubscriptionRef m -> BareJID -> Bool -> m ()

@@ -190,11 +190,8 @@ instance ToJSON BareJID where
   toJSON = toJSON . bareJidAddress
 
 bareJidGet :: XMPPAddress -> Maybe BareJID
-bareJidGet addr = do
-  bareLocal <- addressLocal addr
-  return BareJID { bareDomain = addressDomain addr
-                 , ..
-                 }
+bareJidGet XMPPAddress { addressLocal = Just bareLocal, addressDomain = bareDomain, addressResource = Nothing } = Just BareJID {..}
+bareJidGet _ = Nothing
 
 data FullJID = FullJID { fullBare :: BareJID
                        , fullResource :: XMPPResource
@@ -221,7 +218,7 @@ instance ToJSON FullJID where
   toJSON = toJSON . fullJidAddress
 
 fullJidGet :: XMPPAddress -> Maybe FullJID
-fullJidGet addr = do
-  fullBare <- bareJidGet addr
-  fullResource <- addressResource addr
-  return FullJID {..}
+fullJidGet XMPPAddress {..} = do
+  bareLocal <- addressLocal
+  fullResource <- addressResource
+  return FullJID { fullBare = BareJID { bareDomain = addressDomain, .. }, .. }

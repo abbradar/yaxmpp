@@ -310,11 +310,12 @@ main = do
                 Just cmdStr -> case words cmdStr of
                   [] -> promptLoop runInBase
                   ["quit"] -> return ()
-                  cmd : args -> case M.lookup cmd commands of
-                    Just handler -> do
-                      HL.handle (\(e :: SomeException) -> HL.outputStrLn [qq|Error while executing command: $e|]) $ commandHandler handler (liftIO . runInBase) args
-                      promptLoop runInBase
-                    Nothing -> HL.outputStrLn "Unknown command"
+                  cmd : args -> do
+                    case M.lookup cmd commands of
+                      Just handler -> do
+                        HL.handle (\(e :: SomeException) -> HL.outputStrLn [qq|Error while executing command: $e|]) $ commandHandler handler (liftIO . runInBase) args
+                      Nothing -> HL.outputStrLn "Unknown command"
+                    promptLoop runInBase
 
               promptThread = control $ \runInBase -> HL.runInputT inputSettings $ do
                 printFunc <- HL.getExternalPrint
