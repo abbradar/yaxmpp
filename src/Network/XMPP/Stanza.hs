@@ -355,7 +355,7 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
         | ename == jcName "iq" = sendError err
         | otherwise = $(logWarn) [qq|Error in received non-IQ stanza: $err|]
       getAddr name = mapM extractAddr $ getAttr name e
-        where extractAddr addr = checkOrFail (parseValue xmppAddress addr) $ sendErrorOnIq $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
+        where extractAddr addr = checkOrFail (toRight $ xmppAddress addr) $ sendErrorOnIq $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
 
       ename = elementName e
       payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e

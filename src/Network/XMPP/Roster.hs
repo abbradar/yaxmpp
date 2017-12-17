@@ -17,6 +17,7 @@ module Network.XMPP.Roster
 import Data.Maybe
 import Data.List
 import Control.Monad
+import Control.Monad.Logger
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Set (Set)
@@ -106,7 +107,7 @@ rosterName :: Text -> Name
 rosterName = nsName "jabber:iq:roster"
 
 okHandler :: MonadStream m => ResponseIQHandler m
-okHandler (Left (err, _)) = fail [qq|okHandler: error while updating a roster: $err|]
+okHandler (Left (err, _)) = $(logError) [qq|okHandler: error while updating a roster: $err|]
 okHandler (Right _) = return ()
 
 data RosterEvent = RosterInsert XMPPAddress RosterEntry
@@ -140,7 +141,7 @@ deleteRoster (RosterRef {..}) jid = do
 parseInitial :: Element -> Either Text (XMPPAddress, RosterEntry)
 parseInitial e = do
   unless (elementName e == rosterName "item") $ Left [qq|parseInitial: invalid roster item $e|]
-  jid <- case getAttr "jid" e >>= parseValue xmppAddress of
+  jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
     Nothing -> Left "parseInitial: malformed jid"
     Just r -> return r
   rentrySubscription <- case injFrom $ fromMaybe "none" $ getAttr "subscription" e of
@@ -170,7 +171,7 @@ handleFirstRequest (RosterRef {..}) mold resp = do
 getRosterEvent :: Element -> Either StanzaError RosterEvent
 getRosterEvent e = do
   unless (elementName e == rosterName "item") $ Left $ badRequest [qq|getRosterEvent: invalid roster item $e|]
-  jid <- case getAttr "jid" e >>= parseValue xmppAddress of
+  jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
     Nothing -> Left $ jidMalformed "getRosterEvent: invalid jid in roster push"
     Just r -> return r
   let subscr = fromMaybe "none" (getAttr "subscription" e)

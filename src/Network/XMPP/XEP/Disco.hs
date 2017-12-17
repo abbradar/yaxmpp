@@ -114,9 +114,9 @@ parseDiscoItems :: Element -> Either StanzaError DiscoItems
 parseDiscoItems re = parseNamed re (discoItemsName "item") getItem
   where getItem e = do
           address' <- requiredAttr "jid" e
-          address <- case parseValue xmppAddress address' of
-            Nothing -> Left $ jidMalformed [qq|parseDiscoItems: malformed jid {address'}|]
-            Just r -> return r
+          address <- case xmppAddress address' of
+            Left err -> Left $ jidMalformed [qq|parseDiscoItems: malformed jid {address'}: {err}|]
+            Right r -> return r
           let node = getAttr "node" e
           return (address, node)
 

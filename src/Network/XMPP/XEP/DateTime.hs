@@ -27,6 +27,8 @@ import Data.Attoparsec.Text
 import TextShow
 import TextShow.Data.Integral
 
+import Network.XMPP.Utils
+
 --
 -- Helpers
 --
@@ -60,7 +62,7 @@ xmppDay' = do
     Nothing -> fail "xmppDay': invalid Gregorian date"
 
 xmppDay :: Text -> Either String Day
-xmppDay = parseOnly (xmppDay' <* endOfInput)
+xmppDay = parseValue xmppDay'
 
 xmppTimeZone' :: Parser TimeZone
 xmppTimeZone' = (utc <$ char 'Z') <|> nonUtc
@@ -75,7 +77,7 @@ xmppTimeZone' = (utc <$ char 'Z') <|> nonUtc
           return $ minutesToTimeZone $ signC * (60 * hour + minute)
 
 xmppTimeZone :: Text -> Either String TimeZone
-xmppTimeZone = parseOnly (xmppTimeZone' <* endOfInput)
+xmppTimeZone = parseValue xmppTimeZone'
 
 xmppTimeOfDay' :: Parser TimeOfDay
 xmppTimeOfDay' = do
@@ -93,7 +95,7 @@ xmppTimeOfDay' = do
   return time
 
 xmppTimeOfDay :: Text -> Either String TimeOfDay
-xmppTimeOfDay = parseOnly (xmppTimeOfDay' <* endOfInput)
+xmppTimeOfDay = parseValue xmppTimeOfDay'
 
 xmppZonedTime' :: Parser ZonedTime
 xmppZonedTime' = do
@@ -104,7 +106,7 @@ xmppZonedTime' = do
   return $ ZonedTime (LocalTime date time) tz
 
 xmppZonedTime :: Text -> Either String ZonedTime
-xmppZonedTime = parseOnly (xmppZonedTime' <* endOfInput)
+xmppZonedTime = parseValue xmppZonedTime'
 
 --
 -- Renderers

@@ -9,6 +9,7 @@ module Network.XMPP.Address
        , resourceText
        , resourceFromText
        , XMPPAddress(..)
+       , xmppAddress'
        , xmppAddress
        , addressToText
        , addressBare
@@ -67,14 +68,14 @@ instance Show XMPPAddress where
   show = show . addressToText
 
 instance FromJSON XMPPAddress where
-  parseJSON = withText "XMPPAddress" $ \t -> case parseValue xmppAddress t of
-    Nothing -> fail "XMPPAddress"
-    Just r -> return r
+  parseJSON = withText "XMPPAddress" $ \t -> case xmppAddress t of
+    Left e -> fail e
+    Right r -> return r
 
 instance FromJSONKey XMPPAddress where
-  fromJSONKey = FromJSONKeyTextParser $ \k -> case parseValue xmppAddress k of
-    Nothing -> fail "XMPPAddress"
-    Just r -> return r
+  fromJSONKey = FromJSONKeyTextParser $ \k -> case xmppAddress k of
+    Left e -> fail e
+    Right r -> return r
 
 instance ToJSON XMPPAddress where
   toJSON = toJSON . addressToText
@@ -113,8 +114,8 @@ resourcePrepProfile =
           , shouldCheckBidi = True
           }
 
-xmppAddress :: Parser XMPPAddress
-xmppAddress = do
+xmppAddress' :: Parser XMPPAddress
+xmppAddress' = do
   first <- takeTill (\c -> c == '@' || c == '/')
   sep <- optional anyChar
   case sep of
@@ -147,6 +148,9 @@ xmppAddress = do
   where checkLocal = maybeFail "xmppAddress: localpart doesn't satisfy Nodeprep profile of stringprep" . localFromText
         checkDomain = maybeFail "xmppAddress: domainpart doesn't satisfy Nameprep profile of stringprep" . domainFromText
         checkResource = maybeFail "xmppAddress: resourcepart doesn't satisfy Resourceprep profile of stringprep" . resourceFromText
+
+xmppAddress :: Text -> Either String XMPPAddress
+xmppAddress = parseValue xmppAddress'
 
 addressToText :: XMPPAddress -> Text
 addressToText (XMPPAddress {..}) =

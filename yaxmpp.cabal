@@ -134,7 +134,10 @@ executable client
                      , bytestring
                      , either
                      , transformers
+                     , transformers-base
                      , monad-logger
+                     , monad-control
+                     , fast-logger
                      , connection
                      , dns
                      , exceptions
@@ -157,4 +160,6 @@ executable client
                      , QuasiQuotes
                      , FlexibleContexts
                      , ScopedTypeVariables
+                     , ViewPatterns
+                     , RankNTypes
   ghc-options:         -Wall
