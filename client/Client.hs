@@ -8,7 +8,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL
-import qualified Data.Map as M
+import qualified Data.Set as S
 import Control.Exception (AsyncException(..))
 import Control.Monad.IO.Class
 import Control.Monad.Catch
@@ -33,6 +33,7 @@ import Network.XMPP.Plugin
 import Network.XMPP.Roster
 import Network.XMPP.Address
 import Network.XMPP.Subscription
+import Network.XMPP.Language
 import Network.XMPP.Presence
 import Network.XMPP.Presence.Myself
 import Network.XMPP.Presence.Roster
@@ -63,7 +64,7 @@ main = do
                                   , Handler (\(e :: SomeException) -> throwTo mainTid e)
                                   ]
 
-  settingsFile:_ <- liftIO getArgs
+  [settingsFile] <- liftIO getArgs
   Just settings <- liftIO $ Yaml.decodeFile settingsFile
   logChanFile <- newChan
   logChanTerm <- dupChan logChanFile
@@ -134,16 +135,8 @@ main = do
           rosterSetHandler rosterRef $ \(_, event) -> do
             writeMessage [qq|Got roster update: $event|]
 
-          subscriptionSetHandler subscrRef $ \(addr, stat) -> void $ forkWithUnmask $ criticalThread $ do
+          subscriptionSetHandler subscrRef $ \(addr, stat) -> do
             writeMessage [qq|Got subscription update for $addr: $stat|]
-            case stat of
-              TheyRequested -> updateSubscriptionFrom subscrRef addr True
-              TheyUnsubscribed -> do
-                -- XXX: Prosody has a bug when it sends "unsubscribed" events without according subscription request.
-                let fullAddr = bareJidAddress addr
-                roster <- rosterGet rosterRef
-                when (fullAddr `M.member` rosterEntries roster) $ deleteRoster rosterRef $ bareJidAddress addr
-              _ -> return ()
 
           myPresenceSetHandler myPresRef $ \event -> do
             writeMessage [qq|Got presence update for myself: $event|]
@@ -151,45 +144,64 @@ main = do
           rpresenceSetHandler rpresRef $ \event -> do
             writeMessage [qq|Got presence update for roster: $event|]
 
-          imSetHandler imRef $ \(addr, msg) -> void $ forkWithUnmask $ criticalThread $ do
-            ver <- getVersion sess addr
-            time <- getEntityTime sess addr
-            writeMessage [qq|Got message from $addr, version: $ver, time $time|]
-            case imType msg of
-              MessageGroupchat -> imSend imRef (addressBare addr) (msg { imExtended = [] })
-              _ -> imSend imRef addr (msg { imExtended = [] })
+          imSetHandler imRef $ \(addr, msg) -> do
+            let text = localizedGet (Just "en") $ imBody msg
+            writeMessage [qq|{addressToText addr}: $text|]
 
           mucSetHandler mucRef $ \event -> do
             writeMessage [qq|Got MUC event: $event|]
 
-          _ <- fork $ flip onException terminate $ do
-            rst <- rosterGet rosterRef
-            writeMessage [qq|Got initial roster: $rst|]
-            myPresenceSend myPresRef $ Just def
-            -- insertRoster rosterRef (bareJidAddress $ pal settings) (Just "Best pal") (S.fromList ["Pals"])
-            -- requestSubscription subscrRef $ pal settings
-            -- mucJoin mucRef (conference settings) def $ \_ event -> do
-            --   $(logInfo) [qq|Got event from MUC room that I joined: $event|]
-
-          -- _ <- fork $ do
-          --   topo <- getDiscoTopo sess (fromJust $ readXMPPAddress $ server settings) Nothing
-          --   case topo of
-          --     Left e -> $(logWarn) [qq|Failed to perform discovery on {server settings}: $e|]
-          --     Right r -> $(logDebug) [qq|Discovery result: $r|]
+          myPresenceSend myPresRef $ Just def
 
           let plugins = [rosterP, subscrP, presP, imP, discoP, mucP, verP, timeP]
 
-          let promptLoop runInBase = HL.getInputLine "> " >>= \case
+              promptLoop :: (forall a. LoggingT IO a -> HL.InputT IO a) -> HL.InputT IO ()
+              promptLoop runInBase = HL.getInputLine "> " >>= \case
                 Nothing -> return ()
                 Just "quit" -> return ()
                 Just cmd -> do
-                  case words cmd of
-                    ["subscribe_from", xmppAddress . T.pack -> Right (bareJidGet -> Just addr), read -> should] -> do
+                  HL.handle (\(e :: SomeException) -> HL.outputStrLn [qq|Error while executing command: $e|]) $ case words cmd of
+                    ["subscribe_from", (xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
                       runInBase $ updateSubscriptionFrom subscrRef addr should
-                    ["subscribe_to", xmppAddress . T.pack -> Right (bareJidGet -> Just addr), read -> should] -> do
+                    ["subscribe_to", (xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
                       runInBase $ requestSubscriptionTo subscrRef addr should
-                    ["roster_delete", xmppAddress . T.pack -> Right addr] -> do
+                    "msg" : (xmppAddress . T.pack -> Right addr) : msg -> do
+                      let imsg = plainIMMessage $ T.pack $ unwords msg
+                      runInBase $ imSend imRef addr imsg
+                    ["roster"] -> do
+                      roster <- runInBase $ rosterGet rosterRef
+                      HL.outputStrLn $ show roster
+                    ["my_presence"] -> do
+                      pres <- runInBase $ myPresenceGet myPresRef
+                      HL.outputStrLn $ show pres
+                    ["roster_presence"] -> do
+                      pres <- runInBase $ rpresenceGet rpresRef
+                      HL.outputStrLn $ show pres
+                    ["set_presence", (read -> online)] -> do
+                      runInBase $ myPresenceSend myPresRef $ if online then Just def else Nothing
+                    ["roster_insert", (xmppAddress . T.pack -> Right addr)] -> do
+                      runInBase $ insertRoster rosterRef addr Nothing S.empty
+                    ["roster_delete", (xmppAddress . T.pack -> Right addr)] -> do
                       runInBase $ deleteRoster rosterRef addr
+                    ["disco", (xmppAddress . T.pack -> Right addr)] -> do
+                      topo <- runInBase $ getDiscoTopo sess addr Nothing
+                      case topo of
+                        Left e -> HL.outputStrLn [qq|Failed to perform discovery: $e|]
+                        Right r -> HL.outputStrLn $ show r
+                    ["version", (xmppAddress . T.pack -> Right addr)] -> do
+                      ver <- runInBase $ getVersion sess addr
+                      HL.outputStrLn $ show ver
+                    ["time", (xmppAddress . T.pack -> Right addr)] -> do
+                      time <- runInBase $ getEntityTime sess addr
+                      HL.outputStrLn $ show time
+                    ["muc_join", (xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
+                      runInBase $ mucJoin mucRef addr def $ \muc event -> do
+                        writeMessage [qq|{bareJidToText $ fullBare addr} event: $event|]
+                    "mmsg" : (xmppAddress . T.pack -> Right addr) : msg -> do
+                      let imsg = (plainIMMessage $ T.pack $ unwords msg) { imType = MessageGroupchat }
+                      runInBase $ imSend imRef addr imsg
+                    ["muc_leave", (xmppAddress . T.pack -> Right (bareJidGet -> Just addr))] -> do
+                      runInBase $ mucSendPresence mucRef addr Nothing
                     [] -> return ()
                     _ -> HL.outputStrLn "Unknown command"
                   promptLoop runInBase

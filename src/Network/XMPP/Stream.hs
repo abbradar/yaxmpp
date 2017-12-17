@@ -287,7 +287,7 @@ parseFeatures stream e
           | elementName f == bindName "bind" = return $ Just BindResource
           | elementName f == rosterVerName "ver" = return $ Just RosterVersioning
           | otherwise = do
-              $(logWarn) [qq|Unknown feature: {showElement f}|]
+              $(logInfo) [qq|Unknown feature: {showElement f}|]
               return Nothing
 
         parseOne _ = return Nothing

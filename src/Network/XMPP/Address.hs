@@ -16,9 +16,11 @@ module Network.XMPP.Address
        , BareJID(..)
        , bareJidGet
        , bareJidAddress
+       , bareJidToText
        , FullJID(..)
        , fullJidGet
        , fullJidAddress
+       , fullJidToText
        ) where
 
 import Data.Monoid
@@ -168,8 +170,14 @@ data BareJID = BareJID { bareLocal :: XMPPLocal
                        }
              deriving (Eq, Ord)
 
+bareJidAddress :: BareJID -> XMPPAddress
+bareJidAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
+
+bareJidToText :: BareJID -> Text
+bareJidToText = addressToText . bareJidAddress
+
 instance Show BareJID where
-  show = show . bareJidAddress
+  show = show . bareJidToText
 
 instance FromJSON BareJID where
   parseJSON v = do
@@ -188,16 +196,19 @@ bareJidGet addr = do
                  , ..
                  }
 
-bareJidAddress :: BareJID -> XMPPAddress
-bareJidAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
-
 data FullJID = FullJID { fullBare :: BareJID
                        , fullResource :: XMPPResource
                        }
              deriving (Eq, Ord)
 
+fullJidAddress :: FullJID -> XMPPAddress
+fullJidAddress (FullJID {..}) = XMPPAddress (Just $ bareLocal fullBare) (bareDomain fullBare) (Just fullResource)
+
+fullJidToText :: FullJID -> Text
+fullJidToText = addressToText . fullJidAddress
+
 instance Show FullJID where
-  show = show . fullJidAddress
+  show = show . fullJidToText
 
 instance FromJSON FullJID where
   parseJSON v = do
@@ -214,6 +225,3 @@ fullJidGet addr = do
   fullBare <- bareJidGet addr
   fullResource <- addressResource addr
   return FullJID {..}
-
-fullJidAddress :: FullJID -> XMPPAddress
-fullJidAddress (FullJID {..}) = XMPPAddress (Just $ bareLocal fullBare) (bareDomain fullBare) (Just fullResource)

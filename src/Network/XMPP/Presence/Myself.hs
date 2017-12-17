@@ -19,8 +19,10 @@ import Network.XMPP.Stanza
 import Network.XMPP.Address
 import Network.XMPP.Presence
 
+type MyselfPresenceMap = Map XMPPResource Presence
+
 data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (PresenceEvent XMPPResource)
-                                     , myPresence :: IORef (Map XMPPResource Presence)
+                                     , myPresence :: IORef MyselfPresenceMap
                                      , myPresenceSession :: StanzaSession m
                                      , myBareAddress :: BareJID
                                      }
@@ -32,12 +34,12 @@ myPresencePHandler (MyPresenceRef {..}) (FullJID {..}) pres
       case presenceUpdate fullResource pres presences of
         Nothing -> return False
         Just (presences', event) -> do
-          writeIORef myPresence presences'
+          atomicWriteIORef myPresence presences'
           Handler.call myPresenceHandler event
           return True
 myPresencePHandler _ _ _ = return False
 
-myPresenceGet :: MonadStream m => MyPresenceRef m -> m (Map XMPPResource Presence)
+myPresenceGet :: MonadStream m => MyPresenceRef m -> m MyselfPresenceMap
 myPresenceGet = readIORef . myPresence
 
 myPresenceSetHandler :: MonadStream m => MyPresenceRef m -> (PresenceEvent XMPPResource -> m ()) -> m ()

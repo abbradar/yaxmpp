@@ -55,7 +55,7 @@ data RoomEvent = RoomPresence (PresenceEvent XMPPResource)
 
 type MUCHandler m = MUC -> RoomEvent -> m ()
 
-data MUC = MUC { mucSubject :: Text
+data MUC = MUC { mucSubject :: Maybe (XMPPResource, Text)
                , mucMembers :: Map XMPPResource Presence
                , mucNick :: XMPPResource
                }
@@ -132,7 +132,7 @@ mucJoin (MUCRef {..}) addr (MUCJoinSettings { joinHistory = MUCHistorySettings {
         presStanza = presenceStanza $ Just joinPresence { presenceExtended = xElement : presenceExtended joinPresence }
     _ <- stanzaSend mucSession $ presStanza { ostTo = Just $ fullJidAddress $ addr { fullResource = resource' }
                                            }
-    let pmuc = MUC { mucSubject = ""
+    let pmuc = MUC { mucSubject = Nothing
                    , mucMembers = M.empty
                    , mucNick = resource'
                    , ..
@@ -166,19 +166,17 @@ mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr),
       Handler.call mucEventHandler $ MUCRejected addr err
       return $ Just Nothing
     else return Nothing
-mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr), istType = InMessage (Right MessageGroupchat), istChildren }) =
+mucInHandler (MUCRef {..}) (InStanza { istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage (Right MessageGroupchat), istChildren }) =
   case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
     [subjE] -> do
-      let bare = fullBare addr
-          resource = fullResource addr
-          subj = mconcat $ fromElement subjE $/ content
       rooms <- readIORef mucRooms
       case M.lookup bare rooms of
-        Just (room, handler) | mucNick room == resource -> do
-                                 let room' = room { mucSubject = subj }
-                                 writeIORef mucRooms $ M.insert bare (room', handler) rooms
-                                 handler room' RoomSubject
-                                 return $ Just Nothing
+        Just (room, handler) -> do
+          let subj = fmap (, mconcat $ fromElement subjE $/ content) $ addressResource addr
+              room' = room { mucSubject = subj }
+          writeIORef mucRooms $ M.insert bare (room', handler) rooms
+          handler room' RoomSubject
+          return $ Just Nothing
         _ -> return Nothing
     _ -> return Nothing
 mucInHandler _ _ = return Nothing
@@ -187,44 +185,46 @@ mucPresenceHandler :: MonadStream m => MUCRef m -> PresenceHandler m
 mucPresenceHandler (MUCRef {..}) addr mpres = do
   let bare = fullBare addr
       resource = fullResource addr
-  mProcessed <- modifyMVar mucPending $ \pending ->
-    case M.lookup bare pending of
-      Just (room@(MUC {..}), handler) -> case mpres of
-        Right pres ->
-          let members = M.insert resource pres mucMembers
-              room' = room { mucMembers = members }
-          in if resource == mucNick
-             then do
-               modifyIORef mucRooms $ M.insert bare (room', handler)
-               return (M.delete bare pending, Just $ Just $ MUCJoined addr room')
-             else return (M.insert bare (room', handler) pending, Just Nothing)
-        Left err | resource == mucNick -> return (M.delete bare pending, Just $ Just $ MUCLeft addr err)
-        Left _ ->
-          let members = M.delete resource mucMembers
-              room' = room { mucMembers = members }
-          in return (M.insert bare (room', handler) pending, Just Nothing)
-      Nothing -> return (pending, Nothing)
-  case mProcessed of
-    Just (Just msg) -> do
-      Handler.call mucEventHandler msg
-      return True
-    Just Nothing -> return True
-    Nothing -> do
-      rooms <- readIORef mucRooms
-      case M.lookup bare rooms of
-        Just (MUC {..}, _) | Left err <- mpres, resource == mucNick -> do
-                               writeIORef mucRooms $ M.delete bare rooms
-                               Handler.call mucEventHandler $ MUCLeft addr err
-                               return True
-        Just (room@(MUC {..}), handler) -> do
-          case presenceUpdate resource mpres mucMembers of
-            Nothing -> return False
-            Just (members, event) -> do
-              let room' = room { mucMembers = members }
-              writeIORef mucRooms $ M.insert bare (room', handler) rooms
-              handler room' $ RoomPresence event
-              return True
-        Nothing -> return False
+  rooms <- readIORef mucRooms
+  rProcessed <- do
+    case M.lookup bare rooms of
+      Just (MUC {..}, _) | Left err <- mpres, resource == mucNick -> do
+                              atomicWriteIORef mucRooms $ M.delete bare rooms
+                              Handler.call mucEventHandler $ MUCLeft addr err
+                              return True
+      Just (room@(MUC {..}), handler) -> do
+        case presenceUpdate resource mpres mucMembers of
+          Nothing -> return False
+          Just (members, event) -> do
+            let room' = room { mucMembers = members }
+            atomicWriteIORef mucRooms $ M.insert bare (room', handler) rooms
+            handler room' $ RoomPresence event
+            return True
+      Nothing -> return False
+  if rProcessed then return True else do
+    mProcessed <- modifyMVar mucPending $ \pending ->
+      case M.lookup bare pending of
+        Just (room@(MUC {..}), handler) -> case mpres of
+          Right pres ->
+            let members = M.insert resource pres mucMembers
+                room' = room { mucMembers = members }
+            in if resource == mucNick
+              then do
+                atomicWriteIORef mucRooms $ M.insert bare (room', handler) rooms
+                return (M.delete bare pending, Just $ Just $ MUCJoined addr room')
+              else return (M.insert bare (room', handler) pending, Just Nothing)
+          Left err | resource == mucNick -> return (M.delete bare pending, Just $ Just $ MUCLeft addr err)
+          Left _ ->
+            let members = M.delete resource mucMembers
+                room' = room { mucMembers = members }
+            in return (M.insert bare (room', handler) pending, Just Nothing)
+        Nothing -> return (pending, Nothing)
+    case mProcessed of
+      Just (Just msg) -> do
+        Handler.call mucEventHandler msg
+        return True
+      Just Nothing -> return True
+      Nothing -> return False
 
 mucSetHandler :: MonadStream m => MUCRef m -> (MUCEvent -> m ()) -> m ()
 mucSetHandler (MUCRef {..}) = Handler.set mucEventHandler

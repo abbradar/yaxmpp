@@ -1,6 +1,7 @@
 module Network.XMPP.Presence.Roster
   ( RosterPresenceMap
   , RosterPresenceRef
+  , rpresenceGet
   , rpresenceSetHandler
   , rpresencePlugin
   ) where
@@ -58,10 +59,13 @@ rpresencePHandler (RosterPresenceRef {..}) full presUpd = do
       case rosterUpdate full presUpd rpres of
         Nothing -> return False
         Just (pres', event) -> do
-          writeIORef rpresenceRef pres'
+          atomicWriteIORef rpresenceRef pres'
           Handler.call rpresenceHandler event
           return True
     else return False
+
+rpresenceGet :: MonadStream m => RosterPresenceRef m -> m RosterPresenceMap
+rpresenceGet = readIORef . rpresenceRef
 
 rpresenceSetHandler :: MonadStream m => RosterPresenceRef m -> (RosterPresenceEvent -> m ()) -> m ()
 rpresenceSetHandler (RosterPresenceRef {..}) = Handler.set rpresenceHandler
