@@ -7,7 +7,6 @@ module Network.SASL
        , plainAuth
        ) where
 
-import Data.Monoid
 import Data.ByteString (ByteString)
 
 data ClientMessage = SASLResponse ByteString

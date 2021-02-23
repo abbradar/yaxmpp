@@ -62,7 +62,7 @@ curAnyElement = anyElement &| curElement
 
 showElement :: Element -> Text
 showElement e = T.decodeUtf8 $ BB.toByteString $ mconcat bs
-  where bs = runIdentity $ CL.sourceList (XMLU.elementToEvents $ toXMLElement e) $$ XMLR.renderBuilder def =$= CL.consume
+  where bs = runIdentity $ runConduit $ CL.sourceList (XMLU.elementToEvents $ toXMLElement e) .| XMLR.renderBuilder def .| CL.consume
 
 getAttr :: Name -> Element -> Maybe Text
 getAttr n e = M.lookup n $ elementAttributes e

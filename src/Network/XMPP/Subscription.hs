@@ -9,7 +9,6 @@ module Network.XMPP.Subscription
   ) where
 
 import Control.Monad
-import Data.Default.Class
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
@@ -71,5 +70,5 @@ subscriptionPlugin :: MonadStream m => StanzaSession m -> m (XMPPPlugin m, Subsc
 subscriptionPlugin subscriptionSession = do
   subscriptionHandler <- Handler.new
   let subscriptionRef = SubscriptionRef {..}
-      plugin = def { pluginInHandler = subscriptionInHandler subscriptionRef }
+      plugin = emptyPlugin { pluginInHandler = subscriptionInHandler subscriptionRef }
   return (plugin, subscriptionRef)

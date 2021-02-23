@@ -37,7 +37,7 @@ module Network.XMPP.Stanza
 import Data.Maybe
 import Control.Monad
 import Data.Text (Text)
-import Control.Concurrent.MVar.Lifted
+import UnliftIO.MVar
 import Control.Monad.Trans.Class
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Maybe
@@ -47,8 +47,7 @@ import qualified Data.Map as M
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import Text.InterpolatedString.Perl6 (qq)
-import Data.Default.Class
+import Data.String.Interpolate (i)
 import Data.UUID (UUID)
 import qualified Data.UUID.V4 as UUID
 import qualified Data.UUID as UUID
@@ -132,39 +131,39 @@ data StanzaError = StanzaError { szeType :: StanzaErrorType
                                }
                  deriving (Show, Eq)
 
-instance Default StanzaError where
-  def = StanzaError { szeType = SzCancel
-                    , szeCondition = ScUndefinedCondition
-                    , szeText = Nothing
-                    , szeChildren = []
-                    }
+undefinedError :: StanzaError
+undefinedError = StanzaError { szeType = SzCancel
+                             , szeCondition = ScUndefinedCondition
+                             , szeText = Nothing
+                             , szeChildren = []
+                             }
 
 badRequest :: Text -> StanzaError
-badRequest desc = def { szeType = SzModify
-                      , szeCondition = ScBadRequest
-                      , szeText = Just desc
-                      }
-
-jidMalformed :: Text -> StanzaError
-jidMalformed jid = def { szeType = SzModify
-                       , szeCondition = ScJidMalformed
-                       , szeText = Just jid
-                       }
-
-featureNotImplemented :: Text -> StanzaError
-featureNotImplemented desc = def { szeCondition = ScFeatureNotImplemented
+badRequest desc = undefinedError { szeType = SzModify
+                                 , szeCondition = ScBadRequest
                                  , szeText = Just desc
                                  }
 
+jidMalformed :: Text -> StanzaError
+jidMalformed jid = undefinedError { szeType = SzModify
+                                  , szeCondition = ScJidMalformed
+                                  , szeText = Just jid
+                                  }
+
+featureNotImplemented :: Text -> StanzaError
+featureNotImplemented desc = undefinedError { szeCondition = ScFeatureNotImplemented
+                                            , szeText = Just desc
+                                            }
+
 serviceUnavailable :: Text -> StanzaError
-serviceUnavailable desc = def { szeCondition = ScServiceUnavailable
-                              , szeText = Just desc
-                              }
+serviceUnavailable desc = undefinedError { szeCondition = ScServiceUnavailable
+                                         , szeText = Just desc
+                                         }
 
 itemNotFound :: Text -> StanzaError
-itemNotFound desc = def { szeCondition = ScItemNotFound
-                        , szeText = Just desc
-                        }
+itemNotFound desc = undefinedError { szeCondition = ScItemNotFound
+                                   , szeText = Just desc
+                                   }
 
 data MessageType = MessageChat
                  | MessageGroupchat
@@ -306,7 +305,7 @@ stanzaSyncRequest session req = do
 
 stanzaSendError :: MonadStream m => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
-  $(logWarn) [qq|Stanza error sent: $err|]
+  $(logWarn) [i|Stanza error sent: #{err}|]
   sessionSend ssSession $ element (elementName e) (("type", "error") : catMaybes attrs) (elementNodes e ++ [errorE])
 
   where attrs = [ ("id", ) <$> getAttr "id" e
@@ -353,9 +352,9 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
   let sendError = stanzaSendError sess e
       sendErrorOnIq err
         | ename == jcName "iq" = sendError err
-        | otherwise = $(logWarn) [qq|Error in received non-IQ stanza: $err|]
+        | otherwise = $(logWarn) [i|Error in received non-IQ stanza: #{err}|]
       getAddr name = mapM extractAddr $ getAttr name e
-        where extractAddr addr = checkOrFail (toRight $ xmppAddress addr) $ sendErrorOnIq $ jidMalformed [qq|stanzaSessionStep: malformed address $addr|]
+        where extractAddr addr = checkOrFail (toRight $ xmppAddress addr) $ sendErrorOnIq $ jidMalformed [i|stanzaSessionStep: malformed address #{addr}|]
 
       ename = elementName e
       payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e

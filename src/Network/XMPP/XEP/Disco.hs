@@ -2,12 +2,14 @@ module Network.XMPP.XEP.Disco
   ( DiscoIdentity(..)
   , DiscoFeature
   , DiscoEntity(..)
+  , emptyDiscoEntity
   , getDiscoEntity
   , DiscoItems
   , getDiscoItems
   , DiscoTopo(..)
   , getDiscoTopo
   , DiscoPlugin(..)
+  , emptyDiscoPlugin
   , discoPlugin
   ) where
 
@@ -20,13 +22,12 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Set (Set)
 import qualified Data.Set as S
-import Control.Monad.Trans.Either
+import Control.Monad.Trans.Except
 import Control.Monad.Trans.Class
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import Text.InterpolatedString.Perl6 (qq)
-import Data.Default.Class
+import Data.String.Interpolate (i)
 
 import Network.XMPP.Utils
 import Network.XMPP.XML
@@ -48,7 +49,10 @@ data DiscoEntity = DiscoEntity { discoIdentities :: Map DiscoIdentity (Maybe Loc
                                }
                  deriving (Show, Eq, Generic)
 
-instance Default DiscoEntity where
+emptyDiscoEntity :: DiscoEntity
+emptyDiscoEntity = DiscoEntity { discoIdentities = M.empty
+                               , discoFeatures = S.empty
+                               }
 
 discoEntityUnion :: DiscoEntity -> DiscoEntity -> Maybe DiscoEntity
 discoEntityUnion a b = do
@@ -61,7 +65,7 @@ discoInfoName = nsName "http://jabber.org/protocol/disco#info"
 
 requiredAttr :: Name -> Element -> Either StanzaError Text
 requiredAttr name e = case getAttr name e of
-  Nothing -> Left $ badRequest [qq|requiredAttr: no $name attribute in {elementName e}|]
+  Nothing -> Left $ badRequest [i|requiredAttr: no $name attribute in #{elementName e}|]
   Just r -> return r
 
 parseNamed :: (Show k, Ord k) => Element -> Name -> (Element -> Either StanzaError k) -> Either StanzaError (Map k (Maybe LocalizedText))
@@ -76,14 +80,14 @@ parseNamed root name getKey = do
                 Nothing -> M.empty
                 Just text -> M.singleton (xmlLangGet e) text
           return (k, names)
-        conflict feature _ _ = Left $ badRequest [qq|parseNamed: conflicting feature $feature|]
+        conflict feature _ _ = Left $ badRequest [i|parseNamed: conflicting feature #{show feature}|]
 
 parseDiscoEntity :: Element -> Either StanzaError DiscoEntity
 parseDiscoEntity re = do
   discoIdentities <- parseNamed re (discoInfoName "identity") getIdentity
   features <- mapM getFeature $ fromElement re $/ XC.element (discoInfoName "feature") &| curElement
   let discoFeatures = S.fromList features
-  when (S.size discoFeatures /= length features) $ Left $ badRequest [qq|parseDiscoEntity: non-unique features|]
+  when (S.size discoFeatures /= length features) $ Left $ badRequest [i|parseDiscoEntity: non-unique features|]
 
   return DiscoEntity {..}
   where getIdentity e = do
@@ -115,7 +119,7 @@ parseDiscoItems re = parseNamed re (discoItemsName "item") getItem
   where getItem e = do
           address' <- requiredAttr "jid" e
           address <- case xmppAddress address' of
-            Left err -> Left $ jidMalformed [qq|parseDiscoItems: malformed jid {address'}: {err}|]
+            Left err -> Left $ jidMalformed [i|parseDiscoItems: malformed jid #{address'}: #{err}|]
             Right r -> return r
           let node = getAttr "node" e
           return (address, node)
@@ -137,11 +141,11 @@ data DiscoTopo = DiscoTopo { discoRoot :: DiscoEntity
                deriving (Show, Eq)
 
 getDiscoTopo :: MonadStream m => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoTopo)
-getDiscoTopo sess addr node = runEitherT $ do
-  discoRoot <- EitherT $ getDiscoEntity sess addr node
+getDiscoTopo sess addr node = runExceptT $ do
+  discoRoot <- ExceptT $ getDiscoEntity sess addr node
   case node of
     Nothing -> do
-      items <- EitherT $ getDiscoItems sess addr node
+      items <- ExceptT $ getDiscoItems sess addr node
       discoItems <- fmap M.fromList $ forM (M.toList items) $ \(k@(сaddr, cnode), name) -> do
         topo <- lift $ getDiscoTopo sess сaddr cnode
         return (k, (name, topo))
@@ -163,11 +167,11 @@ data DiscoPlugin = DiscoPlugin { discoPEntity :: DiscoEntity
                                , discoPChildren :: Map DiscoNode (DiscoEntity, DiscoItems)
                                }
 
-instance Default DiscoPlugin where
-  def = DiscoPlugin { discoPEntity = def
-                    , discoPItems = M.empty
-                    , discoPChildren = M.empty
-                    }
+emptyDiscoPlugin :: DiscoPlugin
+emptyDiscoPlugin = DiscoPlugin { discoPEntity = emptyDiscoEntity
+                               , discoPItems = M.empty
+                               , discoPChildren = M.empty
+                               }
 
 discoPluginUnion :: DiscoPlugin -> DiscoPlugin -> Maybe DiscoPlugin
 discoPluginUnion a b = do
@@ -210,7 +214,7 @@ discoIqHandler _ _ = return Nothing
 
 discoPlugin :: MonadStream m => [DiscoPlugin] -> m (XMPPPlugin m)
 discoPlugin plugins = do
-  plugin <- case foldr (\a acc -> acc >>= discoPluginUnion a) (Just def) plugins of
+  plugin <- case foldr (\a acc -> acc >>= discoPluginUnion a) (Just emptyDiscoPlugin) plugins of
     Nothing -> fail "discoPlugin: overlapping plugins"
     Just r -> return r
-  return $ def { pluginRequestIqHandler = discoIqHandler plugin }
+  return $ emptyPlugin { pluginRequestIqHandler = discoIqHandler plugin }

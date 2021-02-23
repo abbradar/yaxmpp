@@ -1,0 +1,81 @@
+name: yaxmpp
+version: 0.1.0.0
+synopsis: Yet another XMPP implementation for Haskell
+license: BSD3
+author: Nikolay Amiantov
+maintainer: ab@fmap.me
+category: Network
+
+dependencies:
+  - base >= 4.8
+  - bytestring
+  - text
+  - containers
+  - unliftio-core
+  - unliftio
+  - exceptions
+  - primitive
+  - transformers
+  - monad-logger
+  - xml-types
+  - blaze-builder
+  - data-default-class
+  - xml-conduit >= 1.3.5
+  - attoparsec
+  - base64-bytestring
+  - iproute
+  - dns
+  - conduit
+  - conduit-extra
+  - connection
+  - tls
+  - stringprep
+  - string-interpolate
+  - aeson >= 1.0.0.0
+  - time
+  - uuid
+  - text-show
+
+default-extensions:
+  - OverloadedStrings
+  - RecordWildCards
+  - TupleSections
+  - RankNTypes
+  - MultiWayIf
+  - LambdaCase
+  - FlexibleContexts
+  - ViewPatterns
+  - ScopedTypeVariables
+  - ConstraintKinds
+  - MultiParamTypeClasses
+  - GeneralizedNewtypeDeriving
+  - NamedFieldPuns
+  - DeriveGeneric
+  - TemplateHaskell
+  - QuasiQuotes
+
+ghc-options: -Wall
+
+library:
+  source-dirs: src
+
+executables:
+  irc-bridge:
+    main: IRCBridge.hs
+    source-dirs: exe
+    dependencies:
+      - yaxmpp
+      - stm
+      - stm-conduit
+      - yaml
+      - irc
+
+
+  client:
+    main: Client.hs
+    source-dirs: client
+    dependencies:
+      - yaxmpp
+      - yaml
+      - haskeline
+      - monad-control

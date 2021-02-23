@@ -4,19 +4,19 @@ module Network.XMPP.Connection
        ) where
 
 import Text.Read
-import Data.Monoid
+import Data.Word
 import Data.Maybe
 import Data.List
 import Control.Applicative
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B
-import Control.Monad.Trans.Either
+import Control.Monad.Trans.Except
 import Data.IP
 import Network.DNS
 
-type Port = Int
+type Port = Word16
 
-findServers :: Resolver -> ByteString -> Maybe Port -> EitherT DNSError IO [(ByteString, Port)]
+findServers :: Resolver -> ByteString -> Maybe Port -> ExceptT DNSError IO [(ByteString, Port)]
 findServers rsv srvname mport = do
   let defport = fromMaybe 5222 mport
   -- First, check if it is an IP
@@ -27,7 +27,7 @@ findServers rsv srvname mport = do
     Just _ -> return [(srvname, defport)]
     _ -> do
       -- Try to resolve SRV record
-      srvs <- EitherT $ lookupSRV rsv ("_xmpp-client._tcp." <> srvname)
+      srvs <- ExceptT $ lookupSRV rsv ("_xmpp-client._tcp." <> srvname)
       -- Default to the server itself if no record found
       return $ if null srvs
         then [(srvname, defport)]

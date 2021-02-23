@@ -16,7 +16,7 @@ import Data.Text (Text)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Text.XML
-import Text.InterpolatedString.Perl6 (qq)
+import Data.String.Interpolate (i)
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
@@ -42,7 +42,7 @@ localizedFromElement name elems = case fromChildren elems $/ XC.element name &| 
   bodies -> Just $ do
     texts <- mapM getOneBody bodies
     textsMap <- case mapDisjointFromList texts of
-      Nothing -> Left $ badRequest [qq|localizedElement: conflicting textual data for language|]
+      Nothing -> Left $ badRequest [i|localizedElement: conflicting textual data for language|]
       Just r -> return r
     return $ LocalizedText textsMap
   
@@ -50,7 +50,7 @@ localizedFromElement name elems = case fromChildren elems $/ XC.element name &| 
           cont <- fmap mconcat $ mapM getBodyContent $ elementNodes e
           return (xmlLangGet e, cont)
         getBodyContent (NodeContent t) = return t
-        getBodyContent _ = Left $ badRequest [qq|localizedElement: $name element should contain only textual data|]
+        getBodyContent _ = Left $ badRequest [i|localizedElement: #{name} element should contain only textual data|]
 
 xmlLangGet :: Element -> XMLLang
 xmlLangGet = getAttr $ xmlName "lang"

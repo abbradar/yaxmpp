@@ -24,14 +24,14 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Control.Concurrent.MVar.Lifted
+import UnliftIO.MVar
 import Text.XML
 import GHC.Generics (Generic)
 import Data.Aeson
 import qualified Data.Aeson.Types as JSON
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import Text.InterpolatedString.Perl6 (qq)
+import Data.String.Interpolate (i)
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
@@ -107,7 +107,7 @@ rosterName :: Text -> Name
 rosterName = nsName "jabber:iq:roster"
 
 okHandler :: MonadStream m => ResponseIQHandler m
-okHandler (Left (err, _)) = $(logError) [qq|okHandler: error while updating a roster: $err|]
+okHandler (Left (err, _)) = $(logError) [i|okHandler: error while updating a roster: #{err}|]
 okHandler (Right _) = return ()
 
 data RosterEvent = RosterInsert XMPPAddress RosterEntry
@@ -140,7 +140,7 @@ deleteRoster (RosterRef {..}) jid = do
 
 parseInitial :: Element -> Either Text (XMPPAddress, RosterEntry)
 parseInitial e = do
-  unless (elementName e == rosterName "item") $ Left [qq|parseInitial: invalid roster item $e|]
+  unless (elementName e == rosterName "item") $ Left [i|parseInitial: invalid roster item #{e}|]
   jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
     Nothing -> Left "parseInitial: malformed jid"
     Just r -> return r
@@ -156,7 +156,7 @@ parseInitial e = do
 handleFirstRequest :: MonadStream m => RosterRef m -> Maybe Roster -> ResponseIQHandler m
 handleFirstRequest (RosterRef {..}) mold resp = do
   let roster' = case (mold, resp) of
-        (_, Left (err, _)) -> error [qq|handleFirstRequest: error while requesting roster: $err|]
+        (_, Left (err, _)) -> error [i|handleFirstRequest: error while requesting roster: #{err}|]
         (Just old, Right []) | isJust $ rosterVersion old  -> old
         (_, Right [res]) | elementName res == rosterName "query" ->
                      case sequence $ map parseInitial $ fromElement res $/ curAnyElement of
@@ -170,7 +170,7 @@ handleFirstRequest (RosterRef {..}) mold resp = do
 
 getRosterEvent :: Element -> Either StanzaError RosterEvent
 getRosterEvent e = do
-  unless (elementName e == rosterName "item") $ Left $ badRequest [qq|getRosterEvent: invalid roster item $e|]
+  unless (elementName e == rosterName "item") $ Left $ badRequest [i|getRosterEvent: invalid roster item #{e}|]
   jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
     Nothing -> Left $ jidMalformed "getRosterEvent: invalid jid in roster push"
     Just r -> return r
@@ -232,5 +232,5 @@ rosterPlugin rrefSession old = do
       req = serverRequest IQGet [element (rosterName "query") (maybeToList $ fmap ("ver", ) ver) []]
 
   stanzaRequest rrefSession req $ handleFirstRequest rosterRef old
-  let plugin = def { pluginRequestIqHandler = rosterIqHandler rosterRef }
+  let plugin = emptyPlugin { pluginRequestIqHandler = rosterIqHandler rosterRef }
   return (plugin, rosterRef)

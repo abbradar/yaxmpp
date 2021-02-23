@@ -2,9 +2,8 @@ module Network.XMPP.Plugin where
 
 import Data.Text (Text)
 import Control.Monad.Logger
-import Text.InterpolatedString.Perl6 (qq)
+import Data.String.Interpolate (i)
 import Text.XML
-import Data.Default.Class
 
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
@@ -18,14 +17,14 @@ data XMPPPlugin m = XMPPPlugin { pluginInHandler :: PluginInHandler m
                                , pluginRequestIqHandler :: PluginRequestIQHandler m
                                }
 
-instance Monad m => Default (XMPPPlugin m) where
-  def = XMPPPlugin { pluginInHandler = \_ -> return Nothing
-                   , pluginRequestIqHandler = \_ -> return Nothing
-                   }
+emptyPlugin :: Monad m => XMPPPlugin m
+emptyPlugin = XMPPPlugin { pluginInHandler = \_ -> return Nothing
+                         , pluginRequestIqHandler = \_ -> return Nothing
+                         }
 
 pluginsInHandler :: MonadStream m => [XMPPPlugin m] -> InHandler m
 pluginsInHandler [] msg = do
-  $(logWarn) [qq|Unhandled stanza: $msg|]
+  $(logWarn) [i|Unhandled stanza: #{msg}|]
   -- Shouldn't reply to unknown messages/presences.
   return Nothing
 pluginsInHandler ((XMPPPlugin {..}):plugins) msg = do
@@ -36,7 +35,7 @@ pluginsInHandler ((XMPPPlugin {..}):plugins) msg = do
 
 pluginsRequestIqHandler :: MonadStream m => [XMPPPlugin m] -> RequestIQHandler m
 pluginsRequestIqHandler [] iq = do
-  $(logWarn) [qq|Unhandled request: $iq|]
+  $(logWarn) [i|Unhandled request: #{iq}|]
   return $ Left $ serviceUnavailable "Unsupported request"
 pluginsRequestIqHandler ((XMPPPlugin {..}):plugins) iq = do
   res <- pluginRequestIqHandler iq

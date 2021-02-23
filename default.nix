@@ -1,11 +1,10 @@
 { mkDerivation, aeson, attoparsec, base, base64-bytestring
 , blaze-builder, bytestring, conduit, conduit-extra, connection
-, containers, data-default-class, dns, either, exceptions
-, haskeline, interpolatedstring-perl6, iproute, irc, lifted-base
-, monad-control, monad-logger, persistent, persistent-sqlite
-, stdenv, stm, stm-conduit, stringprep, text, text-show, time, tls
-, transformers, transformers-base, uuid, xml-conduit, xml-types
-, yaml
+, containers, data-default-class, dns, exceptions, haskeline, hpack
+, iproute, irc, lib, monad-logger, primitive, stm, stm-conduit
+, string-interpolate, stringprep, text, text-show, time, tls
+, transformers, unliftio, unliftio-core, uuid, xml-conduit
+, xml-types, yaml
 }:
 mkDerivation {
   pname = "yaxmpp";
@@ -16,16 +15,19 @@ mkDerivation {
   libraryHaskellDepends = [
     aeson attoparsec base base64-bytestring blaze-builder bytestring
     conduit conduit-extra connection containers data-default-class dns
-    either exceptions interpolatedstring-perl6 iproute lifted-base
-    monad-control monad-logger stringprep text text-show time tls
-    transformers transformers-base uuid xml-conduit xml-types
+    exceptions iproute monad-logger primitive string-interpolate
+    stringprep text text-show time tls transformers unliftio
+    unliftio-core uuid xml-conduit xml-types
   ];
+  libraryToolDepends = [ hpack ];
   executableHaskellDepends = [
-    aeson base bytestring conduit conduit-extra connection containers
-    data-default-class dns either exceptions haskeline
-    interpolatedstring-perl6 irc lifted-base monad-logger persistent
-    persistent-sqlite stm stm-conduit text transformers yaml
+    aeson attoparsec base base64-bytestring blaze-builder bytestring
+    conduit conduit-extra connection containers data-default-class dns
+    exceptions haskeline iproute irc monad-logger primitive stm
+    stm-conduit string-interpolate stringprep text text-show time tls
+    transformers unliftio unliftio-core uuid xml-conduit xml-types yaml
   ];
+  prePatch = "hpack";
   description = "Yet another XMPP implementation for Haskell";
-  license = stdenv.lib.licenses.bsd3;
+  license = lib.licenses.bsd3;
 }

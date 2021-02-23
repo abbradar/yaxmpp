@@ -15,16 +15,13 @@ import Control.Exception (AsyncException(..))
 import Control.Monad.IO.Class
 import Control.Monad.Catch
 import Control.Monad.Trans.Control
-import Control.Monad.Base
-import Control.Concurrent.Lifted
-import Control.Concurrent.Async.Lifted
-import Control.Monad.Trans.Either
+import UnliftIO.Concurrent
+import UnliftIO.Async
+import Control.Monad.Trans.Except
 import Network.DNS
 import Network.Connection
 import Control.Monad.Logger
-import Text.InterpolatedString.Perl6 (qq)
-import Data.Default.Class
-import System.Log.FastLogger (fromLogStr)
+import Data.String.Interpolate (i)
 import qualified System.Console.Haskeline as HL
 
 import Network.XMPP.Connection
@@ -64,14 +61,14 @@ instance JSON.FromJSON Settings where
 main :: IO ()
 main = do
   mainTid <- myThreadId
-  let criticalThread :: (MonadBase IO m, MonadMask m) => m () -> (forall a. m a -> m a) -> m ()
+  let criticalThread :: (MonadIO m, MonadMask m) => m () -> (forall a. m a -> m a) -> m ()
       criticalThread run unmask = unmask run `catches`
                                   [ Handler (\case ThreadKilled -> return (); e -> throwTo mainTid e)
                                   , Handler (\(e :: SomeException) -> throwTo mainTid e)
                                   ]
 
-  [settingsFile] <- liftIO getArgs
-  Just settings <- liftIO $ Yaml.decodeFile settingsFile
+  [settingsFile] <- getArgs
+  Right settings <- Yaml.decodeFileEither settingsFile
   logChanFile <- newChan
   logChanTerm <- dupChan logChanFile
   consoleChan <- newChan
@@ -83,8 +80,8 @@ main = do
 
   withAsyncWithUnmask (criticalThread fileLogThread) $ \_ -> withAsyncWithUnmask (criticalThread logMessageThread) $ \_ -> runChanLoggingT logChanFile $ do
     rs <- liftIO $ makeResolvSeed defaultResolvConf
-    Right svrs <- liftIO $ withResolver rs $ \resolver -> runEitherT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
-    $(logInfo) [qq|Found servers: $svrs|]
+    Right svrs <- liftIO $ withResolver rs $ \resolver -> runExceptT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
+    $(logInfo) [i|Found servers: #{svrs}|]
     cctx <- liftIO initConnectionContext
     let (host, port) = head svrs
         tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
@@ -108,7 +105,7 @@ main = do
         initMain = do
           ms <- sessionCreate ssettings
           case ms of
-            Left e -> fail [qq|Error creating session: $e|]
+            Left e -> fail [i|Error creating session: #{e}|]
             Right s -> stanzaSessionCreate s
 
     bracket initMain (sessionKill . ssSession) $ \sess -> do
@@ -127,7 +124,7 @@ main = do
         (imP, imRef) <- imPlugin sess
         (mucP, mucPresH, mucDiscoH, mucRef) <- mucPlugin sess
         presP <- presencePlugin [rpresH, myPresH, mucPresH]
-        (verP, verDiscoH) <- versionPlugin def
+        (verP, verDiscoH) <- versionPlugin defaultVersion
         (timeP, timeDiscoH) <- entityTimePlugin
         discoP <- discoPlugin [mucDiscoH, verDiscoH, timeDiscoH]
 
@@ -139,25 +136,25 @@ main = do
 
         flip finally saveRoster $ do
           rosterSetHandler rosterRef $ \(_, event) -> do
-            writeMessage [qq|Got roster update: $event|]
+            writeMessage [i|Got roster update: #{event}|]
 
           subscriptionSetHandler subscrRef $ \(addr, stat) -> do
-            writeMessage [qq|Got subscription update for $addr: $stat|]
+            writeMessage [i|Got subscription update for #{addr}: #{stat}|]
 
           myPresenceSetHandler myPresRef $ \event -> do
-            writeMessage [qq|Got presence update for myself: $event|]
+            writeMessage [i|Got presence update for myself: #{event}|]
 
           rpresenceSetHandler rpresRef $ \event -> do
-            writeMessage [qq|Got presence update for roster: $event|]
+            writeMessage [i|Got presence update for roster: #{event}|]
 
           imSetHandler imRef $ \(addr, msg) -> do
             let text = localizedGet (Just "en") $ imBody msg
-            writeMessage [qq|{addressToText addr}: $text|]
+            writeMessage [i|#{addressToText addr}: #{text}|]
 
           mucSetHandler mucRef $ \event -> do
-            writeMessage [qq|Got MUC event: $event|]
+            writeMessage [i|Got MUC event: #{event}|]
 
-          myPresenceSend myPresRef $ Just def
+          myPresenceSend myPresRef $ Just defaultPresence
 
           let plugins = [rosterP, subscrP, presP, imP, discoP, mucP, verP, timeP]
 
@@ -217,7 +214,7 @@ main = do
                 , ( "set_presence"
                   , Command { commandHandler = \runInBase args -> case args of
                                 [(read -> online)] -> do
-                                  runInBase $ myPresenceSend myPresRef $ if online then Just def else Nothing
+                                  runInBase $ myPresenceSend myPresRef $ if online then Just defaultPresence else Nothing
                                 _ -> HL.outputStrLn "Invalid arguments"
                             , commandAutocomplete = \_ _ -> return []
                             }
@@ -243,7 +240,7 @@ main = do
                                 [(xmppAddress . T.pack -> Right addr)] -> do
                                   topo <- runInBase $ getDiscoTopo sess addr Nothing
                                   case topo of
-                                    Left e -> HL.outputStrLn [qq|Failed to perform discovery: $e|]
+                                    Left e -> HL.outputStrLn [i|Failed to perform discovery: #{e}|]
                                     Right r -> HL.outputStrLn $ show r
                                 _ -> HL.outputStrLn "Invalid arguments"
                             , commandAutocomplete = \_ _ -> return []
@@ -270,8 +267,8 @@ main = do
                 , ( "muc_join"
                   , Command { commandHandler = \runInBase args -> case args of
                                 [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
-                                  runInBase $ mucJoin mucRef addr def $ \_ event -> do
-                                    writeMessage [qq|{bareJidToText $ fullBare addr} event: $event|]
+                                  runInBase $ mucJoin mucRef addr defaultMUCJoinSettings $ \_ event -> do
+                                    writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
                                 _ -> HL.outputStrLn "Invalid arguments"
                             , commandAutocomplete = \_ _ -> return []
                             }
@@ -313,14 +310,14 @@ main = do
                   cmd : args -> do
                     case M.lookup cmd commands of
                       Just handler -> do
-                        HL.handle (\(e :: SomeException) -> HL.outputStrLn [qq|Error while executing command: $e|]) $ commandHandler handler (liftIO . runInBase) args
+                        handle (\(e :: SomeException) -> HL.outputStrLn [i|Error while executing command: #{e}|]) $ commandHandler handler (liftIO . runInBase) args
                       Nothing -> HL.outputStrLn "Unknown command"
                     promptLoop runInBase
 
               promptThread = control $ \runInBase -> HL.runInputT inputSettings $ do
                 printFunc <- HL.getExternalPrint
                 let writeThread = forever (fmap (++ "\n") (readChan consoleChan) >>= printFunc)
-                HL.bracket (liftIO $ forkWithUnmask $ criticalThread writeThread) (liftIO . killThread) $ \_ -> do
+                bracket (liftIO $ forkIOWithUnmask $ criticalThread writeThread) (liftIO . killThread) $ \_ -> do
                   promptLoop runInBase
 
           withAsyncWithUnmask (\unmask -> unmask promptThread `finally` terminate) $ \_ -> do

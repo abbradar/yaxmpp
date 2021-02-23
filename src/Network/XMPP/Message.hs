@@ -94,5 +94,5 @@ imPlugin :: MonadStream m => StanzaSession m -> m (XMPPPlugin m, IMRef m)
 imPlugin imSession = do
   imHandler <- Handler.new
   let pref = IMRef {..}
-      plugin = def { pluginInHandler = imInHandler pref }
+      plugin = emptyPlugin { pluginInHandler = imInHandler pref }
   return (plugin, pref)

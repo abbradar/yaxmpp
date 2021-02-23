@@ -1,5 +1,6 @@
 module Network.XMPP.XEP.Version
-  ( VersionInfo
+  ( VersionInfo(..)
+  , defaultVersion
   , getVersion
   , versionPlugin
   ) where
@@ -10,7 +11,6 @@ import Data.Version
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Set as S
-import Data.Default.Class
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -33,11 +33,11 @@ data VersionInfo = VersionInfo { swName :: Text
                                }
                  deriving (Show, Eq)
 
-instance Default VersionInfo where
-  def = VersionInfo { swName = "yaxmpp"
-                    , swVersion = T.pack $ showVersion version
-                    , swOS = Just $ T.pack os
-                    }
+defaultVersion :: VersionInfo
+defaultVersion = VersionInfo { swName = "yaxmpp"
+                             , swVersion = T.pack $ showVersion version
+                             , swOS = Just $ T.pack os
+                             }
 
 versionIqHandler :: MonadStream m => VersionInfo -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
 versionIqHandler (VersionInfo {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] })
@@ -68,8 +68,8 @@ getVersion sess addr = do
 
 versionPlugin :: MonadStream m => VersionInfo -> m (XMPPPlugin m, DiscoPlugin)
 versionPlugin settings = do
-  let xmppPlugin = def { pluginRequestIqHandler = versionIqHandler settings
+  let xmppPlugin = emptyPlugin { pluginRequestIqHandler = versionIqHandler settings
                        }
-      discoHandler = def { discoPEntity = def { discoFeatures = S.singleton versionNS }
-                         }
+      discoHandler = emptyDiscoPlugin { discoPEntity = emptyDiscoEntity { discoFeatures = S.singleton versionNS }
+                                      }
   return (xmppPlugin, discoHandler)

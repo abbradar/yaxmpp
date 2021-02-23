@@ -6,7 +6,9 @@ module Network.XMPP.XEP.MUC
   , MUCRef
   , MUCAlreadyJoinedError(..)
   , MUCHistorySettings(..)
+  , defaultMUCHistorySettings
   , MUCJoinSettings(..)
+  , defaultMUCJoinSettings
   , mucJoin
   , MUCAlreadyLeftError(..)
   , mucSendPresence
@@ -17,19 +19,18 @@ module Network.XMPP.XEP.MUC
 import Data.Maybe
 import Control.Monad
 import Data.Typeable
-import Control.Exception.Lifted (Exception, throw)
 import GHC.Generics (Generic)
 import Data.Time.Clock
 import Data.Text (Text)
 import Data.Map.Strict (Map)
+import Control.Monad.Catch (Exception, throwM)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Control.Concurrent.MVar.Lifted
-import Data.IORef.Lifted
+import UnliftIO.MVar
+import UnliftIO.IORef
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import Data.Default.Class
 import TextShow (showt)
 
 import Control.Handler (Handler)
@@ -99,14 +100,22 @@ data MUCHistorySettings = MUCHistorySettings { histMaxChars :: Maybe Integer
                                              }
                         deriving (Show, Eq, Generic)
 
-instance Default MUCHistorySettings where
+defaultMUCHistorySettings :: MUCHistorySettings
+defaultMUCHistorySettings = MUCHistorySettings { histMaxChars = Nothing
+                                               , histMaxStanzas = Nothing
+                                               , histSeconds = Nothing
+                                               , histSince = Nothing
+                                               }
 
 data MUCJoinSettings = MUCJoinSettings { joinHistory :: MUCHistorySettings
                                        , joinPresence :: Presence
                                        }
                      deriving (Show, Eq, Generic)
 
-instance Default MUCJoinSettings where
+defaultMUCJoinSettings :: MUCJoinSettings
+defaultMUCJoinSettings = MUCJoinSettings { joinHistory = defaultMUCHistorySettings
+                                         , joinPresence = defaultPresence
+                                         }
 
 mucJoin :: MonadStream m => MUCRef m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m ()
 mucJoin (MUCRef {..}) addr (MUCJoinSettings { joinHistory = MUCHistorySettings {..}, .. }) handler = do
@@ -118,9 +127,9 @@ mucJoin (MUCRef {..}) addr (MUCJoinSettings { joinHistory = MUCHistorySettings {
                   Just r -> return r
     _ -> return $ fullResource addr
   modifyMVar_ mucPending $ \pending -> do
-    when (M.member (fullBare addr) pending) $ throw MUCAlreadyJoinedError
+    when (M.member (fullBare addr) pending) $ throwM MUCAlreadyJoinedError
     rooms <- readIORef mucRooms
-    when (M.member (fullBare addr) rooms) $ throw MUCAlreadyJoinedError
+    when (M.member (fullBare addr) rooms) $ throwM MUCAlreadyJoinedError
     let historyAttrs = catMaybes [ fmap (\i -> ("maxchars", showt i)) histMaxChars
                                  , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
                                  , fmap (\i -> ("seconds", showt i)) histSeconds
@@ -153,7 +162,7 @@ mucSendPresence (MUCRef {..}) addr pres = do
       _ <- stanzaSend mucSession $ presStanza { ostTo = Just $ fullJidAddress $ FullJID addr (mucNick room)
                                              }
       return ()
-    Nothing -> throw MUCAlreadyLeftError
+    Nothing -> throwM MUCAlreadyLeftError
 
 mucInHandler :: MonadStream m => MUCRef m -> PluginInHandler m
 mucInHandler (MUCRef {..}) (InStanza { istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err) }) = do
@@ -235,10 +244,10 @@ mucPlugin mucSession = do
   mucPending <- newMVar M.empty
   mucEventHandler <- Handler.new
   let mref = MUCRef {..}
-      xmppPlugin = def { pluginInHandler = mucInHandler mref
-                       }
-      discoHandler = def { discoPEntity = def { discoFeatures = S.singleton mucNS }
-                         , discoPChildren = M.singleton mucRoomsNS (def, M.empty)
-                         }
+      xmppPlugin = emptyPlugin { pluginInHandler = mucInHandler mref
+                               }
+      discoHandler = emptyDiscoPlugin { discoPEntity = emptyDiscoEntity { discoFeatures = S.singleton mucNS }
+                                      , discoPChildren = M.singleton mucRoomsNS (emptyDiscoEntity, M.empty)
+                                      }
       presHandler = mucPresenceHandler mref
   return (xmppPlugin, presHandler, discoHandler, mref)

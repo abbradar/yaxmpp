@@ -18,9 +18,9 @@ import Data.Word
 import Text.Read
 import Data.Typeable
 import Control.Monad
-import Control.Concurrent.MVar.Lifted
+import UnliftIO.MVar
+import UnliftIO.IORef
 import Control.Monad.Logger
-import Data.IORef.Lifted
 import Data.Sequence (Seq, (|>), ViewL(..))
 import qualified Data.Sequence as S
 import Data.Text (Text)
@@ -30,7 +30,7 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Network.Connection
-import Text.InterpolatedString.Perl6 (qq)
+import Data.String.Interpolate (i)
 import TextShow
 
 import Network.XMPP.XML
@@ -206,7 +206,7 @@ bindResource wantRes s
            &/ content
         of
         res:_ -> do
-          $(logInfo) [qq|Bound resource: $res|]
+          $(logInfo) [i|Bound resource: #{res}|]
           return res
         _ -> streamThrow s $ unexpectedInput "bindResource: bind failure"
 

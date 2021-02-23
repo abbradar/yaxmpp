@@ -23,7 +23,6 @@ module Network.XMPP.Address
        , fullJidToText
        ) where
 
-import Data.Monoid
 import Data.Text (Text)
 import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)

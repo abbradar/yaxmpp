@@ -6,7 +6,7 @@ module Network.XMPP.Presence.Roster
   , rpresencePlugin
   ) where
 
-import Data.IORef.Lifted
+import UnliftIO.IORef
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Text.XML

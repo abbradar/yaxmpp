@@ -5,7 +5,6 @@ module Network.XMPP.XEP.EntityTime
 
 import Data.Text (Text)
 import qualified Data.Set as S
-import Data.Default.Class
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -61,8 +60,8 @@ getEntityTime sess addr = do
 
 entityTimePlugin :: MonadStream m => m (XMPPPlugin m, DiscoPlugin)
 entityTimePlugin = do
-  let xmppPlugin = def { pluginRequestIqHandler = timeIqHandler
-                       }
-      discoHandler = def { discoPEntity = def { discoFeatures = S.singleton timeNS }
-                         }
+  let xmppPlugin = emptyPlugin { pluginRequestIqHandler = timeIqHandler
+                               }
+      discoHandler = emptyDiscoPlugin { discoPEntity = emptyDiscoEntity { discoFeatures = S.singleton timeNS }
+                                      }
   return (xmppPlugin, discoHandler)

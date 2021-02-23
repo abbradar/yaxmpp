@@ -9,7 +9,7 @@ module Network.XMPP.Presence.Myself
 import Control.Monad
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Data.IORef.Lifted
+import UnliftIO.IORef
 
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler

@@ -1,7 +1,6 @@
 import Data.Maybe
 import Data.Char
 import Control.Monad
-import Data.Monoid
 import System.Environment
 import GHC.Generics (Generic)
 import qualified Data.Aeson as JSON
@@ -15,13 +14,12 @@ import qualified Data.Map as M
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Control.Monad.Catch
-import Control.Concurrent.Lifted hiding (yield)
-import Control.Monad.Trans.Either
+import Control.Monad.Trans.Except
+import UnliftIO.Concurrent
 import Network.DNS
 import Network.Connection
 import Control.Monad.Logger
-import Text.InterpolatedString.Perl6 (qq)
-import Data.Default.Class
+import Data.String.Interpolate (i)
 import Data.Conduit.Network
 import Data.Conduit
 import qualified Data.Conduit.List as C
@@ -67,11 +65,11 @@ rpl_ENDOFNAMES = "366"
 main :: IO ()
 main = runStderrLoggingT $ do
   settingsFile:_ <- liftIO getArgs
-  Just settings <- liftIO $ Yaml.decodeFile settingsFile
+  Right settings <- liftIO $ Yaml.decodeFileEither settingsFile
 
   rs <- liftIO $ makeResolvSeed defaultResolvConf
-  Right svrs <- liftIO $ withResolver rs $ \resolver -> runEitherT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
-  $(logInfo) [qq|Found servers: $svrs|]
+  Right svrs <- liftIO $ withResolver rs $ \resolver -> runExceptT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
+  $(logInfo) [i|Found servers: #{svrs}|]
   cctx <- liftIO initConnectionContext
   let (host, port) = head svrs
       tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
@@ -95,11 +93,11 @@ main = runStderrLoggingT $ do
       initMain = do
         ms <- sessionCreate ssettings
         case ms of
-          Left e -> fail [qq|Error creating session: $e|]
+          Left e -> fail [i|Error creating session: #{e}|]
           Right s -> stanzaSessionCreate s
 
   bracket initMain (sessionClose . ssSession) $ \sess ->
-    bracket (fork $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
+    bracket (forkIO $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
       (myPresH, myPresRef) <- myPresencePlugin sess
       (imP, imRef) <- imPlugin sess
@@ -114,13 +112,13 @@ main = runStderrLoggingT $ do
           ircServReply cmd args = ircReply $ IRC.Message (Just $ IRC.Server conferenceHost) cmd args
           ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick (Just nick) (Just conferenceHost)) cmd args
 
-      _ <- fork $ do
+      _ <- forkIO $ do
         rst <- rosterGet rosterRef
-        $(logInfo) [qq|Got initial roster: $rst|]
-        myPresenceSend myPresRef def
+        $(logInfo) [i|Got initial roster: #{rst}|]
+        myPresenceSend myPresRef (Just defaultPresence)
 
         let processIrcRequest = do
-              $(logInfo) [qq|New IRC connection|]
+              $(logInfo) [i|New IRC connection|]
               nickVar <- newEmptyMVar
               let getNick = T.encodeUtf8 <$> resourceText <$> readMVar nickVar
 
@@ -130,7 +128,7 @@ main = runStderrLoggingT $ do
                         otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
                     nick <- getNick
                     unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
-                | otherwise -> $(logWarn) [qq|Got unknown message from $addr: $msg|]
+                | otherwise -> $(logWarn) [i|Got unknown message from #{addr}: #{msg}|]
 
               lift $ mucSetHandler mucRef $ \case
                 MUCJoined jid (MUC {..}) -> do
@@ -138,14 +136,16 @@ main = runStderrLoggingT $ do
                   let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
                       users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys $ mucMembers
                   ircServReply "JOIN" [channel]
-                  when (mucSubject /= "") $ ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 mucSubject]
+                  case mucSubject of
+                    Just (_, subj) -> ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 subj]
+                    _ -> return ()
                   ircServReply rpl_NAMREPLY [nick, "*", channel, users]
                   ircServReply rpl_ENDOFNAMES [nick, channel]
                 MUCRejected _ _ -> fail "MUC rejected"
                 MUCLeft _ _ -> fail "MUC left"
 
               C.mapM_ $ \req -> do
-                $(logDebug) [qq|Got IRC request: $req|]
+                $(logDebug) [i|Got IRC request: #{req}|]
                 let cmd = IRC.msg_command req
                 let params = IRC.msg_params req
                 if
@@ -157,7 +157,7 @@ main = runStderrLoggingT $ do
                   | cmd == "JOIN", [channel] <- params -> do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
-                          joinOpts = def { joinHistory = def { histMaxStanzas = Just 0 } }
+                          joinOpts = defaultMUCJoinSettings { joinHistory = defaultMUCHistorySettings { histMaxStanzas = Just 0 } }
                       handle (\MUCAlreadyJoinedError -> return ()) $ mucJoin mucRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
                         case event of
                           RoomPresence (Added otherNick' _) -> do
@@ -168,7 +168,9 @@ main = runStderrLoggingT $ do
                             ircUserReply otherNick "PART" [channel]
                           RoomSubject -> do
                             nick <- getNick
-                            ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 mucSubject]
+                            case mucSubject of
+                              Just (_, subj) -> ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 subj]
+                              _ -> return ()
                           _ -> return ()
                   | cmd == "USER", (mnick:_) <- params -> do
                       testNick <- tryReadMVar nickVar
@@ -186,11 +188,11 @@ main = runStderrLoggingT $ do
                                             , imExtended = []
                                             }
                       imSend imRef (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
-                  | otherwise -> $(logWarn) [qq|Unknown IRC command: $req|]
+                  | otherwise -> $(logWarn) [i|Unknown IRC command: #{req}|]
 
         runGeneralTCPServer (serverSettings (ircPort settings) "*") $ \app -> do
           let clearReply rep = do
-                $(logDebug) [qq|Sending IRC message: $rep|]
+                $(logDebug) [i|Sending IRC message: #{rep}|]
                 return (rep <> "\r\n")
               
               resplit msg old = (last msgs, map (<> "\n") $ init msgs)
@@ -198,11 +200,11 @@ main = runStderrLoggingT $ do
 
               parseMsg dat = do
                 let res = IRC.parseMessage dat
-                when (isNothing res) $ $(logWarn) [qq|Failed to parse IRC message: $dat|]
+                when (isNothing res) $ $(logWarn) [i|Failed to parse IRC message: #{dat}|]
                 return res
 
-          _ <- fork $ sourceTQueue backQueue $$ C.map IRC.encode =$= C.mapM clearReply =$= appSink app
-          appSource app $$ C.concatMapAccum resplit "" =$= C.mapMaybeM parseMsg =$= processIrcRequest
+          _ <- forkIO $ runConduit $ sourceTQueue backQueue .| C.map IRC.encode .| C.mapM clearReply .| appSink app
+          runConduit $ appSource app .| C.concatMapAccum resplit "" .| C.mapMaybeM parseMsg .| processIrcRequest
   
       let plugins = [presP, imP, discoP, mucP, rosterP]
       forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)

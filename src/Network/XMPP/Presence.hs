@@ -2,6 +2,7 @@ module Network.XMPP.Presence
   ( ShowState(..)
   , PresenceHandler
   , Presence(..)
+  , defaultPresence
   , presencePlugin
   , PresenceEvent(..)
   , presenceUpdate
@@ -18,8 +19,7 @@ import qualified Data.Text as T
 import Control.Monad.Logger
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import Data.Default.Class
-import Text.InterpolatedString.Perl6 (qq)
+import Data.String.Interpolate (i)
 import Data.Map (Map)
 import qualified Data.Map as M
 import TextShow (showt)
@@ -52,12 +52,12 @@ data Presence = Presence { presenceShow :: Maybe ShowState
                          }
               deriving (Show, Eq)
 
-instance Default Presence where
-  def = Presence { presenceShow = Nothing
-                 , presenceStatus = Nothing
-                 , presencePriority = 0
-                 , presenceExtended = []
-                 }
+defaultPresence :: Presence
+defaultPresence = Presence { presenceShow = Nothing
+                           , presenceStatus = Nothing
+                           , presencePriority = 0
+                           , presenceExtended = []
+                           }
 
 type PresenceHandler m = FullJID -> Either [Element] Presence -> m Bool
 
@@ -75,14 +75,14 @@ presenceOp _ = Nothing
 
 readIntMaybe :: forall a. (Bounded a, Integral a) => String -> Maybe a
 readIntMaybe str = do
-  (i :: Integer) <- readMaybe str
-  when (i < fromIntegral (minBound :: a)) $ fail "readIntMaybe: too small"
-  when (i > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
-  return $ fromIntegral i
+  (int :: Integer) <- readMaybe str
+  when (int < fromIntegral (minBound :: a)) $ fail "readIntMaybe: too small"
+  when (int > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
+  return $ fromIntegral int
 
 emitPresence :: MonadStream m => PresenceRef m -> FullJID -> Either [Element] Presence -> m ()
 emitPresence pref addr pres = tryHandlers $ presenceHandlers pref
-  where tryHandlers [] = $(logWarn) [qq|Unhandled presence update for $addr: $pres|]
+  where tryHandlers [] = $(logWarn) [i|Unhandled presence update for #{addr}: #{pres}|]
         tryHandlers (handler:handlers) = do
           r <- handler addr pres
           if r then return () else tryHandlers handlers
@@ -112,7 +112,7 @@ parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
 presenceInHandler :: MonadStream m => PresenceRef m -> PluginInHandler m
-presenceInHandler pref@(PresenceRef {..}) stanza@(InStanza { istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren }) = Just <$> do
+presenceInHandler pref (InStanza { istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren }) = Just <$> do
   case op of
     PresenceSet -> case parsePresence istChildren of
       Right p -> do
@@ -127,7 +127,7 @@ presenceInHandler _ _ = return Nothing
 presencePlugin :: MonadStream m => [PresenceHandler m] -> m (XMPPPlugin m)
 presencePlugin presenceHandlers = do
   let pref = PresenceRef {..}
-      plugin = def { pluginInHandler = presenceInHandler pref }
+      plugin = emptyPlugin { pluginInHandler = presenceInHandler pref }
   return plugin
 
 data PresenceEvent k = Added k Presence
@@ -152,7 +152,6 @@ presenceStanza (Just (Presence {..})) =
   where priority = element (jcName "priority") [] [NodeContent $ showt presencePriority]
         mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
         statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
-
 presenceStanza Nothing =
   OutStanza { ostTo = Nothing
             , ostType = OutPresence (Just PresenceUnavailable)
