@@ -12,12 +12,12 @@ import Data.Time.LocalTime
 import Data.Time.Clock
 import Control.Monad.IO.Class
 
+import Data.Time.XMPP
 import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Address
-import Network.XMPP.XEP.DateTime
 import Network.XMPP.XEP.Disco
 
 timeNS :: Text

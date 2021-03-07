@@ -33,6 +33,7 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import TextShow (showt)
 
+import Data.Time.XMPP
 import Control.Handler (Handler)
 import qualified Control.Handler as Handler
 import Network.XMPP.XML
@@ -42,7 +43,6 @@ import Network.XMPP.Stream
 import Network.XMPP.Stanza
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
-import Network.XMPP.XEP.DateTime
 import Network.XMPP.XEP.Disco
 
 data MUCEvent = MUCJoined FullJID MUC

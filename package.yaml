@@ -22,6 +22,7 @@ dependencies:
   - data-default-class
   - xml-conduit >= 1.3.5
   - attoparsec
+  - attoparsec-iso8601
   - base64-bytestring
   - iproute
   - dns
