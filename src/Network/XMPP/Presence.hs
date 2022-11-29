@@ -1,8 +1,12 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Presence
   ( ShowState(..)
   , PresenceHandler
   , Presence(..)
   , defaultPresence
+  , PresenceRef
+  , presenceHandlers
   , presencePlugin
   , PresenceEvent(..)
   , presenceUpdate
@@ -12,7 +16,6 @@ module Network.XMPP.Presence
 import Data.Int
 import Data.Maybe
 import Control.Monad
-import Text.Read (readMaybe)
 import Text.XML
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -20,11 +23,14 @@ import Control.Monad.Logger
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Data.String.Interpolate (i)
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import TextShow (showt)
 
+import Control.HandlerList (HandlerList, HandlerListRef)
+import qualified Control.HandlerList as HandlerList
 import Data.Injective
+import Network.XMPP.Utils
 import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
@@ -59,10 +65,10 @@ defaultPresence = Presence { presenceShow = Nothing
                            , presenceExtended = []
                            }
 
-type PresenceHandler m = FullJID -> Either [Element] Presence -> m Bool
+type PresenceHandler m = (FullJID, Either [Element] Presence) -> m (Maybe ())
 
-data PresenceRef m = PresenceRef { presenceHandlers :: [PresenceHandler m]
-                                 }
+newtype PresenceRef m = PresenceRef { presenceHandlersI :: HandlerList m (FullJID, Either [Element] Presence) ()
+                                    }
 
 data PresenceOp = PresenceSet
                 | PresenceUnset
@@ -73,19 +79,15 @@ presenceOp Nothing = Just PresenceSet
 presenceOp (Just PresenceUnavailable) = Just PresenceUnset
 presenceOp _ = Nothing
 
-readIntMaybe :: forall a. (Bounded a, Integral a) => String -> Maybe a
-readIntMaybe str = do
-  (int :: Integer) <- readMaybe str
-  when (int < fromIntegral (minBound :: a)) $ fail "readIntMaybe: too small"
-  when (int > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
-  return $ fromIntegral int
+presenceHandlers :: PresenceRef m -> HandlerListRef m (FullJID, Either [Element] Presence) ()
+presenceHandlers pref = HandlerList.ref $ presenceHandlersI pref
 
 emitPresence :: MonadStream m => PresenceRef m -> FullJID -> Either [Element] Presence -> m ()
-emitPresence pref addr pres = tryHandlers $ presenceHandlers pref
-  where tryHandlers [] = $(logWarn) [i|Unhandled presence update for #{addr}: #{pres}|]
-        tryHandlers (handler:handlers) = do
-          r <- handler addr pres
-          if r then return () else tryHandlers handlers
+emitPresence (PresenceRef {..}) addr pres = do
+  mr <- HandlerList.call presenceHandlersI (addr, pres)
+  case mr of
+    Nothing -> $(logWarn) [i|Unhandled presence update for #{addr}: #{pres}|]
+    Just () -> return ()
 
 parsePresence :: [Element] -> Either StanzaError Presence
 parsePresence elems = do
@@ -117,18 +119,19 @@ presenceInHandler pref (InStanza { istType = InPresence (Right (presenceOp -> Ju
     PresenceSet -> case parsePresence istChildren of
       Right p -> do
         emitPresence pref faddr $ Right p
-        return Nothing
-      Left e -> return $ Just e
+        return InSilent
+      Left e -> return $ InError e
     PresenceUnset -> do
         emitPresence pref faddr $ Left $ parseExtended istChildren
-        return Nothing
+        return InSilent
 presenceInHandler _ _ = return Nothing
 
-presencePlugin :: MonadStream m => [PresenceHandler m] -> m (XMPPPlugin m)
-presencePlugin presenceHandlers = do
+presencePlugin :: MonadStream m => XMPPPluginsRef m -> m (PresenceRef m)
+presencePlugin pluginsRef = do
+  presenceHandlersI <- HandlerList.new
   let pref = PresenceRef {..}
-      plugin = emptyPlugin { pluginInHandler = presenceInHandler pref }
-  return plugin
+  void $ HandlerList.add (pluginInHandlers pluginsRef) (presenceInHandler pref)
+  return pref
 
 data PresenceEvent k = Added k Presence
                      | Updated k Presence
@@ -137,8 +140,8 @@ data PresenceEvent k = Added k Presence
 
 presenceUpdate :: Ord k => k -> Either [Element] Presence -> Map k Presence -> Maybe (Map k Presence, PresenceEvent k)
 presenceUpdate k (Right v) m
-  | otherwise = Just (M.insert k v m, Added k v)
   | M.member k m = Just (M.insert k v m, Updated k v)
+  | otherwise = Just (M.insert k v m, Added k v)
 presenceUpdate k (Left e) m
   | M.member k m = Just (M.delete k m, Removed k e)
   | otherwise = Nothing

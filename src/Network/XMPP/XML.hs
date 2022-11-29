@@ -2,7 +2,7 @@ module Network.XMPP.XML where
 
 import Text.Read
 import Data.Functor.Identity
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -32,18 +32,6 @@ jcName :: T.Text -> Name
 jsNS :: T.Text
 jsName :: T.Text -> Name
 (jsNS, jsName) = namePair "jabber:server"
-
-smNS :: Text
-smName :: Text -> Name
-(smNS, smName) = namePair "urn:xmpp:sm:3"
-
-bindNS :: Text
-bindName :: Text -> Name
-(bindNS, bindName) = namePair "urn:ietf:params:xml:ns:xmpp-bind"
-
-rosterVerNS :: Text
-rosterVerName :: Text -> Name
-(rosterVerNS, rosterVerName) = namePair "urn:xmpp:features:rosterver"
 
 element :: Name -> [(Name, Text)] -> [Node] -> Element
 element name attrs nodes = Element { elementName = name

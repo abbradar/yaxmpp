@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Roster
   ( SubscriptionType(..)
   , RosterEntry(..)
@@ -5,18 +7,20 @@ module Network.XMPP.Roster
   , Roster
   , rosterVersion
   , rosterEntries
+  , RosterEvent(..)
   , RosterRef
-  , rosterGet
-  , rosterTryGet
+  , getRoster
+  , tryGetRoster
   , insertRoster
   , deleteRoster
-  , rosterSetHandler
+  , rosterSlot
   , rosterPlugin
   ) where
 
 import Data.Maybe
 import Data.List
 import Control.Monad
+import Control.Exception (SomeException, throw)
 import Control.Monad.Logger
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -24,7 +28,10 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
+import UnliftIO.IORef
 import UnliftIO.MVar
+import UnliftIO.Concurrent
+import UnliftIO.Exception (catch)
 import Text.XML
 import GHC.Generics (Generic)
 import Data.Aeson
@@ -33,8 +40,9 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Data.String.Interpolate (i)
 
-import Control.Handler (Handler)
-import qualified Control.Handler as Handler
+import Control.Slot (Slot, SlotRef)
+import qualified Control.Slot as Slot
+import qualified Control.HandlerList as HandlerList
 import Data.Injective
 import Network.XMPP.XML
 import Network.XMPP.Utils
@@ -63,12 +71,12 @@ instance FromJSON SubscriptionType where
 instance ToJSON SubscriptionType where
   toJSON = injToJSON
 
-
 type RosterName = Text
 type RosterGroup = Text
 
 data RosterEntry = RosterEntry { rentryName :: Maybe RosterName
                                , rentrySubscription :: SubscriptionType
+                               , rentrySubscriptionAsked :: Bool
                                , rentryGroups :: Set RosterGroup
                                }
                  deriving (Show, Eq, Generic)
@@ -103,36 +111,41 @@ instance ToJSON Roster where
   toJSON = genericToJSON rosterOptions
   toEncoding = genericToEncoding rosterOptions
 
+rosterVerName :: Text -> Name
+rosterVerName = nsName "urn:xmpp:features:rosterver"
+
+isRosterVer :: Element -> Bool
+isRosterVer e = elementName e == rosterVerName "ver"
+
 rosterName :: Text -> Name
 rosterName = nsName "jabber:iq:roster"
 
-okHandler :: MonadStream m => ResponseIQHandler m
-okHandler (Left (err, _)) = $(logError) [i|okHandler: error while updating a roster: #{err}|]
+okHandler :: MonadStream m => IQResponseHandler m
+okHandler (Left err) = $(logError) [i|okHandler: error while updating a roster: #{err}|]
 okHandler (Right _) = return ()
 
 data RosterEvent = RosterInsert XMPPAddress RosterEntry
                  | RosterDelete XMPPAddress
                  deriving (Show, Eq)
 
-data RosterRef m = RosterRef { rref :: MVar Roster
-                             , rrefHandler :: Handler m (RosterEntries, RosterEvent)
+data RosterRef m = RosterRef { rref :: IORef (Either (MVar Roster) Roster)
+                             , rrefSlot :: Slot m (RosterEntries, RosterEvent)
                              , rrefSession :: StanzaSession m
                              }
 
 insertRoster :: MonadStream m => RosterRef m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
-insertRoster (RosterRef {..}) jid name groups = do
-  void $ readMVar rref
+insertRoster rr@(RosterRef {..}) jid name groups = do
+  void $ getRoster rr
   stanzaRequest rrefSession request okHandler
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
         item = element (rosterName "item")
-               ([ ("jid", addressToText jid)
-                ] ++ maybeToList (fmap ("name", ) name)
-               ) $ map (\g -> NodeElement $ element (rosterName "group") [] [NodeContent g]) $ S.toList groups
+               (("jid", addressToText jid) : maybeToList (fmap ("name", ) name))
+               $ map (\g -> NodeElement $ element (rosterName "group") [] [NodeContent g]) $ S.toList groups
 
 deleteRoster :: MonadStream m => RosterRef m -> XMPPAddress -> m ()
-deleteRoster (RosterRef {..}) jid = do
-  void $ readMVar rref
+deleteRoster rr@(RosterRef {..}) jid = do
+  void $ getRoster rr
   stanzaRequest rrefSession request okHandler
 
   where request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
@@ -147,26 +160,37 @@ parseInitial e = do
   rentrySubscription <- case injFrom $ fromMaybe "none" $ getAttr "subscription" e of
     Nothing -> Left "parseInitial: invalid subscription type"
     Just r -> return r
+  rentrySubscriptionAsked <- case getAttr "ask" e of
+    Nothing -> return False
+    Just "subscribe" -> return True
+    _ -> Left "parseInitial: invalid ask type"
   let entry = RosterEntry { rentryName = getAttr "name" e
                           , rentryGroups = S.fromList $ fromElement e $/ XC.element (rosterName "group") &/ content
                           , ..
                           }
   return (jid, entry)
 
-handleFirstRequest :: MonadStream m => RosterRef m -> Maybe Roster -> ResponseIQHandler m
-handleFirstRequest (RosterRef {..}) mold resp = do
-  let roster' = case (mold, resp) of
-        (_, Left (err, _)) -> error [i|handleFirstRequest: error while requesting roster: #{err}|]
-        (Just old, Right []) | isJust $ rosterVersion old  -> old
-        (_, Right [res]) | elementName res == rosterName "query" ->
-                     case sequence $ map parseInitial $ fromElement res $/ curAnyElement of
-                       Left e -> error $ T.unpack e
-                       Right entries -> Roster { rosterVersion = getAttr "ver" res
-                                              , rosterEntries = M.fromList entries
-                                              }
-        _ -> error "handleFirstRequest: invalid roster response"
+sendFirstRequest :: MonadStream m => StanzaSession m -> Maybe Roster -> m Roster
+sendFirstRequest session mold = do
+  stream <- sessionGetStream $ ssSession session
+  let ver =
+        if any isRosterVer $ streamFeatures stream
+        then Just $ fromMaybe "" $ mold >>= rosterVersion
+        else Nothing
+      req = serverRequest IQGet [element (rosterName "query") (maybeToList $ fmap ("ver", ) ver) []]
 
-  putMVar rref roster'
+  resp <- stanzaSyncRequest session req
+
+  case (mold, resp) of
+        (_, Left err) -> fail [i|handleFirstRequest: error while requesting roster: #{err}|]
+        (Just old, Right []) | isJust $ rosterVersion old  -> return old
+        (_, Right [res]) | elementName res == rosterName "query" ->
+                     case mapM parseInitial $ fromElement res $/ curAnyElement of
+                       Left e -> fail $ T.unpack e
+                       Right entries -> return $ Roster { rosterVersion = getAttr "ver" res
+                                                        , rosterEntries = M.fromList entries
+                                                        }
+        _ -> fail "handleFirstRequest: invalid roster response"
 
 getRosterEvent :: Element -> Either StanzaError RosterEvent
 getRosterEvent e = do
@@ -174,6 +198,10 @@ getRosterEvent e = do
   jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
     Nothing -> Left $ jidMalformed "getRosterEvent: invalid jid in roster push"
     Just r -> return r
+  rentrySubscriptionAsked <- case getAttr "ask" e of
+    Nothing -> return False
+    Just "subscribe" -> return True
+    _ -> Left $ badRequest "getRosterEvent: invalid ask type"
   let subscr = fromMaybe "none" (getAttr "subscription" e)
   case injFrom subscr of
     Just rentrySubscription -> do
@@ -189,48 +217,54 @@ applyRosterEvent :: RosterEntries -> RosterEvent -> RosterEntries
 applyRosterEvent roster (RosterInsert jid entry) = M.insert jid entry roster
 applyRosterEvent roster (RosterDelete jid) = M.delete jid roster
 
-rosterIqHandler :: MonadStream m => RosterRef m -> PluginRequestIQHandler m
-rosterIqHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriChildren = [req] })
+rosterIQHandler :: MonadStream m => RosterRef m -> PluginIQHandler m
+rosterIQHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriFrom, iriChildren = [req] })
   | elementName req == rosterName "query" = Just <$> do
-      mroster <- modifyMVar rref $ \roster -> do
-        let newEntries = mapM getRosterEvent $ fromElement req $/ curAnyElement
-        case newEntries of
-          Left err -> return (roster, Left err)
+      if not (fromServerOrMyself iriFrom rrefSession) then
+        return $ IQError $ serviceUnavailable "Roster push from arbitrary entity is forbidden"
+      else do
+        case mapM getRosterEvent $ fromElement req $/ curAnyElement of
+          Left err -> return $ IQError err
           Right events -> do
-            let rosters = tail $ scanl applyRosterEvent (rosterEntries roster) events
-            let roster' = Roster { rosterVersion = getAttr "ver" req
-                                 , rosterEntries = last rosters
-                                 }
-            return (roster', Right $ zip rosters events)
-      case mroster of
-        Left err -> return $ Left err
-        Right revents -> do
-          mapM_ (Handler.call rrefHandler) revents
-          return $ Right []
-rosterIqHandler _ _ = return Nothing
+            result <- atomicModifyIORef' rref $ \case
+              pending@(Left _) -> (pending, Nothing)
+              Right roster ->
+                let rosters = tail $ scanl applyRosterEvent (rosterEntries roster) events
+                    roster' = Roster { rosterVersion = getAttr "ver" req
+                                     , rosterEntries = last rosters
+                                     }
+                in (Right roster', Just $ zip rosters events)
+            case result of
+              Nothing -> return $ IQError $ badRequest "Roster has not been received yet"
+              Just revents -> do
+                mapM_ (Slot.call rrefSlot) revents
+                return $ IQResult []
+rosterIQHandler _ _ = return Nothing
 
-rosterGet :: MonadStream m => RosterRef m -> m Roster
-rosterGet = readMVar . rref
+getRoster :: MonadStream m => RosterRef m -> m Roster
+getRoster (RosterRef {..}) = do
+  r <- readIORef rref
+  case r of
+    Left future -> readMVar future
+    Right res -> return res
 
-rosterTryGet :: MonadStream m => RosterRef m -> m (Maybe Roster)
-rosterTryGet = tryReadMVar . rref
+tryGetRoster :: MonadStream m => RosterRef m -> m (Maybe Roster)
+tryGetRoster (RosterRef {..}) = toRight <$> readIORef rref
 
-rosterSetHandler :: MonadStream m => RosterRef m -> ((RosterEntries, RosterEvent) -> m ()) -> m ()
-rosterSetHandler (RosterRef {..}) = Handler.set rrefHandler
+rosterSlot :: MonadStream m => RosterRef m -> SlotRef m (RosterEntries, RosterEvent)
+rosterSlot (RosterRef {..}) = Slot.ref rrefSlot
 
-rosterPlugin :: MonadStream m => StanzaSession m -> Maybe Roster -> m (XMPPPlugin m, RosterRef m)
-rosterPlugin rrefSession old = do
-  rref <- newEmptyMVar
-  rrefHandler <- Handler.new
+rosterPlugin :: MonadStream m => XMPPPluginsRef m -> Maybe Roster -> m (RosterRef m)
+rosterPlugin pluginsRef old = do
+  firstRoster <- newEmptyMVar
+  rref <- newIORef (Left firstRoster)
+  let rrefSession = pluginsSession pluginsRef
+      tryGet = do
+        ret <- sendFirstRequest rrefSession old
+        atomicWriteIORef rref (Right ret)
+        putMVar firstRoster ret
+  void $ forkIO $ tryGet `catch` \(e :: SomeException) -> putMVar firstRoster (throw e)
+  rrefSlot <- Slot.new
   let rosterRef = RosterRef {..}
-
-  stream <- sessionGetStream $ ssSession rrefSession
-  let ver =
-        if any (\case RosterVersioning -> True; _ -> False) $ streamFeatures stream
-        then Just $ fromMaybe "" $ old >>= rosterVersion
-        else Nothing
-      req = serverRequest IQGet [element (rosterName "query") (maybeToList $ fmap ("ver", ) ver) []]
-
-  stanzaRequest rrefSession req $ handleFirstRequest rosterRef old
-  let plugin = emptyPlugin { pluginRequestIqHandler = rosterIqHandler rosterRef }
-  return (plugin, rosterRef)
+  void $ HandlerList.add (pluginIQHandlers pluginsRef) (rosterIQHandler rosterRef)
+  return rosterRef

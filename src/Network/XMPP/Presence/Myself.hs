@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Presence.Myself
   ( MyPresenceRef
   , myPresenceGet
@@ -24,14 +26,13 @@ type MyselfPresenceMap = Map XMPPResource Presence
 data MyPresenceRef m = MyPresenceRef { myPresenceHandler :: Handler m (PresenceEvent XMPPResource)
                                      , myPresence :: IORef MyselfPresenceMap
                                      , myPresenceSession :: StanzaSession m
-                                     , myBareAddress :: BareJID
                                      }
 
 myPresencePHandler :: MonadStream m => MyPresenceRef m -> PresenceHandler m
-myPresencePHandler (MyPresenceRef {..}) (FullJID {..}) pres
-  | myBareAddress == fullBare = do
+myPresencePHandler (MyPresenceRef {..}) from pres
+  | fullBare from == fullBare (sessionAddress $ ssSession myPresenceSession) = do
       presences <- readIORef myPresence
-      case presenceUpdate fullResource pres presences of
+      case presenceUpdate (fullResource from) pres presences of
         Nothing -> return False
         Just (presences', event) -> do
           atomicWriteIORef myPresence presences'
@@ -52,7 +53,6 @@ myPresencePlugin :: MonadStream m => StanzaSession m -> m (PresenceHandler m, My
 myPresencePlugin myPresenceSession = do
   myPresence <- newIORef M.empty
   myPresenceHandler <- Handler.new
-  let myBareAddress = fullBare $ sessionAddress $ ssSession myPresenceSession
-      pref = MyPresenceRef {..}
+  let pref = MyPresenceRef {..}
       phandler = myPresencePHandler pref
   return (phandler, pref)

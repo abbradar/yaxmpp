@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Stanza
   ( StanzaErrorType(..)
   , StanzaErrorCondition(..)
@@ -18,8 +20,10 @@ module Network.XMPP.Stanza
   , InRequestIQ(..)
   , OutRequestIQ(..)
   , serverRequest
+  , fromServerOrMyself
 
-  , ResponseIQHandler
+  , IQResponse
+  , IQResponseHandler
   , StanzaSession
   , ssSession
   , stanzaSend
@@ -27,8 +31,10 @@ module Network.XMPP.Stanza
   , stanzaRequest
   , stanzaSyncRequest
 
+  , InResponse(..)
   , InHandler
-  , RequestIQHandler
+  , RequestIQResponse(..)
+  , IQHandler
   , stanzaSessionStep
 
   , stanzaSessionCreate
@@ -38,12 +44,14 @@ import Data.Maybe
 import Control.Monad
 import Data.Text (Text)
 import UnliftIO.MVar
+import UnliftIO.IORef
+import UnliftIO.Exception
 import Control.Monad.Trans.Class
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Maybe
 import Control.Monad.Logger
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -51,6 +59,7 @@ import Data.String.Interpolate (i)
 import Data.UUID (UUID)
 import qualified Data.UUID.V4 as UUID
 import qualified Data.UUID as UUID
+import System.Random
 
 import Data.Injective
 import Network.XMPP.Stream
@@ -235,14 +244,14 @@ data InRequestIQ = InRequestIQ { iriFrom :: Maybe XMPPAddress
                                }
                  deriving (Show, Eq)
 
-data IQResponseType = IQResult
-                    | IQError
+data IQResultType = IQTypeResult
+                    | IQTypeError
                     deriving (Show, Eq, Enum, Bounded)
 
-instance Injective IQResponseType Text where
+instance Injective IQResultType Text where
   injTo x = case x of
-    IQResult -> "result"
-    IQError -> "error"
+    IQTypeResult -> "result"
+    IQTypeError -> "error"
 
 data OutRequestIQ = OutRequestIQ { oriTo :: Maybe XMPPAddress
                                  , oriIqType :: IQRequestType
@@ -258,21 +267,35 @@ serverRequest oriIqType oriChildren = OutRequestIQ { oriTo = Nothing
 stanzaName :: Text -> Name
 stanzaName = nsName "urn:ietf:params:xml:ns:xmpp-stanzas"
 
+type IQResponse = Either StanzaError [Element]
 
-type ResponseIQHandler m = Either (StanzaError, [Element]) [Element] -> m ()
+type IQResponseHandler m = IQResponse -> m ()
 
 data StanzaSession m = StanzaSession { ssSession :: Session m
-                                     , ssRequests :: MVar (Map (Maybe XMPPAddress, UUID) (ResponseIQHandler m))
+                                     , ssRequests :: IORef (Map (Maybe XMPPAddress, UUID) (IQResponseHandler m))
                                      }
+
+fromServerOrMyself :: Maybe XMPPAddress -> StanzaSession m -> Bool
+fromServerOrMyself Nothing _ = True
+fromServerOrMyself (Just XMPPAddress {..}) sess = addressDomain == bareDomain (fullBare myAddress) && localOk && resourceOk
+  where myAddress = sessionAddress $ ssSession sess
+        localOk =
+          case addressLocal of
+            Nothing -> True
+            Just local -> local == bareLocal (fullBare myAddress)
+        resourceOk =
+          case addressResource of
+            Nothing -> True
+            Just resource -> resource == fullResource myAddress
 
 stanzaSend :: MonadStream m => StanzaSession m -> OutStanza ->  m UUID
 stanzaSend sess stanza = do
-  sid <- liftIO $ UUID.nextRandom
+  sid <- liftIO UUID.nextRandom
   stanzaSend' sess (UUID.toText sid) stanza
   return sid
 
 stanzaSend' :: MonadStream m => StanzaSession m -> Text -> OutStanza -> m ()
-stanzaSend' (StanzaSession {..}) sid (OutStanza {..}) = do
+stanzaSend' StanzaSession {..} sid OutStanza {..} = do
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)
         OutPresence t -> ("presence", injTo <$> t)
@@ -282,29 +305,31 @@ stanzaSend' (StanzaSession {..}) sid (OutStanza {..}) = do
       msg = element (jcName mname) attrs $ map NodeElement ostChildren
   sessionSend ssSession msg
 
-stanzaRequest :: MonadStream m => StanzaSession m -> OutRequestIQ -> ResponseIQHandler m -> m ()
-stanzaRequest (StanzaSession {..}) (OutRequestIQ {..}) handler = modifyMVar_ ssRequests $ \reqs -> do
-  let findSid = do
-        sid <- liftIO $ UUID.nextRandom
-        if (oriTo, sid) `M.member` reqs
-          then findSid
-          else return sid
-  sid <- findSid
+stanzaRequest :: MonadStream m => StanzaSession m -> OutRequestIQ -> IQResponseHandler m -> m ()
+stanzaRequest StanzaSession {..} OutRequestIQ {..} handler = do
+  initialRand <- liftIO newStdGen
+  sid <- atomicModifyIORef' ssRequests $ \reqs ->
+    let findSid rand
+          | (oriTo, sid) `M.member` reqs = findSid nextRand
+          | otherwise = sid
+          where (sid, nextRand) = random rand
+        newSid = findSid initialRand
+    in (M.insert (oriTo, newSid) handler reqs, newSid)
   let attrs = [ ("id", UUID.toText sid)
               , ("type", injTo oriIqType)
               ] ++ maybeToList (fmap (("to", ) . addressToText) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
-  sessionSend ssSession msg
-  return $ M.insert (oriTo, sid) handler reqs
+      cleanup = atomicModifyIORef' ssRequests $ \reqs -> (M.delete (oriTo, sid) reqs, ())
+  sessionSend ssSession msg `onException` cleanup
 
-stanzaSyncRequest :: MonadStream m => StanzaSession m -> OutRequestIQ -> m (Either (StanzaError, [Element]) [Element])
+stanzaSyncRequest :: MonadStream m => StanzaSession m -> OutRequestIQ -> m IQResponse
 stanzaSyncRequest session req = do
   ret <- newEmptyMVar
   stanzaRequest session req $ \res -> putMVar ret res
   takeMVar ret
 
 stanzaSendError :: MonadStream m => StanzaSession m -> Element -> StanzaError -> m ()
-stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
+stanzaSendError StanzaSession {..} e err@StanzaError {..} = do
   $(logWarn) [i|Stanza error sent: #{err}|]
   sessionSend ssSession $ element (elementName e) (("type", "error") : catMaybes attrs) (elementNodes e ++ [errorE])
 
@@ -313,16 +338,27 @@ stanzaSendError (StanzaSession {..}) e err@(StanzaError {..}) = do
                 , ("from", ) <$> getAttr "to" e
                 ]
         errorE = NodeElement $ element "error" [("type", injTo szeType)] $
-                 [ NodeElement $ closedElement $ stanzaName $ injTo $ szeCondition 
+                 [ NodeElement $ closedElement $ stanzaName $ injTo szeCondition
                  ]
                  ++ maybeToList (fmap (\t -> NodeElement $ element (stanzaName "text") [(xmlName "lang", "en")] [NodeContent t]) szeText)
                  ++ map NodeElement szeChildren
 
-type InHandler m = InStanza -> m (Maybe StanzaError)
-type RequestIQHandler m = InRequestIQ -> m (Either StanzaError [Element])
+data InResponse = InSilent
+                | InError StanzaError
+                deriving (Show, Eq)
 
-getStanzaError :: Element -> (StanzaError, [Element])
-getStanzaError e = (StanzaError {..}, others)
+type InHandler m = InStanza -> m InResponse
+
+data RequestIQResponse = IQResult [Element]
+                       | IQError StanzaError
+                       -- Needed sometimes to prevent information leaks, for example https://xmpp.org/rfcs/rfc6121.html#roster-syntax-actions-push
+                       | IQSilent
+                       deriving (Show, Eq)
+
+type IQHandler m = InRequestIQ -> m RequestIQResponse
+
+getStanzaError :: Element -> StanzaError
+getStanzaError e = StanzaError {..}
   where topCur = fromElement e
         errorE = case topCur $/ XC.element (jcName "error") &| curElement of
           (err:_) -> err
@@ -339,14 +375,13 @@ getStanzaError e = (StanzaError {..}, others)
 
         szeChildren = cur $/ checkName (\n -> n /= stanzaName (injTo szeCondition) && n /= stanzaName "text") &| curElement
 
-        others = topCur $/ checkName (/= jcName "error") &| curElement
 
 checkOrFail :: Monad m => Maybe a -> m () -> MaybeT m a
 checkOrFail Nothing finalize = MaybeT $ finalize >> return Nothing
 checkOrFail (Just a) _ = MaybeT $ return $ Just a
 
-stanzaSessionStep :: MonadStream m => StanzaSession m -> InHandler m -> RequestIQHandler m -> m ()
-stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMaybeT $ do
+stanzaSessionStep :: MonadStream m => StanzaSession m -> InHandler m -> IQHandler m -> m ()
+stanzaSessionStep sess@StanzaSession {..} inHandler reqHandler = void $ runMaybeT $ do
   e <- MaybeT $ sessionStep ssSession
 
   let sendError = stanzaSendError sess e
@@ -367,68 +402,70 @@ stanzaSessionStep sess@(StanzaSession {..}) inHandler reqHandler = void $ runMay
       tfrom = tfrom' >>= \from -> if from == bare then Nothing else return from
   tto <- getAddr "to"
 
-  if | ename == jcName "iq" -> do
-         ttype <- checkOrFail tmtype $ sendError $ badRequest "stanzaSessionStep: iq type is not specified"
-         tid <- checkOrFail tmid $ sendError $ badRequest "stanzaSessionStep: iq id is not specified"
-         case injFrom ttype of
-           Just reqType -> lift $ do
-             res <- reqHandler InRequestIQ { iriFrom = tfrom
-                                          , iriTo = tto
-                                          , iriId = tid
-                                          , iriType = reqType
-                                          , iriChildren = payload
-                                          }
-             case res of
-               Left serr -> sendError serr
-               Right cres -> do
-                 let attrs =
-                       [ ("id", tid)
-                       , ("type", "result")
-                       ] ++ catMaybes [ ("to", ) <$> getAttr "from" e
-                                      , ("from", ) <$> getAttr "to" e
-                                      ]
-                 sessionSend ssSession $ element (jcName "iq") attrs $ map NodeElement cres
-           Nothing -> case injFrom ttype of
-             Just resType -> do
-               nid <- checkOrFail (UUID.fromText tid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
-               lift $ do
-                 mhandler <- modifyMVar ssRequests $ \requests -> case M.lookup (tfrom, nid) requests of
-                   Nothing -> return (requests, Nothing)
-                   Just handler -> return (M.delete (tfrom, nid) requests, Just handler)
-                 case (mhandler, resType) of
-                   (Nothing, _) -> sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
-                   (Just handler, IQResult) -> handler $ Right payload
-                   (Just handler, IQError) -> handler $ Left $ getStanzaError e
-             Nothing -> lift $ sendError $ badRequest "stanzaSessionStep: iq type is invalid"
+  if ename == jcName "iq"
+    then do
+      ttype <- checkOrFail tmtype $ sendError $ badRequest "stanzaSessionStep: iq type is not specified"
+      tid <- checkOrFail tmid $ sendError $ badRequest "stanzaSessionStep: iq id is not specified"
+      case injFrom ttype of
+        Just reqType -> lift $ do
+          res <- reqHandler InRequestIQ { iriFrom = tfrom
+                                        , iriTo = tto
+                                        , iriId = tid
+                                        , iriType = reqType
+                                        , iriChildren = payload
+                                        }
+          case res of
+            IQSilent -> return ()
+            IQError serr -> sendError serr
+            IQResult cres -> do
+              let attrs =
+                    [ ("id", tid)
+                    , ("type", "result")
+                    ] ++ catMaybes [ ("to", ) <$> getAttr "from" e
+                                   , ("from", ) <$> getAttr "to" e
+                                   ]
+              sessionSend ssSession $ element (jcName "iq") attrs $ map NodeElement cres
+        Nothing -> case injFrom ttype of
+          Just resType -> do
+            nid <- checkOrFail (UUID.fromText tid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
+            lift $ do
+              mhandler <- atomicModifyIORef' ssRequests $ \requests -> case M.lookup (tfrom, nid) requests of
+                Nothing -> (requests, Nothing)
+                Just handler -> (M.delete (tfrom, nid) requests, Just handler)
+              case (mhandler, resType) of
+                (Nothing, _) -> sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
+                (Just handler, IQTypeResult) -> handler $ Right payload
+                (Just handler, IQTypeError) -> handler $ Left $ getStanzaError e
+          Nothing -> lift $ sendError $ badRequest "stanzaSessionStep: iq type is invalid"
+    else do
+      let (ttype, children) =
+            if tmtype == Just "error"
+            then (Left $ getStanzaError e, [])
+            else (Right tmtype, payload)
+      mtype <-
+        if | ename == jcName "message" -> do
+               let getType mt = case mt of
+                     Nothing -> return MessageNormal
+                     Just t -> checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid message type"
+               InMessage <$> mapM getType ttype
+           | ename == jcName "presence" -> do
+               let getType t = checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid presence type"
+               InPresence <$> mapM (mapM getType) ttype
+           | otherwise -> do
+               lift $ sendErrorOnIq $ badRequest "stanzaSessionStep: unknown stanza type"
+               mzero
 
-
-     | otherwise -> do
-         let (ttype, children) =
-               if tmtype == Just "error"
-               then let (err, ch) = getStanzaError e in (Left err, ch)
-               else (Right tmtype, payload)
-         mtype <-
-           if | ename == jcName "message" -> do
-                  let getType mt = case mt of
-                        Nothing -> return MessageNormal
-                        Just t -> checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid message type"
-                  InMessage <$> mapM getType ttype
-              | ename == jcName "presence" -> do
-                  let getType t = checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid presence type"
-                  InPresence <$> mapM (mapM getType) ttype
-              | otherwise -> do
-                  lift $ sendErrorOnIq $ badRequest "stanzaSessionStep: unknown stanza type"
-                  mzero
-
-         res <- MaybeT $ inHandler $ InStanza { istFrom = tfrom
-                                             , istTo = tto
-                                             , istId = tmid
-                                             , istType = mtype
-                                             , istChildren = children
-                                             }
-         lift $ sendError res
+      res <- lift $ inHandler $ InStanza { istFrom = tfrom
+                                         , istTo = tto
+                                         , istId = tmid
+                                         , istType = mtype
+                                         , istChildren = children
+                                         }
+      case res of
+        InSilent -> return ()
+        InError err -> lift $ sendError err
 
 stanzaSessionCreate :: MonadStream m => Session m -> m (StanzaSession m)
 stanzaSessionCreate ssSession = do
-  ssRequests <- newMVar M.empty
+  ssRequests <- newIORef M.empty
   return StanzaSession {..}

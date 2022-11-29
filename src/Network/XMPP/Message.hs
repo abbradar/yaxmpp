@@ -1,8 +1,10 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Message
   ( IMThread(..)
   , IMMessage(..)
   , plainIMMessage
-  , imSetHandler
+  , imSlot
   , imSend
   , imPlugin
   ) where
@@ -15,8 +17,9 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import Control.Handler (Handler)
-import qualified Control.Handler as Handler
+import Control.Slot (Slot, SlotRef)
+import qualified Control.Slot as Slot
+import qualified Control.HandlerList as HandlerList
 import Network.XMPP.XML
 import Network.XMPP.Stream
 import Network.XMPP.Stanza
@@ -45,11 +48,11 @@ plainIMMessage txt = IMMessage { imType = MessageChat
                                , imExtended = []
                                }
 
-data IMRef m = IMRef { imHandler :: Handler m (XMPPAddress, IMMessage)
+data IMRef m = IMRef { imSlotI :: Slot m (XMPPAddress, IMMessage)
                      , imSession :: StanzaSession m
                      }
 
-imInHandler :: MonadStream m => IMRef m -> InStanza -> m (Maybe (Maybe StanzaError))
+imInHandler :: MonadStream m => IMRef m -> InStanza -> m (Maybe InResponse)
 imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (Right imType), istChildren })
   | Just bodyRes <- localizedFromElement (jcName "body") istChildren = Just <$> do
       let res = runExcept $ do
@@ -64,7 +67,7 @@ imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (R
       case res of
         Left e -> return $ Just e
         Right msg -> do
-          Handler.call imHandler (from, msg)
+          Slot.call imSlotI (from, msg)
           return Nothing
         
   where cur = fromChildren istChildren
@@ -76,8 +79,8 @@ imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (R
 
 imInHandler _ _ = return Nothing
 
-imSetHandler :: MonadStream m => IMRef m -> ((XMPPAddress, IMMessage) -> m ()) -> m ()
-imSetHandler (IMRef {..}) = Handler.set imHandler
+imSlot :: MonadStream m => IMRef m -> SlotRef m (XMPPAddress, IMMessage)
+imSlot (IMRef {..}) = Slot.ref imSlotI
 
 imSend :: MonadStream m => IMRef m -> XMPPAddress -> IMMessage -> m ()
 imSend (IMRef {..}) to (IMMessage {..}) =
@@ -90,9 +93,9 @@ imSend (IMRef {..}) to (IMMessage {..}) =
         bodies = localizedElements (jcName "body") imBody
         mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent", ) imParent) [NodeContent imId]) imThread
 
-imPlugin :: MonadStream m => StanzaSession m -> m (XMPPPlugin m, IMRef m)
-imPlugin imSession = do
-  imHandler <- Handler.new
-  let pref = IMRef {..}
-      plugin = emptyPlugin { pluginInHandler = imInHandler pref }
-  return (plugin, pref)
+imPlugin :: MonadStream m => XMPPPluginsRef m -> m (IMRef m)
+imPlugin pluginsRef = do
+  imSlotI <- Slot.new
+  let pref = IMRef { imSession = pluginsSession pluginsRef, .. }
+  void $ HandlerList.add (pluginInHandlers pluginsRef) $ imInHandler pref
+  return pref

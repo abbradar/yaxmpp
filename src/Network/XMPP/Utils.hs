@@ -1,6 +1,7 @@
 module Network.XMPP.Utils where
 
 import Control.Arrow
+import Text.Read
 import Control.Monad
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -11,6 +12,10 @@ import Data.Attoparsec.Text
 
 parseValue :: Parser a -> Text -> Either String a
 parseValue parser = parseOnly (parser <* endOfInput)
+
+maybeToEither :: a -> Maybe b -> Either a b
+maybeToEither def Nothing = Left def
+maybeToEither _ (Just val) = Right val
 
 maybeFail :: MonadFail m => String -> Maybe a -> m a
 maybeFail _ (Just a) = return a
@@ -35,3 +40,10 @@ mapDisjointFromList = sequence . M.fromListWith conflict . fmap (second return)
 toRight :: Either a b -> Maybe b
 toRight (Right r) = Just r
 toRight _ = Nothing
+
+readIntMaybe :: forall a. (Bounded a, Integral a) => String -> Maybe a
+readIntMaybe str = do
+  (int :: Integer) <- readMaybe str
+  when (int < fromIntegral (minBound :: a)) $ fail "readIntMaybe: too small"
+  when (int > fromIntegral (maxBound :: a)) $ fail "readIntMaybe: too big"
+  return $ fromIntegral int

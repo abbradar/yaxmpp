@@ -1,7 +1,9 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Presence.Roster
   ( RosterPresenceMap
   , RosterPresenceRef
-  , rpresenceGet
+  , getRosterPresence
   , rpresenceSetHandler
   , rpresencePlugin
   ) where
@@ -11,8 +13,8 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Text.XML
 
-import Control.Handler (Handler)
-import qualified Control.Handler as Handler
+import Control.HandlerList (HandlerList)
+import qualified Control.HandlerList as HandlerList
 import Network.XMPP.Stream
 import Network.XMPP.Address
 import Network.XMPP.Presence
@@ -29,7 +31,7 @@ data RosterPresenceEvent = FirstResource FullJID Presence
 
 data RosterPresenceRef m = RosterPresenceRef { rpresenceRef :: IORef RosterPresenceMap
                                              , rpresenceRoster :: RosterRef m
-                                             , rpresenceHandler :: Handler m RosterPresenceEvent
+                                             , rpresenceHandler :: HandlerList m RosterPresenceEvent
                                              }
 
 rosterUpdate :: FullJID -> Either [Element] Presence -> RosterPresenceMap -> Maybe (RosterPresenceMap, RosterPresenceEvent)
@@ -52,7 +54,7 @@ rosterUpdate full@(FullJID {..}) (Left err) rmap =
 
 rpresencePHandler :: MonadStream m => RosterPresenceRef m -> PresenceHandler m
 rpresencePHandler (RosterPresenceRef {..}) full presUpd = do
-  roster <- rosterEntries <$> rosterGet rpresenceRoster
+  roster <- rosterEntries <$> getRoster rpresenceRoster
   if bareJidAddress (fullBare full) `M.member` roster
     then do
       rpres <- readIORef rpresenceRef
@@ -64,8 +66,8 @@ rpresencePHandler (RosterPresenceRef {..}) full presUpd = do
           return True
     else return False
 
-rpresenceGet :: MonadStream m => RosterPresenceRef m -> m RosterPresenceMap
-rpresenceGet = readIORef . rpresenceRef
+getRosterPresence :: MonadStream m => RosterPresenceRef m -> m RosterPresenceMap
+getRosterPresence = readIORef . rpresenceRef
 
 rpresenceSetHandler :: MonadStream m => RosterPresenceRef m -> (RosterPresenceEvent -> m ()) -> m ()
 rpresenceSetHandler (RosterPresenceRef {..}) = Handler.set rpresenceHandler

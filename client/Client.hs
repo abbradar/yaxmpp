@@ -129,7 +129,7 @@ main = do
         discoP <- discoPlugin [mucDiscoH, verDiscoH, timeDiscoH]
 
         let saveRoster = do
-              roster <- rosterTryGet rosterRef
+              roster <- tryGetRoster rosterRef
               case roster of
                 Just r | Just _ <- rosterVersion r -> liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode r
                 _ -> return ()
@@ -187,7 +187,7 @@ main = do
                 , ( "roster"
                   , Command { commandHandler = \runInBase args -> case args of
                                 [] -> do
-                                  roster <- runInBase $ rosterGet rosterRef
+                                  roster <- runInBase $ getRoster rosterRef
                                   HL.outputStrLn $ show roster
                                 _ -> HL.outputStrLn "Invalid arguments"
                             , commandAutocomplete = \_ _ -> return []
@@ -205,7 +205,7 @@ main = do
                 , ( "roster_presence"
                   , Command { commandHandler = \runInBase args -> case args of
                                 [] -> do
-                                  pres <- runInBase $ rpresenceGet rpresRef
+                                  pres <- runInBase $ getRosterPresence rpresRef
                                   HL.outputStrLn $ show pres
                                 _ -> HL.outputStrLn "Invalid arguments"
                             , commandAutocomplete = \_ _ -> return []

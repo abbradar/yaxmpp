@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.XEP.Disco
   ( DiscoIdentity(..)
   , DiscoFeature
@@ -8,8 +10,10 @@ module Network.XMPP.XEP.Disco
   , getDiscoItems
   , DiscoTopo(..)
   , getDiscoTopo
-  , DiscoPlugin(..)
-  , emptyDiscoPlugin
+  , DiscoInfo(..)
+  , emptyDiscoInfo
+  , DiscoRef
+  , discoInfos
   , discoPlugin
   ) where
 
@@ -29,6 +33,9 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import Data.String.Interpolate (i)
 
+import Data.RefMap (RefMap, RefMapRef)
+import qualified Data.RefMap as RefMap
+import qualified Control.HandlerList as HandlerList
 import Network.XMPP.Utils
 import Network.XMPP.XML
 import Network.XMPP.Plugin
@@ -71,7 +78,7 @@ requiredAttr name e = case getAttr name e of
 parseNamed :: (Show k, Ord k) => Element -> Name -> (Element -> Either StanzaError k) -> Either StanzaError (Map k (Maybe LocalizedText))
 parseNamed root name getKey = do
   items <- mapM getElem $ fromElement root $/ XC.element name &| curElement
-  namedMap <- sequence $ fmap sequence $ M.fromListWithKey (\k -> M.unionWith $ conflict k) $ fmap (second $ fmap return) items
+  namedMap <- mapM sequence $ M.fromListWithKey (M.unionWith . conflict) $ fmap (second $ fmap return) items
   return $ fmap localizedFromTexts namedMap
   
   where getElem e = do
@@ -104,7 +111,7 @@ getDiscoEntity sess addr node = do
                                             , oriChildren = [element (discoInfoName "query") (maybeToList $ fmap ("node", ) node) []]
                                             }
   return $ case ret of
-    Left (e, _) -> Left e
+    Left e -> Left e
     Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
     _ -> Left $ badRequest "getDiscoEntity: invalid response"
 
@@ -131,7 +138,7 @@ getDiscoItems sess addr node = do
                                             , oriChildren = [element (discoItemsName "query") (maybeToList $ fmap ("node", ) node) []]
                                             }
   return $ case ret of
-    Left (e, _) -> Left e
+    Left e -> Left e
     Right [r] -> parseDiscoItems r
     _ -> Left $ badRequest "getDiscoItems: multiple elements in response"
 
@@ -162,23 +169,23 @@ emitNamed elems name toAttrs = concatMap toNamed $ M.toAscList elems
         toNamed (k, Just names) = map toOne $ M.toAscList $ localTexts names
           where toOne (lang, text) = element name ([("name", text)] ++ xmlLangAttr lang ++ toAttrs k) []
 
-data DiscoPlugin = DiscoPlugin { discoPEntity :: DiscoEntity
-                               , discoPItems :: DiscoItems
-                               , discoPChildren :: Map DiscoNode (DiscoEntity, DiscoItems)
-                               }
+data DiscoInfo = DiscoInfo { discoIEntity :: DiscoEntity
+                           , discoIItems :: DiscoItems
+                           , discoIChildren :: Map DiscoNode (DiscoEntity, DiscoItems)
+                           }
 
-emptyDiscoPlugin :: DiscoPlugin
-emptyDiscoPlugin = DiscoPlugin { discoPEntity = emptyDiscoEntity
-                               , discoPItems = M.empty
-                               , discoPChildren = M.empty
-                               }
+emptyDiscoInfo :: DiscoInfo
+emptyDiscoInfo = DiscoInfo { discoIEntity = emptyDiscoEntity
+                           , discoIItems = M.empty
+                           , discoIChildren = M.empty
+                           }
 
-discoPluginUnion :: DiscoPlugin -> DiscoPlugin -> Maybe DiscoPlugin
-discoPluginUnion a b = do
-  discoPEntity <- discoEntityUnion (discoPEntity a) (discoPEntity b)
-  discoPItems <- mapDisjointUnion (discoPItems a) (discoPItems b)
-  discoPChildren <- mapDisjointUnion (discoPChildren a) (discoPChildren b)
-  return DiscoPlugin {..}
+discoInfoUnion :: DiscoInfo -> DiscoInfo -> Maybe DiscoInfo
+discoInfoUnion a b = do
+  discoIEntity <- discoEntityUnion (discoIEntity a) (discoIEntity b)
+  discoIItems <- mapDisjointUnion (discoIItems a) (discoIItems b)
+  discoIChildren <- mapDisjointUnion (discoIChildren a) (discoIChildren b)
+  return DiscoInfo {..}
 
 emitDiscoEntity :: DiscoEntity -> [Element]
 emitDiscoEntity (DiscoEntity {..}) = identities ++ features
@@ -188,33 +195,43 @@ emitDiscoEntity (DiscoEntity {..}) = identities ++ features
 
 emitDiscoItems :: DiscoItems -> [Element]
 emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
-  where makeItemAttr (addr, mNode) = [("jid", addressToText addr)] ++ maybeToList (fmap ("node", ) mNode)
+  where makeItemAttr (addr, mNode) = ("jid", addressToText addr) : maybeToList (fmap ("node", ) mNode)
 
-discoIqHandler :: MonadStream m => DiscoPlugin -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
-discoIqHandler (DiscoPlugin {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] }) =
+newtype DiscoRef m = DiscoRef { discoInfosI :: RefMap (m DiscoInfo) }
+
+discoIQHandler :: MonadStream m => DiscoRef m -> InRequestIQ -> m (Maybe RequestIQResponse)
+discoIQHandler (DiscoRef {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] }) = do
+  infos <- RefMap.entries discoInfosI >>= sequence
+  DiscoInfo {..} <- case foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos of
+    Nothing -> fail "discoIqHandler: overlapping plugins"
+    Just r -> return r
+  let res
+        | elementName req == infoName = Just $ fmap (infoName, ) $ case getAttr "node" req of
+            Nothing -> Just $ emitDiscoEntity discoIEntity
+            Just node | Just (entity, _) <- M.lookup node discoIChildren -> Just $ emitDiscoEntity entity
+            _ -> Nothing
+        | elementName req == itemsName = Just $ fmap (itemsName, ) $ case getAttr "node" req of
+            Nothing -> Just $ emitDiscoItems discoIItems
+            Just node | Just (_, items) <- M.lookup node discoIChildren -> Just $ emitDiscoItems items
+            _ -> Nothing
+        | otherwise = Nothing
   case res of
     Nothing -> return Nothing
-    Just Nothing -> return $ Just $ Left $ itemNotFound "discoIqHandler: unknown node"
+    Just Nothing -> return $ Just $ IQError $ itemNotFound "discoIqHandler: unknown node"
     Just (Just (name, elems)) ->
-      return $ Just $ Right [element name (maybeToList $ fmap ("node", ) $ getAttr "node" req) $ map NodeElement elems]
+      return $ Just $ IQResult [element name (maybeToList $ ("node", ) <$> getAttr "node" req) $ map NodeElement elems]
 
   where infoName = discoInfoName "query"
         itemsName = discoItemsName "query"
-        res
-          | elementName req == infoName = Just $ fmap (infoName, ) $ case getAttr "node" req of
-              Nothing -> Just $ emitDiscoEntity discoPEntity
-              Just node | Just (entity, _) <- M.lookup node discoPChildren -> Just $ emitDiscoEntity entity
-              _ -> Nothing
-          | elementName req == itemsName = Just $ fmap (itemsName, ) $ case getAttr "node" req of
-              Nothing -> Just $ emitDiscoItems discoPItems
-              Just node | Just (_, items) <- M.lookup node discoPChildren -> Just $ emitDiscoItems items
-              _ -> Nothing
-          | otherwise = Nothing
-discoIqHandler _ _ = return Nothing
 
-discoPlugin :: MonadStream m => [DiscoPlugin] -> m (XMPPPlugin m)
-discoPlugin plugins = do
-  plugin <- case foldr (\a acc -> acc >>= discoPluginUnion a) (Just emptyDiscoPlugin) plugins of
-    Nothing -> fail "discoPlugin: overlapping plugins"
-    Just r -> return r
-  return $ emptyPlugin { pluginRequestIqHandler = discoIqHandler plugin }
+discoIQHandler _ _ = return Nothing
+
+discoInfos :: DiscoRef m -> RefMapRef (m DiscoInfo)
+discoInfos ref = RefMap.ref $ discoInfosI ref
+
+discoPlugin ::  MonadStream m => XMPPPluginsRef m -> m (DiscoRef m)
+discoPlugin pluginsRef = do
+  discoInfosI <- RefMap.new
+  let discoRef = DiscoRef {..}
+  void $ HandlerList.add (pluginIQHandlers pluginsRef) $ discoIQHandler discoRef
+  return discoRef

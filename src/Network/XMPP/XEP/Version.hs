@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.XEP.Version
   ( VersionInfo(..)
   , defaultVersion
@@ -15,6 +17,8 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
+import qualified Control.HandlerList as HandlerList
+import qualified Data.RefMap as RefMap
 import Paths_yaxmpp (version)
 import Network.XMPP.XML
 import Network.XMPP.Stream
@@ -39,15 +43,15 @@ defaultVersion = VersionInfo { swName = "yaxmpp"
                              , swOS = Just $ T.pack os
                              }
 
-versionIqHandler :: MonadStream m => VersionInfo -> InRequestIQ -> m (Maybe (Either StanzaError [Element]))
-versionIqHandler (VersionInfo {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] })
+versionIQHandler :: MonadStream m => VersionInfo -> InRequestIQ -> m (Maybe RequestIQResponse)
+versionIQHandler (VersionInfo {..}) (InRequestIQ { iriType = IQGet, iriChildren = [req] })
   | elementName req == queryTag =
-      return $ Just $ Right [element queryTag [] $ map (\(name, value) -> NodeElement $ element (versionName name) [] [NodeContent value]) result]
+      return $ Just $ IQResult [element queryTag [] $ map (\(name, value) -> NodeElement $ element (versionName name) [] [NodeContent value]) result]
   where queryTag = versionName "query"
         result = [ ("name", swName)
                  , ("version", swVersion)
                  ] ++ maybeToList (fmap ("os", ) swOS)
-versionIqHandler _ _ = return Nothing
+versionIQHandler _ _ = return Nothing
 
 getVersion :: MonadStream m => StanzaSession m -> XMPPAddress -> m (Either StanzaError VersionInfo)
 getVersion sess addr = do
@@ -56,7 +60,7 @@ getVersion sess addr = do
                                             , oriChildren = [closedElement (versionName "query")]
                                             }
   return $ case ret of
-    Left (e, _) -> Left e
+    Left e -> Left e
     Right [r] | elementName r == versionName "query"
               , [swName] <- getEntry r "name"
               , [swVersion] <- getEntry r "version"
@@ -66,10 +70,9 @@ getVersion sess addr = do
 
   where getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 
-versionPlugin :: MonadStream m => VersionInfo -> m (XMPPPlugin m, DiscoPlugin)
-versionPlugin settings = do
-  let xmppPlugin = emptyPlugin { pluginRequestIqHandler = versionIqHandler settings
-                       }
-      discoHandler = emptyDiscoPlugin { discoPEntity = emptyDiscoEntity { discoFeatures = S.singleton versionNS }
-                                      }
-  return (xmppPlugin, discoHandler)
+versionPlugin :: MonadStream m => XMPPPluginsRef m -> DiscoRef m -> VersionInfo -> m ()
+versionPlugin pluginsRef discoRef settings = do
+  let discoInfo = emptyDiscoInfo { discoIEntity = emptyDiscoEntity { discoFeatures = S.singleton versionNS }
+                                 }
+  void $ HandlerList.add (pluginIQHandlers pluginsRef) $ versionIQHandler settings
+  void $ RefMap.add (discoInfos discoRef) $ return discoInfo

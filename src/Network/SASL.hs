@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.SASL
        ( ClientMessage(..)
        , ServerMessage(..)

@@ -36,17 +36,25 @@ dependencies:
   - time
   - uuid
   - text-show
+  - cryptonite
+  - random
 
 default-extensions:
   - OverloadedStrings
   - RecordWildCards
+  - ExistentialQuantification
   - TupleSections
+  - TypeOperators
+  - FlexibleInstances
   - RankNTypes
+  - PolyKinds
   - MultiWayIf
   - LambdaCase
   - FlexibleContexts
   - ViewPatterns
   - ScopedTypeVariables
+  - KindSignatures
+  - DataKinds
   - ConstraintKinds
   - MultiParamTypeClasses
   - GeneralizedNewtypeDeriving

@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Session
        ( ResumptionExceptionData(..)
        , ResumptionException(..)
@@ -66,6 +68,19 @@ data Session m = Session { sessionAddress :: FullJID
                          , sessionWLock :: MVar (Maybe WriteSessionData)
                          }
 
+bindName :: Text -> Name
+bindName = nsName "urn:ietf:params:xml:ns:xmpp-bind"
+
+isBind :: Element -> Bool
+isBind e = elementName e == bindName "bind"
+
+smNS :: Text
+smName :: Text -> Name
+(smNS, smName) = namePair "urn:xmpp:sm:3"
+
+isSM :: Element -> Bool
+isSM e = elementName e == smName "sm"
+
 applySentH :: Word32 -> WriteSessionData -> WriteSessionData
 applySentH h ws = ws { wsPending = go $ wsPending ws }
   where go s = case S.viewl s of
@@ -87,7 +102,7 @@ restartOrThrow ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
   case ns of
     Left err -> throwE $ ClientErrorException err
     Right s -> do
-      unless (any (\case StreamManagement -> True; _ -> False) $ streamFeatures s) $ throwE StreamManagementVanished
+      unless (any isSM $ streamFeatures s) $ throwE StreamManagementVanished
       streamSend s $ element (smName "resume") [("h", showt $ rsRecvN rs), ("previd", reconnectId)] []
       eanswer <- streamRecv s
       if | elementName eanswer == smName "resumed"
@@ -187,7 +202,7 @@ data SessionSettings = SessionSettings { ssConn :: ConnectionSettings
 
 bindResource :: MonadStream m => Text -> Stream m -> m Text
 bindResource wantRes s
-  | not $ any (\case BindResource -> True; _ -> False) $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
+  | not $ any isBind $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
   | otherwise = do
       streamSend s $ element (jcName "iq") [("type", "set"), ("id", "res-bind")]
         [ NodeElement $ element (bindName "bind") []
@@ -222,7 +237,7 @@ parseLocation csettings string =
 
 initSM :: MonadStream m => ConnectionSettings -> Stream m -> m (Maybe (Maybe ReconnectInfo))
 initSM csettings s
-  | not $ any (\case StreamManagement -> True; _ -> False) $ streamFeatures s = do
+  | not $ any isSM $ streamFeatures s = do
       $(logInfo) "Stream management is not supported"
       return Nothing
   | otherwise = Just <$> do

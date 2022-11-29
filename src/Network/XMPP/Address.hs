@@ -86,21 +86,21 @@ instance ToJSONKey XMPPAddress where
 
 nodeProhibited :: [Range]
 nodeProhibited = 
-  [ range '\x0022' '\x0023'
-  , range '\x0026' '\x0027'
-  , range '\x0027' '\x0028'
-  , range '\x002F' '\x0030'
-  , range '\x003A' '\x003B'
-  , range '\x003C' '\x003D'
-  , range '\x003E' '\x003F'
-  , range '\x0040' '\x0041'
+  [ single '\x0022'
+  , single '\x0026'
+  , single '\x0027'
+  , single '\x002F'
+  , single '\x003A'
+  , single '\x003C'
+  , single '\x003E'
+  , single '\x0040'
   ]
 
 nodePrepProfile :: StringPrepProfile
 nodePrepProfile =
   Profile { maps = [b1, b2]
           , shouldNormalize = True
-          , prohibited = [a1, c11, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9, nodeProhibited]
+          , prohibited = [c11, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9, nodeProhibited]
           , shouldCheckBidi = True
           }
 

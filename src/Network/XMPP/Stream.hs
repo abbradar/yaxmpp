@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.Stream
        ( ConnectionInterruptionException(..)
        , StreamErrorType(..)
@@ -6,7 +8,6 @@ module Network.XMPP.Stream
        , unexpectedInput
        , StreamSettings(..)
        , xmppVersion
-       , StreamFeature(..)
        , streamSend
        , streamRecv
        , streamThrow
@@ -23,7 +24,6 @@ module Network.XMPP.Stream
        ) where
 
 import Data.Maybe
-import Data.List (find)
 import Data.Typeable
 import Control.Monad
 import Control.Exception (IOException)
@@ -247,9 +247,6 @@ streamNS :: Text
 streamName :: Text -> Name
 (streamNS, streamName) = namePair "http://etherx.jabber.org/streams"
 
-compressionName :: Text -> Name
-compressionName = nsName "http://jabber.org/features/compress"
-
 startTLSName :: Text -> Name
 startTLSName = nsName "urn:ietf:params:xml:ns:xmpp-tls"
 
@@ -259,36 +256,21 @@ saslName = nsName "urn:ietf:params:xml:ns:xmpp-sasl"
 estreamName :: T.Text -> Name
 estreamName = nsName "urn:ietf:params:xml:ns:xmpp-streams"
 
-data StreamFeature = Compression [Text]
-                   | StartTLS Bool
-                   | SASL [ByteString]
-                   | StreamManagement
-                   | BindResource
-                   | RosterVersioning
-                   deriving (Show, Eq)
+data StartTLSFeature = StartTLSFeature { tlsMandatory :: Bool }
+                     deriving (Show, Eq)
+
+parseStartTLS :: Element -> Maybe StartTLSFeature
+parseStartTLS e | elementName e == startTLSName "starttls" = Just $ StartTLSFeature $ not $ null $ fromElement e $/ XC.element (startTLSName "required")
+                | otherwise = Nothing
+
+data SASLFeature = SASLFeature { saslMechanisms :: [ByteString] }
+                 deriving (Show, Eq)
+
+parseSASL :: Element -> Maybe SASLFeature
+parseSASL e | elementName e == saslName "mechanisms" = Just $ SASLFeature $ map T.encodeUtf8 $ fromElement e $/ XC.element (saslName "mechanism") &/ content
+            | otherwise = Nothing
 
 type MonadStream m = (MonadMask m, MonadLogger m, MonadUnliftIO m, MonadFail m)
-
-parseFeatures :: MonadStream m => Stream m -> Element -> m [StreamFeature]
-parseFeatures stream e
-  | elementName e == streamName "features" = catMaybes <$> mapM parseOne (elementNodes e)
-  | otherwise = streamThrow stream $ unexpectedStanza (elementName e) [streamName "features"]
-
-  where parseOne n@(NodeElement f)
-          | elementName f == startTLSName "starttls" =
-              return $ Just $ StartTLS $ not $ null $ fromNode n $/ XC.element (startTLSName "required")
-          | elementName f == compressionName "compression" =
-              return $ Just $ Compression $ fromNode n $/ XC.element (compressionName "method") &/ content
-          | elementName f == saslName "mechanisms" =
-              return $ Just $ SASL $ map T.encodeUtf8 $ fromNode n $/ XC.element (saslName "mechanism") &/ content
-          | elementName f == smName "sm" = return $ Just StreamManagement
-          | elementName f == bindName "bind" = return $ Just BindResource
-          | elementName f == rosterVerName "ver" = return $ Just RosterVersioning
-          | otherwise = do
-              $(logInfo) [i|Unknown feature: #{showElement f}|]
-              return Nothing
-
-        parseOne _ = return Nothing
 
 data ConnectionSettings = ConnectionSettings { connectionParams :: ConnectionParams
                                              , connectionContext :: ConnectionContext
@@ -377,7 +359,7 @@ createStreamSource conn = do
 data Stream m = Stream { streamConn :: Connection
                        , streamSource :: MVar (SealedConduitT () Element m ())
                        , streamRender :: MVar (SealedConduitT Element (Flush ByteString) m ())
-                       , streamFeatures :: [StreamFeature]
+                       , streamFeatures :: [Element]
                        , streamInfo :: StreamSettings
                        , streamClosedFlag :: IORef Bool
                        }
@@ -459,16 +441,16 @@ data FeaturesResult = FeaturesOK
                     | FeaturesTLS
                     deriving (Show, Eq)
 
-initFeatures :: MonadStream m => ConnectionSettings -> Stream m -> [StreamFeature] -> m FeaturesResult
+initFeatures :: MonadStream m => ConnectionSettings -> Stream m -> [Element] -> m FeaturesResult
 initFeatures (ConnectionSettings {..}) s features
-  | any (\case StartTLS _ -> True; _ -> False) features = do
+  | StartTLSFeature {}:_ <- mapMaybe parseStartTLS features = do
       $(logInfo) "Negotiating TLS"
       streamSend s $ closedElement $ startTLSName "starttls"
       eanswer <- streamRecv s
       unless (elementName eanswer == startTLSName "proceed") $ streamThrow s $ unexpectedStanza (elementName eanswer) [startTLSName "proceed"]
       return FeaturesTLS
   
-  | Just (SASL methods) <- find (\case SASL _ -> True; _ -> False) features = do
+  | SASLFeature methods:_ <- mapMaybe parseSASL features = do
       $(logInfo) "Authenticating"
       r <- saslAuth s $ concatMap (\m -> filter (\a -> saslMechanism a == m) connectionAuth) methods
       return $ if isJust r then FeaturesRestart else FeaturesUnauthorized
@@ -478,6 +460,11 @@ initFeatures (ConnectionSettings {..}) s features
 data ClientError = Unauthorized
                  | NoTLSParams
                  deriving (Show, Eq)
+
+parseFeatures :: MonadStream m => Stream m -> Element -> m [Element]
+parseFeatures stream e
+  | elementName e == streamName "features" = return $ fromElement e $/ anyElement &| curElement
+  | otherwise = streamThrow stream $ unexpectedStanza (elementName e) [streamName "features"]
 
 streamCreate :: MonadStream m => ConnectionSettings -> m (Either ClientError (Stream m))
 streamCreate csettings@(ConnectionSettings {..}) =

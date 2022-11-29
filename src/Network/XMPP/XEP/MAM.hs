@@ -1,9 +1,8 @@
-module Network.XMPP.XEP.EntityTime
+module Network.XMPP.XEP.MAM
   ( getEntityTime
   , entityTimePlugin
   ) where
 
-import Control.Monad
 import Data.Text (Text)
 import qualified Data.Set as S
 import Text.XML
@@ -13,8 +12,6 @@ import Data.Time.LocalTime
 import Data.Time.Clock
 import Control.Monad.IO.Class
 
-import qualified Control.HandlerList as HandlerList
-import qualified Data.RefMap as RefMap
 import Data.Time.XMPP
 import Network.XMPP.XML
 import Network.XMPP.Stream
@@ -23,12 +20,12 @@ import Network.XMPP.Stanza
 import Network.XMPP.Address
 import Network.XMPP.XEP.Disco
 
-timeNS :: Text
-timeName :: Text -> Name
-(timeNS, timeName) = namePair "urn:xmpp:time"
+mamNS :: Text
+mamName :: Text -> Name
+(mamNS, mamName) = namePair "urn:xmpp:mam:2"
 
-timeIQHandler :: MonadStream m => InRequestIQ -> m (Maybe RequestIQResponse)
-timeIQHandler (InRequestIQ { iriType = IQGet, iriChildren = [req] })
+timeIqHandler :: MonadStream m => InRequestIQ -> m (Maybe (Either StanzaError [Element]))
+timeIqHandler (InRequestIQ { iriType = IQGet, iriChildren = [req] })
   | elementName req == timeTag = do
       tz <- liftIO getCurrentTimeZone
       utime <- liftIO getCurrentTime
@@ -36,19 +33,19 @@ timeIQHandler (InRequestIQ { iriType = IQGet, iriChildren = [req] })
             [ ("tzo", timeZoneToXmpp tz)
             , ("utc", utcTimeToXmpp utime)
             ]
-      return $ Just $ IQResult [element timeTag [] $ map (\(name, value) -> NodeElement $ element (timeName name) [] [NodeContent value]) result]
+      return $ Just $ Right [element timeTag [] $ map (\(name, value) -> NodeElement $ element (timeName name) [] [NodeContent value]) result]
 
   where timeTag = timeName "time"
-timeIQHandler _ = return Nothing
+timeIqHandler _ = return Nothing
 
-getEntityTime :: MonadStream m => StanzaSession m -> XMPPAddress -> m (Either StanzaError ZonedTime)
-getEntityTime sess addr = do
+queryArchive :: MonadStream m => StanzaSession m -> XMPPAddress -> m (Either StanzaError ZonedTime)
+queryArchive sess addr = do
   ret <- stanzaSyncRequest sess OutRequestIQ { oriTo = Just addr
-                                            , oriIqType = IQGet
-                                            , oriChildren = [closedElement (timeName "time")]
-                                            }
+                                             , oriIqType = IQGet
+                                             , oriChildren = [closedElement (timeName "time")]
+                                             }
   return $ case ret of
-    Left e -> Left e
+    Left (e, _) -> Left e
     Right [r] | elementName r == timeName "time"
               , [tzoStr] <- getEntry r "tzo"
               , Right tz <- xmppTimeZone tzoStr
@@ -61,9 +58,10 @@ getEntityTime sess addr = do
 
   where getEntry r name = fromElement r $/ XC.element (timeName name) &/ content
 
-entityTimePlugin :: MonadStream m => XMPPPluginsRef m -> DiscoRef m -> m ()
-entityTimePlugin pluginsRef discoRef = do
-  let discoInfo = emptyDiscoInfo { discoIEntity = emptyDiscoEntity { discoFeatures = S.singleton timeNS }
-                                 }
-  void $ HandlerList.add (pluginIQHandlers pluginsRef) timeIQHandler
-  void $ RefMap.add (discoInfos discoRef) $ return discoInfo
+entityTimePlugin :: MonadStream m => m (XMPPPlugin m, DiscoPlugin)
+entityTimePlugin = do
+  let xmppPlugin = emptyPlugin { pluginRequestIqHandler = timeIqHandler
+                               }
+      discoHandler = emptyDiscoPlugin { discoPEntity = emptyDiscoEntity { discoFeatures = S.singleton timeNS }
+                                      }
+  return (xmppPlugin, discoHandler)
