@@ -1,20 +1,20 @@
 module Network.XMPP.XML where
 
-import Text.Read
+import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Lazy as BL
+import Data.Conduit
+import qualified Data.Conduit.List as CL
 import Data.Functor.Identity
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Builder as BB
+import Text.Read
 import Text.XML
-import qualified Text.XML.Unresolved as XMLU
-import qualified Text.XML.Stream.Render as XMLR
-import Data.Conduit
-import qualified Data.Conduit.List as CL
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
+import qualified Text.XML.Stream.Render as XMLR
+import qualified Text.XML.Unresolved as XMLU
 
 nsName :: T.Text -> T.Text -> Name
 nsName ns name = Name name (Just ns) Nothing
@@ -35,10 +35,12 @@ jsName :: T.Text -> Name
 (jsNS, jsName) = namePair "jabber:server"
 
 element :: Name -> [(Name, Text)] -> [Node] -> Element
-element name attrs nodes = Element { elementName = name
-                                   , elementAttributes = M.fromListWith (error "element: repeating attributes") attrs
-                                   , elementNodes = nodes
-                                   }
+element name attrs nodes =
+  Element
+    { elementName = name
+    , elementAttributes = M.fromListWith (error "element: repeating attributes") attrs
+    , elementNodes = nodes
+    }
 
 closedElement :: Name -> Element
 closedElement name = element name [] []
@@ -51,12 +53,13 @@ curAnyElement = anyElement &| curElement
 
 showElement :: Element -> Text
 showElement e = T.decodeUtf8 $ BL.toStrict $ BB.toLazyByteString $ mconcat bs
-  where bs = runIdentity $ runConduit $ CL.sourceList (XMLU.elementToEvents $ toXMLElement e) .| XMLR.renderBuilder def .| CL.consume
+ where
+  bs = runIdentity $ runConduit $ CL.sourceList (XMLU.elementToEvents $ toXMLElement e) .| XMLR.renderBuilder def .| CL.consume
 
 getAttr :: Name -> Element -> Maybe Text
 getAttr n e = M.lookup n $ elementAttributes e
 
-readAttr :: Read a => Name -> Element -> Maybe a
+readAttr :: (Read a) => Name -> Element -> Maybe a
 readAttr n e = do
   attr <- getAttr n e
   readMaybe $ T.unpack attr

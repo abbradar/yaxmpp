@@ -1,46 +1,46 @@
-module Network.XMPP.Address
-       ( XMPPLocal
-       , localText
-       , localFromText
-       , XMPPDomain
-       , domainText
-       , domainFromText
-       , XMPPResource
-       , resourceText
-       , resourceFromText
-       , XMPPAddress(..)
-       , xmppAddress'
-       , xmppAddress
-       , addressToText
-       , addressBare
-       , BareJID(..)
-       , bareJidGet
-       , bareJidAddress
-       , bareJidToText
-       , FullJID(..)
-       , fullJidGet
-       , fullJidAddress
-       , fullJidToText
-       ) where
+module Network.XMPP.Address (
+  XMPPLocal,
+  localText,
+  localFromText,
+  XMPPDomain,
+  domainText,
+  domainFromText,
+  XMPPResource,
+  resourceText,
+  resourceFromText,
+  XMPPAddress (..),
+  xmppAddress',
+  xmppAddress,
+  addressToText,
+  addressBare,
+  BareJID (..),
+  bareJidGet,
+  bareJidAddress,
+  bareJidToText,
+  FullJID (..),
+  fullJidGet,
+  fullJidAddress,
+  fullJidToText,
+) where
 
-import Data.Text (Text)
+import Control.Applicative
 import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)
-import Control.Applicative
 import Data.Attoparsec.Text
+import Data.Text (Text)
 import Text.StringPrep
 import Text.StringPrep.Profiles
 
 import Network.XMPP.Utils
 
-newtype XMPPLocal = XMPPLocal { localText :: Text }
-                  deriving (Eq, Ord, Show)
+newtype XMPPLocal = XMPPLocal {localText :: Text}
+  deriving (Eq, Ord, Show)
 
 localFromText :: Text -> Maybe XMPPLocal
 localFromText t = XMPPLocal <$> runStringPrep nodePrepProfile t
 
-newtype XMPPDomain = XMPPDomain { domainText :: Text }
-                   deriving (Eq, Ord, Show)
+newtype XMPPDomain = XMPPDomain {domainText :: Text}
+  deriving (Eq, Ord, Show)
 
 instance FromJSON XMPPDomain where
   parseJSON = withText "XMPPDomain" $ \t -> case domainFromText t of
@@ -53,17 +53,18 @@ instance ToJSON XMPPDomain where
 domainFromText :: Text -> Maybe XMPPDomain
 domainFromText t = XMPPDomain <$> runStringPrep xmppNamePrepProfile t
 
-newtype XMPPResource = XMPPResource { resourceText :: Text }
-                     deriving (Eq, Ord, Show)
+newtype XMPPResource = XMPPResource {resourceText :: Text}
+  deriving (Eq, Ord, Show)
 
 resourceFromText :: Text -> Maybe XMPPResource
 resourceFromText t = XMPPResource <$> runStringPrep resourcePrepProfile t
 
-data XMPPAddress = XMPPAddress { addressLocal :: Maybe XMPPLocal
-                               , addressDomain :: XMPPDomain
-                               , addressResource :: Maybe XMPPResource
-                               }
-                 deriving (Eq, Ord)
+data XMPPAddress = XMPPAddress
+  { addressLocal :: Maybe XMPPLocal
+  , addressDomain :: XMPPDomain
+  , addressResource :: Maybe XMPPResource
+  }
+  deriving (Eq, Ord)
 
 instance Show XMPPAddress where
   show = show . addressToText
@@ -85,7 +86,7 @@ instance ToJSONKey XMPPAddress where
   toJSONKey = toJSONKeyText addressToText
 
 nodeProhibited :: [Range]
-nodeProhibited = 
+nodeProhibited =
   [ single '\x0022'
   , single '\x0026'
   , single '\x0027'
@@ -98,22 +99,24 @@ nodeProhibited =
 
 nodePrepProfile :: StringPrepProfile
 nodePrepProfile =
-  Profile { maps = [b1, b2]
-          , shouldNormalize = True
-          , prohibited = [c11, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9, nodeProhibited]
-          , shouldCheckBidi = True
-          }
+  Profile
+    { maps = [b1, b2]
+    , shouldNormalize = True
+    , prohibited = [c11, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9, nodeProhibited]
+    , shouldCheckBidi = True
+    }
 
 xmppNamePrepProfile :: StringPrepProfile
 xmppNamePrepProfile = namePrepProfile False
 
 resourcePrepProfile :: StringPrepProfile
 resourcePrepProfile =
-  Profile { maps = [b1]
-          , shouldNormalize = True
-          , prohibited = [a1, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9]
-          , shouldCheckBidi = True
-          }
+  Profile
+    { maps = [b1]
+    , shouldNormalize = True
+    , prohibited = [a1, c12, c21, c22, c3, c4, c5, c6, c7, c8, c9]
+    , shouldCheckBidi = True
+    }
 
 xmppAddress' :: Parser XMPPAddress
 xmppAddress' = do
@@ -127,28 +130,35 @@ xmppAddress' = do
       case sep2 of
         Just '/' -> do
           addressResource <- Just <$> (takeText >>= checkResource)
-          return XMPPAddress { .. }
-        Nothing -> return XMPPAddress { addressResource = Nothing
-                                     , ..
-                                     }
+          return XMPPAddress {..}
+        Nothing ->
+          return
+            XMPPAddress
+              { addressResource = Nothing
+              , ..
+              }
         _ -> error "xmppAddress: impossible second separator"
     Just '/' -> do
       addressDomain <- checkDomain first
       addressResource <- Just <$> (takeText >>= checkResource)
-      return XMPPAddress { addressLocal = Nothing
-                         , ..
-                         }
+      return
+        XMPPAddress
+          { addressLocal = Nothing
+          , ..
+          }
     Nothing -> do
       addressDomain <- checkDomain first
-      return XMPPAddress { addressLocal = Nothing
-                         , addressResource = Nothing
-                         , ..
-                         }
+      return
+        XMPPAddress
+          { addressLocal = Nothing
+          , addressResource = Nothing
+          , ..
+          }
     _ -> error "xmppAddress: impossible first separator"
-
-  where checkLocal = maybeFail "xmppAddress: localpart doesn't satisfy Nodeprep profile of stringprep" . localFromText
-        checkDomain = maybeFail "xmppAddress: domainpart doesn't satisfy Nameprep profile of stringprep" . domainFromText
-        checkResource = maybeFail "xmppAddress: resourcepart doesn't satisfy Resourceprep profile of stringprep" . resourceFromText
+ where
+  checkLocal = maybeFail "xmppAddress: localpart doesn't satisfy Nodeprep profile of stringprep" . localFromText
+  checkDomain = maybeFail "xmppAddress: domainpart doesn't satisfy Nameprep profile of stringprep" . domainFromText
+  checkResource = maybeFail "xmppAddress: resourcepart doesn't satisfy Resourceprep profile of stringprep" . resourceFromText
 
 xmppAddress :: Text -> Either String XMPPAddress
 xmppAddress = parseValue xmppAddress'
@@ -156,18 +166,21 @@ xmppAddress = parseValue xmppAddress'
 addressToText :: XMPPAddress -> Text
 addressToText (XMPPAddress {..}) =
   maybe mempty ((<> "@") . localText) addressLocal
-  <> domainText addressDomain
-  <> maybe mempty (("/" <>) . resourceText) addressResource
+    <> domainText addressDomain
+    <> maybe mempty (("/" <>) . resourceText) addressResource
 
 addressBare :: XMPPAddress -> XMPPAddress
-addressBare (XMPPAddress {..}) = XMPPAddress { addressResource = Nothing
-                                             , ..
-                                             }
+addressBare (XMPPAddress {..}) =
+  XMPPAddress
+    { addressResource = Nothing
+    , ..
+    }
 
-data BareJID = BareJID { bareLocal :: XMPPLocal
-                       , bareDomain :: XMPPDomain
-                       }
-             deriving (Eq, Ord)
+data BareJID = BareJID
+  { bareLocal :: XMPPLocal
+  , bareDomain :: XMPPDomain
+  }
+  deriving (Eq, Ord)
 
 bareJidAddress :: BareJID -> XMPPAddress
 bareJidAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
@@ -189,13 +202,14 @@ instance ToJSON BareJID where
   toJSON = toJSON . bareJidAddress
 
 bareJidGet :: XMPPAddress -> Maybe BareJID
-bareJidGet XMPPAddress { addressLocal = Just bareLocal, addressDomain = bareDomain, addressResource = Nothing } = Just BareJID {..}
+bareJidGet XMPPAddress {addressLocal = Just bareLocal, addressDomain = bareDomain, addressResource = Nothing} = Just BareJID {..}
 bareJidGet _ = Nothing
 
-data FullJID = FullJID { fullBare :: BareJID
-                       , fullResource :: XMPPResource
-                       }
-             deriving (Eq, Ord)
+data FullJID = FullJID
+  { fullBare :: BareJID
+  , fullResource :: XMPPResource
+  }
+  deriving (Eq, Ord)
 
 fullJidAddress :: FullJID -> XMPPAddress
 fullJidAddress (FullJID {..}) = XMPPAddress (Just $ bareLocal fullBare) (bareDomain fullBare) (Just fullResource)
@@ -220,4 +234,4 @@ fullJidGet :: XMPPAddress -> Maybe FullJID
 fullJidGet XMPPAddress {..} = do
   bareLocal <- addressLocal
   fullResource <- addressResource
-  return FullJID { fullBare = BareJID { bareDomain = addressDomain, .. }, .. }
+  return FullJID {fullBare = BareJID {bareDomain = addressDomain, ..}, ..}

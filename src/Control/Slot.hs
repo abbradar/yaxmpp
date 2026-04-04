@@ -1,18 +1,18 @@
 {-# LANGUAGE Strict #-}
 
-module Control.Slot
-  ( module Data.RefMap
-  , Slot
-  , SlotRef
-  , call
-  ) where
+module Control.Slot (
+  module Data.RefMap,
+  Slot,
+  SlotRef,
+  call,
+) where
 
-import Control.Monad
 import Control.Exception (SomeException)
-import UnliftIO.Exception (catch)
+import Control.Monad
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.Logger
 import Data.String.Interpolate (i)
+import UnliftIO.Exception (catch)
 
 import Data.RefMap
 

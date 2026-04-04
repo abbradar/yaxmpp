@@ -17,7 +17,13 @@
   drv = haskellPackages_.callPackage ./default.nix {};
 
   drvShell = pkgs.haskell.lib.overrideCabal drv (args: {
-    libraryToolDepends = args.libraryToolDepends or [] ++ [haskellPackages.hlint];
+    libraryToolDepends =
+      args.libraryToolDepends or []
+      ++ [
+        pkgs.alejandra
+        haskellPackages.hlint
+        haskellPackages.fourmolu
+      ];
   });
 in
   if pkgs.lib.inNixShell

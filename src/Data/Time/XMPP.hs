@@ -1,26 +1,24 @@
-module Data.Time.XMPP
-  ( xmppDay
-  , xmppTimeOfDay
-  , xmppTimeZone
-  , xmppZonedTime
+module Data.Time.XMPP (
+  xmppDay,
+  xmppTimeOfDay,
+  xmppTimeZone,
+  xmppZonedTime,
+  dayToXmpp,
+  timeOfDayToXmpp,
+  timeZoneToXmpp,
+  zonedTimeToXmpp,
+  utcTimeToXmpp,
+) where
 
-  , dayToXmpp
-  , timeOfDayToXmpp
-  , timeZoneToXmpp
-  , zonedTimeToXmpp
-
-  , utcTimeToXmpp
-  ) where
-
-import Prelude hiding (take)
+import Data.Attoparsec.Time
+import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Maybe
-import Data.Time.Clock
-import Data.Time.LocalTime
 import Data.Time.Calendar
+import Data.Time.Clock
 import Data.Time.Format.ISO8601
-import Data.Attoparsec.Time
+import Data.Time.LocalTime
+import Prelude hiding (take)
 
 import Network.XMPP.Utils
 

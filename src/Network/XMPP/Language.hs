@@ -1,32 +1,32 @@
-module Network.XMPP.Language
-  ( XMLLang
-  , LocalizedText
-  , localTexts
-  , localizedFromTexts
-  , localizedFromText
-  , localizedFromElement
-  , xmlLangGet
-  , xmlLangAttr
-  , localizedGet
-  , localizedElements
-  ) where
+module Network.XMPP.Language (
+  XMLLang,
+  LocalizedText,
+  localTexts,
+  localizedFromTexts,
+  localizedFromText,
+  localizedFromElement,
+  xmlLangGet,
+  xmlLangAttr,
+  localizedGet,
+  localizedElements,
+) where
 
-import Data.Maybe
-import Data.Text (Text)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Text.XML
+import Data.Maybe
 import Data.String.Interpolate (i)
+import Data.Text (Text)
+import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import Network.XMPP.XML
-import Network.XMPP.Utils
 import Network.XMPP.Stanza
+import Network.XMPP.Utils
+import Network.XMPP.XML
 
 type XMLLang = Maybe Text
-newtype LocalizedText = LocalizedText { localTexts :: Map XMLLang Text }
-                      deriving (Show, Eq)
+newtype LocalizedText = LocalizedText {localTexts :: Map XMLLang Text}
+  deriving (Show, Eq)
 
 localizedFromTexts :: Map XMLLang Text -> Maybe LocalizedText
 localizedFromTexts m
@@ -45,12 +45,12 @@ localizedFromElement name elems = case fromChildren elems $/ XC.element name &| 
       Nothing -> Left $ badRequest [i|localizedElement: conflicting textual data for language|]
       Just r -> return r
     return $ LocalizedText textsMap
-  
-  where getOneBody e = do
-          cont <- fmap mconcat $ mapM getBodyContent $ elementNodes e
-          return (xmlLangGet e, cont)
-        getBodyContent (NodeContent t) = return t
-        getBodyContent _ = Left $ badRequest [i|localizedElement: #{name} element should contain only textual data|]
+ where
+  getOneBody e = do
+    cont <- fmap mconcat $ mapM getBodyContent $ elementNodes e
+    return (xmlLangGet e, cont)
+  getBodyContent (NodeContent t) = return t
+  getBodyContent _ = Left $ badRequest [i|localizedElement: #{name} element should contain only textual data|]
 
 xmlLangGet :: Element -> XMLLang
 xmlLangGet = getAttr $ xmlName "lang"
@@ -63,12 +63,13 @@ localizedGet :: XMLLang -> LocalizedText -> Text
 localizedGet Nothing lt = case M.lookup Nothing $ localTexts lt of
   Just t -> t
   Nothing -> case M.toAscList $ localTexts lt of
-    (_, t):_ -> t
+    (_, t) : _ -> t
     [] -> error "localizedGet: empty LocalizedText"
 localizedGet lang@(Just _) lt = case M.lookup lang $ localTexts lt of
   Just t -> t
   Nothing -> localizedGet Nothing lt
 
 localizedElements :: Name -> LocalizedText -> [Element]
-localizedElements name t =  map toElement $ M.toList $ localTexts t
-  where toElement (lang, text) = element name (maybeToList $ fmap (xmlName "lang", ) lang) [NodeContent text]
+localizedElements name t = map toElement $ M.toList $ localTexts t
+ where
+  toElement (lang, text) = element name (maybeToList $ fmap (xmlName "lang",) lang) [NodeContent text]

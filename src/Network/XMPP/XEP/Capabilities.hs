@@ -1,9 +1,9 @@
 {-# LANGUAGE Strict #-}
 
-module Network.XMPP.XEP.Capabilities
-  ( CapsInfo(..)
-  , parseCaps
-  ) where
+module Network.XMPP.XEP.Capabilities (
+  CapsInfo (..),
+  parseCaps,
+) where
 
 import Control.Monad
 import Data.Text (Text)
@@ -15,11 +15,12 @@ _capsNS :: Text
 capsName :: Text -> Name
 (_capsNS, capsName) = namePair "http://jabber.org/protocol/caps"
 
-data CapsInfo = CapsInfo { capsHash :: Text
-                         , capsNode :: Text
-                         , capsVer :: Text
-                         }
-                     deriving (Show, Eq)
+data CapsInfo = CapsInfo
+  { capsHash :: Text
+  , capsNode :: Text
+  , capsVer :: Text
+  }
+  deriving (Show, Eq)
 
 parseCaps :: Element -> Maybe CapsInfo
 parseCaps e = do
