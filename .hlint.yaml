@@ -1,0 +1,12 @@
+- ignore:
+    name: Redundant bracket
+- ignore:
+    name: Use newtype instead of data
+- ignore:
+    name: "Use <$>"
+
+- arguments:
+  - -XTemplateHaskell
+  - -XQuasiQuotes
+  - -XScopedTypeVariables
+
