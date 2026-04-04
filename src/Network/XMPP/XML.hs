@@ -6,7 +6,8 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import qualified Blaze.ByteString.Builder as BB
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Builder as BB
 import Text.XML
 import qualified Text.XML.Unresolved as XMLU
 import qualified Text.XML.Stream.Render as XMLR
@@ -49,7 +50,7 @@ curAnyElement :: Cursor -> [Element]
 curAnyElement = anyElement &| curElement
 
 showElement :: Element -> Text
-showElement e = T.decodeUtf8 $ BB.toByteString $ mconcat bs
+showElement e = T.decodeUtf8 $ BL.toStrict $ BB.toLazyByteString $ mconcat bs
   where bs = runIdentity $ runConduit $ CL.sourceList (XMLU.elementToEvents $ toXMLElement e) .| XMLR.renderBuilder def .| CL.consume
 
 getAttr :: Name -> Element -> Maybe Text

@@ -229,9 +229,10 @@ rosterIQHandler (RosterRef {..}) (InRequestIQ { iriType = IQSet, iriFrom, iriChi
             result <- atomicModifyIORef' rref $ \case
               pending@(Left _) -> (pending, Nothing)
               Right roster ->
-                let rosters = tail $ scanl applyRosterEvent (rosterEntries roster) events
+                let rosters = drop 1 $ scanl applyRosterEvent (rosterEntries roster) events
+                    finalEntries = foldl (\_ x -> x) (rosterEntries roster) rosters
                     roster' = Roster { rosterVersion = getAttr "ver" req
-                                     , rosterEntries = last rosters
+                                     , rosterEntries = finalEntries
                                      }
                 in (Right roster', Just $ zip rosters events)
             case result of

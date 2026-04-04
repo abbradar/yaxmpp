@@ -7,6 +7,7 @@ module Network.XMPP.XEP.Version
   , versionPlugin
   ) where
 
+import Control.Monad
 import Data.Maybe
 import System.Info (os)
 import Data.Version

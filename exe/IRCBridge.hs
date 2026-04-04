@@ -16,10 +16,13 @@ import Control.Monad.Trans.Class
 import Control.Monad.Catch
 import Control.Monad.Trans.Except
 import UnliftIO.Concurrent
+import Data.Default
 import Network.DNS
 import Network.Connection
 import Control.Monad.Logger
 import Data.String.Interpolate (i)
+import qualified Control.Slot as Slot
+import qualified Control.HandlerList as HandlerList
 import Data.Conduit.Network
 import Data.Conduit
 import qualified Data.Conduit.List as C
@@ -71,10 +74,11 @@ main = runStderrLoggingT $ do
   Right svrs <- liftIO $ withResolver rs $ \resolver -> runExceptT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
   $(logInfo) [i|Found servers: #{svrs}|]
   cctx <- liftIO initConnectionContext
-  let (host, port) = head svrs
-      tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
+  (host, port):_ <- pure svrs
+  let tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
                                     , settingDisableSession = False
                                     , settingUseServerName = True
+                                    , settingClientSupported = def
                                     }
       esettings = ConnectionParams { connectionHostname = B.unpack host
                                    , connectionPort = fromIntegral port
@@ -99,12 +103,14 @@ main = runStderrLoggingT $ do
   bracket initMain (sessionClose . ssSession) $ \sess ->
     bracket (forkIO $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
+      pluginsRef <- newXmppPlugins sess
+      presRef <- presencePlugin pluginsRef
+      discoRef <- discoPlugin pluginsRef
+      rosterRef <- rosterPlugin pluginsRef Nothing
       (myPresH, myPresRef) <- myPresencePlugin sess
-      (imP, imRef) <- imPlugin sess
-      (mucP, mucPresH, mucDiscoH, mucRef) <- mucPlugin sess
-      (rosterP, rosterRef) <- rosterPlugin sess Nothing
-      presP <- presencePlugin [myPresH, mucPresH]
-      discoP <- discoPlugin [mucDiscoH]
+      imRef <- imPlugin pluginsRef
+      mucRef <- mucPlugin pluginsRef presRef discoRef
+      void $ HandlerList.add (presenceHandlers presRef) myPresH
 
       backQueue <- liftIO newTQueueIO
       let ircReply = liftIO . atomically . writeTQueue backQueue
@@ -113,7 +119,7 @@ main = runStderrLoggingT $ do
           ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick (Just nick) (Just conferenceHost)) cmd args
 
       _ <- forkIO $ do
-        rst <- rosterGet rosterRef
+        rst <- getRoster rosterRef
         $(logInfo) [i|Got initial roster: #{rst}|]
         myPresenceSend myPresRef (Just defaultPresence)
 
@@ -122,7 +128,7 @@ main = runStderrLoggingT $ do
               nickVar <- newEmptyMVar
               let getNick = T.encodeUtf8 <$> resourceText <$> readMVar nickVar
 
-              lift $ imSetHandler imRef $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) -> if
+              void $ lift $ Slot.add (imSlot imRef) $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) -> if
                 | addressDomain == conferenceServer settings -> do
                     let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
                         otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
@@ -130,8 +136,8 @@ main = runStderrLoggingT $ do
                     unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
                 | otherwise -> $(logWarn) [i|Got unknown message from #{addr}: #{msg}|]
 
-              lift $ mucSetHandler mucRef $ \case
-                MUCJoined jid (MUC {..}) -> do
+              void $ lift $ Slot.add (mucSlot mucRef) $ \case
+                MUCJoinedRoom jid (MUC {..}) -> do
                   nick <- getNick
                   let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
                       users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys $ mucMembers
@@ -142,7 +148,7 @@ main = runStderrLoggingT $ do
                   ircServReply rpl_NAMREPLY [nick, "*", channel, users]
                   ircServReply rpl_ENDOFNAMES [nick, channel]
                 MUCRejected _ _ -> fail "MUC rejected"
-                MUCLeft _ _ -> fail "MUC left"
+                MUCLeftRoom _ _ -> fail "MUC left"
 
               C.mapM_ $ \req -> do
                 $(logDebug) [i|Got IRC request: #{req}|]
@@ -158,12 +164,12 @@ main = runStderrLoggingT $ do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           joinOpts = defaultMUCJoinSettings { joinHistory = defaultMUCHistorySettings { histMaxStanzas = Just 0 } }
-                      handle (\MUCAlreadyJoinedError -> return ()) $ mucJoin mucRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
+                      handle (\MUCAlreadyJoinedError -> return ()) $ void $ mucJoin mucRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
                         case event of
-                          RoomPresence (Added otherNick' _) -> do
+                          RoomPresence otherNick' (MUCJoined _) -> do
                             let otherNick = T.encodeUtf8 $ resourceText otherNick'
                             ircUserReply otherNick "JOIN" [channel]
-                          RoomPresence (Removed otherNick' _) -> do
+                          RoomPresence otherNick' (MUCRemoved _) -> do
                             let otherNick = T.encodeUtf8 $ resourceText otherNick'
                             ircUserReply otherNick "PART" [channel]
                           RoomSubject -> do
@@ -206,5 +212,4 @@ main = runStderrLoggingT $ do
           _ <- forkIO $ runConduit $ sourceTQueue backQueue .| C.map IRC.encode .| C.mapM clearReply .| appSink app
           runConduit $ appSource app .| C.concatMapAccum resplit "" .| C.mapMaybeM parseMsg .| processIrcRequest
   
-      let plugins = [presP, imP, discoP, mucP, rosterP]
-      forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)
+      forever $ pluginsSessionStep pluginsRef

@@ -20,9 +20,9 @@ import Text.Read
 import Network.XMPP.Utils
 import Network.XMPP.XML
 
-rsmNS :: Text
+_rsmNS :: Text
 rsmName :: Text -> Name
-(rsmNS, rsmName) = namePair "http://jabber.org/protocol/rsm"
+(_rsmNS, rsmName) = namePair "http://jabber.org/protocol/rsm"
 
 data SetPage = Before (Maybe Text)
              | After Text

@@ -39,7 +39,7 @@ import Control.Monad.Trans.Class
 import Control.Monad.Logger
 import Control.Monad.Catch
 import Data.Conduit
-import Data.Default.Class
+import Data.Default
 import qualified Data.Conduit.List as CL
 import Data.Conduit.ByteString.Builder
 import Network.Connection

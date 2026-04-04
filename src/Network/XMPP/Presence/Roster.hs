@@ -3,8 +3,9 @@
 module Network.XMPP.Presence.Roster
   ( RosterPresenceMap
   , RosterPresenceRef
+  , RosterPresenceEvent(..)
   , getRosterPresence
-  , rpresenceSetHandler
+  , rpresenceSlot
   , rpresencePlugin
   ) where
 
@@ -13,8 +14,8 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Text.XML
 
-import Control.HandlerList (HandlerList)
-import qualified Control.HandlerList as HandlerList
+import Control.Slot (Slot, SlotRef)
+import qualified Control.Slot as Slot
 import Network.XMPP.Stream
 import Network.XMPP.Address
 import Network.XMPP.Presence
@@ -31,7 +32,7 @@ data RosterPresenceEvent = FirstResource FullJID Presence
 
 data RosterPresenceRef m = RosterPresenceRef { rpresenceRef :: IORef RosterPresenceMap
                                              , rpresenceRoster :: RosterRef m
-                                             , rpresenceHandler :: HandlerList m RosterPresenceEvent
+                                             , rpresenceHandler :: Slot m RosterPresenceEvent
                                              }
 
 rosterUpdate :: FullJID -> Either [Element] Presence -> RosterPresenceMap -> Maybe (RosterPresenceMap, RosterPresenceEvent)
@@ -53,29 +54,29 @@ rosterUpdate full@(FullJID {..}) (Left err) rmap =
     Nothing -> Nothing
 
 rpresencePHandler :: MonadStream m => RosterPresenceRef m -> PresenceHandler m
-rpresencePHandler (RosterPresenceRef {..}) full presUpd = do
+rpresencePHandler (RosterPresenceRef {..}) (full, presUpd) = do
   roster <- rosterEntries <$> getRoster rpresenceRoster
   if bareJidAddress (fullBare full) `M.member` roster
     then do
       rpres <- readIORef rpresenceRef
       case rosterUpdate full presUpd rpres of
-        Nothing -> return False
+        Nothing -> return Nothing
         Just (pres', event) -> do
           atomicWriteIORef rpresenceRef pres'
-          Handler.call rpresenceHandler event
-          return True
-    else return False
+          Slot.call rpresenceHandler event
+          return $ Just ()
+    else return Nothing
 
 getRosterPresence :: MonadStream m => RosterPresenceRef m -> m RosterPresenceMap
 getRosterPresence = readIORef . rpresenceRef
 
-rpresenceSetHandler :: MonadStream m => RosterPresenceRef m -> (RosterPresenceEvent -> m ()) -> m ()
-rpresenceSetHandler (RosterPresenceRef {..}) = Handler.set rpresenceHandler
+rpresenceSlot :: RosterPresenceRef m -> SlotRef m RosterPresenceEvent
+rpresenceSlot (RosterPresenceRef {..}) = Slot.ref rpresenceHandler
 
 rpresencePlugin :: MonadStream m => RosterRef m ->  m (PresenceHandler m, RosterPresenceRef m)
 rpresencePlugin rpresenceRoster = do
   rpresenceRef <- newIORef M.empty
-  rpresenceHandler <- Handler.new
+  rpresenceHandler <- Slot.new
   let pref = RosterPresenceRef {..}
       phandler = rpresencePHandler pref
   return (phandler, pref)

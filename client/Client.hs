@@ -14,16 +14,19 @@ import qualified Data.Set as S
 import Control.Exception (AsyncException(..))
 import Control.Monad.IO.Class
 import Control.Monad.Catch
-import Control.Monad.Trans.Control
+import UnliftIO (withRunInIO)
 import UnliftIO.Concurrent
 import UnliftIO.Async
 import Control.Monad.Trans.Except
+import Data.Default
 import Network.DNS
 import Network.Connection
 import Control.Monad.Logger
 import Data.String.Interpolate (i)
 import qualified System.Console.Haskeline as HL
+import qualified Control.Slot as Slot
 
+import qualified Control.HandlerList as HandlerList
 import Network.XMPP.Connection
 import Network.XMPP.Stream
 import Network.XMPP.Session
@@ -83,10 +86,11 @@ main = do
     Right svrs <- liftIO $ withResolver rs $ \resolver -> runExceptT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
     $(logInfo) [i|Found servers: #{svrs}|]
     cctx <- liftIO initConnectionContext
-    let (host, port) = head svrs
-        tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
+    (host, port):_ <- pure svrs
+    let tsettings = TLSSettingsSimple { settingDisableCertificateValidation = False
                                       , settingDisableSession = False
                                       , settingUseServerName = True
+                                      , settingClientSupported = def
                                       }
         esettings = ConnectionParams { connectionHostname = B.unpack host
                                     , connectionPort = fromIntegral port
@@ -117,16 +121,19 @@ main = do
               sessionClose $ ssSession sess
 
         oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
-        (rosterP, rosterRef) <- rosterPlugin sess oldRoster
-        (subscrP, subscrRef) <- subscriptionPlugin sess
+        pluginsRef <- newXmppPlugins sess
+        presRef <- presencePlugin pluginsRef
+        discoRef <- discoPlugin pluginsRef
+        rosterRef <- rosterPlugin pluginsRef oldRoster
+        subscrRef <- subscriptionPlugin pluginsRef rosterRef
         (rpresH, rpresRef) <- rpresencePlugin rosterRef
         (myPresH, myPresRef) <- myPresencePlugin sess
-        (imP, imRef) <- imPlugin sess
-        (mucP, mucPresH, mucDiscoH, mucRef) <- mucPlugin sess
-        presP <- presencePlugin [rpresH, myPresH, mucPresH]
-        (verP, verDiscoH) <- versionPlugin defaultVersion
-        (timeP, timeDiscoH) <- entityTimePlugin
-        discoP <- discoPlugin [mucDiscoH, verDiscoH, timeDiscoH]
+        imRef <- imPlugin pluginsRef
+        mucRef <- mucPlugin pluginsRef presRef discoRef
+        void $ HandlerList.add (presenceHandlers presRef) rpresH
+        void $ HandlerList.add (presenceHandlers presRef) myPresH
+        versionPlugin pluginsRef discoRef defaultVersion
+        entityTimePlugin pluginsRef discoRef
 
         let saveRoster = do
               roster <- tryGetRoster rosterRef
@@ -135,30 +142,28 @@ main = do
                 _ -> return ()
 
         flip finally saveRoster $ do
-          rosterSetHandler rosterRef $ \(_, event) -> do
+          void $ Slot.add (rosterSlot rosterRef) $ \(_, event) -> do
             writeMessage [i|Got roster update: #{event}|]
 
-          subscriptionSetHandler subscrRef $ \(addr, stat) -> do
+          void $ Slot.add (subscriptionSlot subscrRef) $ \(addr, stat) -> do
             writeMessage [i|Got subscription update for #{addr}: #{stat}|]
 
-          myPresenceSetHandler myPresRef $ \event -> do
+          void $ Slot.add (myPresenceSlot myPresRef) $ \event -> do
             writeMessage [i|Got presence update for myself: #{event}|]
 
-          rpresenceSetHandler rpresRef $ \event -> do
+          void $ Slot.add (rpresenceSlot rpresRef) $ \event -> do
             writeMessage [i|Got presence update for roster: #{event}|]
 
-          imSetHandler imRef $ \(addr, msg) -> do
+          void $ Slot.add (imSlot imRef) $ \(addr, msg) -> do
             let text = localizedGet (Just "en") $ imBody msg
             writeMessage [i|#{addressToText addr}: #{text}|]
 
-          mucSetHandler mucRef $ \event -> do
+          void $ Slot.add (mucSlot mucRef) $ \event -> do
             writeMessage [i|Got MUC event: #{event}|]
 
           myPresenceSend myPresRef $ Just defaultPresence
 
-          let plugins = [rosterP, subscrP, presP, imP, discoP, mucP, verP, timeP]
-
-              commands = M.fromListWith (\_ _ -> error "Repeating command definitions")
+          let commands = M.fromListWith (\_ _ -> error "Repeating command definitions")
                 [ ( "subscribe_from"
                   , Command { commandHandler = \runInBase args -> case args of
                                 [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
@@ -267,7 +272,7 @@ main = do
                 , ( "muc_join"
                   , Command { commandHandler = \runInBase args -> case args of
                                 [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
-                                  runInBase $ mucJoin mucRef addr defaultMUCJoinSettings $ \_ event -> do
+                                  void $ runInBase $ mucJoin mucRef addr defaultMUCJoinSettings $ \_ event -> do
                                     writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
                                 _ -> HL.outputStrLn "Invalid arguments"
                             , commandAutocomplete = \_ _ -> return []
@@ -314,7 +319,7 @@ main = do
                       Nothing -> HL.outputStrLn "Unknown command"
                     promptLoop runInBase
 
-              promptThread = control $ \runInBase -> HL.runInputT inputSettings $ do
+              promptThread = withRunInIO $ \runInBase -> HL.runInputT inputSettings $ do
                 printFunc <- HL.getExternalPrint
                 let writeThread = forever (fmap (++ "\n") (readChan consoleChan) >>= printFunc)
                 bracket (liftIO $ forkIOWithUnmask $ criticalThread writeThread) (liftIO . killThread) $ \_ -> do
@@ -325,4 +330,4 @@ main = do
                   closed <- sessionIsClosed $ ssSession sess
                   unless closed $ throwM e
                 checkClosed e = throwM e
-            handle checkClosed $ forever $ stanzaSessionStep sess (pluginsInHandler plugins) (pluginsRequestIqHandler plugins)
+            handle checkClosed $ forever $ pluginsSessionStep pluginsRef

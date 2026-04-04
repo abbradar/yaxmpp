@@ -1,10 +1,9 @@
 { mkDerivation, aeson, attoparsec, attoparsec-iso8601, base
-, base64-bytestring, blaze-builder, bytestring, conduit
-, conduit-extra, connection, containers, cryptonite
-, data-default-class, dns, exceptions, haskeline, hpack, iproute
-, irc, lib, monad-control, monad-logger, primitive, random, stm
-, stm-conduit, string-interpolate, stringprep, text, text-show
-, time, tls, transformers, unliftio, unliftio-core, uuid
+, base64-bytestring, bytestring, conduit, conduit-extra, containers
+, crypton, crypton-connection, data-default, dns, exceptions
+, haskeline, hpack, iproute, irc, lib, monad-logger, primitive
+, random, stm, stm-conduit, string-interpolate, stringprep, text
+, text-show, time, tls, transformers, unliftio, unliftio-core, uuid
 , xml-conduit, xml-types, yaml
 }:
 mkDerivation {
@@ -15,20 +14,19 @@ mkDerivation {
   isExecutable = true;
   libraryHaskellDepends = [
     aeson attoparsec attoparsec-iso8601 base base64-bytestring
-    blaze-builder bytestring conduit conduit-extra connection
-    containers cryptonite data-default-class dns exceptions iproute
-    monad-logger primitive random string-interpolate stringprep text
-    text-show time tls transformers unliftio unliftio-core uuid
-    xml-conduit xml-types
+    bytestring conduit conduit-extra containers crypton
+    crypton-connection data-default dns exceptions iproute monad-logger
+    primitive random string-interpolate stringprep text text-show time
+    tls transformers unliftio unliftio-core uuid xml-conduit xml-types
   ];
   libraryToolDepends = [ hpack ];
   executableHaskellDepends = [
     aeson attoparsec attoparsec-iso8601 base base64-bytestring
-    blaze-builder bytestring conduit conduit-extra connection
-    containers cryptonite data-default-class dns exceptions haskeline
-    iproute irc monad-control monad-logger primitive random stm
-    stm-conduit string-interpolate stringprep text text-show time tls
-    transformers unliftio unliftio-core uuid xml-conduit xml-types yaml
+    bytestring conduit conduit-extra containers crypton
+    crypton-connection data-default dns exceptions haskeline iproute
+    irc monad-logger primitive random stm stm-conduit
+    string-interpolate stringprep text text-show time tls transformers
+    unliftio unliftio-core uuid xml-conduit xml-types yaml
   ];
   prePatch = "hpack";
   description = "Yet another XMPP implementation for Haskell";

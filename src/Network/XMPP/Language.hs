@@ -62,7 +62,9 @@ xmlLangAttr (Just lang) = [(xmlName "lang", lang)]
 localizedGet :: XMLLang -> LocalizedText -> Text
 localizedGet Nothing lt = case M.lookup Nothing $ localTexts lt of
   Just t -> t
-  Nothing -> snd $ head $ M.toAscList $ localTexts lt
+  Nothing -> case M.toAscList $ localTexts lt of
+    (_, t):_ -> t
+    [] -> error "localizedGet: empty LocalizedText"
 localizedGet lang@(Just _) lt = case M.lookup lang $ localTexts lt of
   Just t -> t
   Nothing -> localizedGet Nothing lt

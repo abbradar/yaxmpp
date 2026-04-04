@@ -65,10 +65,10 @@ imInHandler (IMRef {..}) (InStanza { istFrom = Just from, istType = InMessage (R
             return IMMessage {..}
 
       case res of
-        Left e -> return $ Just e
+        Left e -> return $ InError e
         Right msg -> do
           Slot.call imSlotI (from, msg)
-          return Nothing
+          return InSilent
         
   where cur = fromChildren istChildren
 
