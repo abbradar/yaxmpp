@@ -321,7 +321,7 @@ main = do
 
               promptThread = withRunInIO $ \runInBase -> HL.runInputT inputSettings $ do
                 printFunc <- HL.getExternalPrint
-                let writeThread = forever (fmap (++ "\n") (readChan consoleChan) >>= printFunc)
+                let writeThread = forever (readChan consoleChan >>= printFunc . (++ "\n"))
                 bracket (liftIO $ forkIOWithUnmask $ criticalThread writeThread) (liftIO . killThread) $ \_ -> do
                   promptLoop runInBase
 

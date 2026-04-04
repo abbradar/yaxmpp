@@ -1,12 +1,13 @@
-{ nixpkgs ? import <nixpkgs> {}, compiler ? "default" }:
-
-let
-
+{
+  nixpkgs ? import <nixpkgs> {},
+  compiler ? "default",
+}: let
   inherit (nixpkgs) pkgs;
 
-  haskellPackages = if compiler == "default"
-                       then pkgs.haskellPackages
-                       else pkgs.haskell.packages.${compiler};
+  haskellPackages =
+    if compiler == "default"
+    then pkgs.haskellPackages
+    else pkgs.haskell.packages.${compiler};
 
   haskellPackages_ = haskellPackages.override {
     overrides = self: super: {
@@ -15,6 +16,10 @@ let
 
   drv = haskellPackages_.callPackage ./default.nix {};
 
+  drvShell = pkgs.haskell.lib.overrideCabal drv (args: {
+    libraryToolDepends = args.libraryToolDepends or [] ++ [haskellPackages.hlint];
+  });
 in
-
-  if pkgs.lib.inNixShell then drv.env else drv
+  if pkgs.lib.inNixShell
+  then drvShell.env
+  else drv

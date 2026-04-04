@@ -102,7 +102,7 @@ parseDiscoEntity re = do
           discoType <- requiredAttr "type" e
           return DiscoIdentity {..}
 
-        getFeature e = requiredAttr "var" e
+        getFeature = requiredAttr "var"
 
 getDiscoEntity :: MonadStream m => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoEntity)
 getDiscoEntity sess addr node = do

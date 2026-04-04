@@ -56,14 +56,14 @@ data Settings = Settings { server :: Text
 
 instance JSON.FromJSON Settings where
 
-rpl_WELCOME :: ByteString
-rpl_WELCOME = "001"
-rpl_TOPIC :: ByteString
-rpl_TOPIC = "332"
-rpl_NAMREPLY :: ByteString
-rpl_NAMREPLY = "353"
-rpl_ENDOFNAMES :: ByteString
-rpl_ENDOFNAMES = "366"
+rplWELCOME :: ByteString
+rplWELCOME = "001"
+rplTOPIC :: ByteString
+rplTOPIC = "332"
+rplNAMREPLY :: ByteString
+rplNAMREPLY = "353"
+rplENDOFNAMES :: ByteString
+rplENDOFNAMES = "366"
 
 main :: IO ()
 main = runStderrLoggingT $ do
@@ -126,27 +126,27 @@ main = runStderrLoggingT $ do
         let processIrcRequest = do
               $(logInfo) [i|New IRC connection|]
               nickVar <- newEmptyMVar
-              let getNick = T.encodeUtf8 <$> resourceText <$> readMVar nickVar
+              let getNick = T.encodeUtf8 . resourceText <$> readMVar nickVar
 
-              void $ lift $ Slot.add (imSlot imRef) $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) -> if
-                | addressDomain == conferenceServer settings -> do
+              void $ lift $ Slot.add (imSlot imRef) $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) ->
+                if addressDomain == conferenceServer settings then do
                     let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
                         otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
                     nick <- getNick
                     unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
-                | otherwise -> $(logWarn) [i|Got unknown message from #{addr}: #{msg}|]
+                else $(logWarn) [i|Got unknown message from #{addr}: #{msg}|]
 
               void $ lift $ Slot.add (mucSlot mucRef) $ \case
                 MUCJoinedRoom jid (MUC {..}) -> do
                   nick <- getNick
                   let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
-                      users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys $ mucMembers
+                      users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys mucMembers
                   ircServReply "JOIN" [channel]
                   case mucSubject of
-                    Just (_, subj) -> ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 subj]
+                    Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
                     _ -> return ()
-                  ircServReply rpl_NAMREPLY [nick, "*", channel, users]
-                  ircServReply rpl_ENDOFNAMES [nick, channel]
+                  ircServReply rplNAMREPLY [nick, "*", channel, users]
+                  ircServReply rplENDOFNAMES [nick, channel]
                 MUCRejected _ _ -> fail "MUC rejected"
                 MUCLeftRoom _ _ -> fail "MUC left"
 
@@ -175,17 +175,17 @@ main = runStderrLoggingT $ do
                           RoomSubject -> do
                             nick <- getNick
                             case mucSubject of
-                              Just (_, subj) -> ircServReply rpl_TOPIC [nick, channel, T.encodeUtf8 subj]
+                              Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
                               _ -> return ()
                           _ -> return ()
                   | cmd == "USER", (mnick:_) <- params -> do
                       testNick <- tryReadMVar nickVar
                       when (isNothing testNick) $ putMVar nickVar $ fromJust $ resourceFromText $ T.decodeLatin1 mnick
                       nick <- getNick
-                      ircServReply rpl_WELCOME [nick, "Welcome to the Internet Relay Network " <> nick]
+                      ircServReply rplWELCOME [nick, "Welcome to the Internet Relay Network " <> nick]
                   | cmd == "PRIVMSG", [channel, msg'] <- params -> do
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
-                          msg = fromMaybe msg' $ fmap (\x -> "/me" <> B.init x) $ B.stripPrefix "\SOHACTION" msg'
+                          msg = maybe msg' (\x -> "/me" <> B.init x) $ B.stripPrefix "\SOHACTION" msg'
                           msgText = T.decodeUtf8 msg
                           imMsg = IMMessage { imType = MessageGroupchat
                                             , imSubject = Nothing

@@ -420,7 +420,7 @@ saslAuth s (auth:others) = do
             Right d -> return d
           resp <- case mdat' of
             d | elementName eresp == saslName "success" -> return $ SASLSuccess d
-            Nothing | elementName eresp == saslName "failure" -> return $ SASLFailure
+            Nothing | elementName eresp == saslName "failure" -> return SASLFailure
             Just dat | elementName eresp == saslName "challenge" -> return $ SASLChallenge dat
             _ -> streamThrow s $ unexpectedStanza (elementName eresp) $ map saslName ["challenge", "success", "failure"]
           res <- liftIO $ runSASLWire wire resp
