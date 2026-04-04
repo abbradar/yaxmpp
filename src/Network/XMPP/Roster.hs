@@ -38,7 +38,6 @@ import qualified Text.XML.Cursor as XC
 import UnliftIO.Concurrent
 import UnliftIO.Exception (catch)
 import UnliftIO.IORef
-import UnliftIO.MVar
 
 import qualified Control.HandlerList as HandlerList
 import Control.Slot (Slot, SlotRef)

@@ -46,7 +46,9 @@ closedElement :: Name -> Element
 closedElement name = element name [] []
 
 curElement :: Cursor -> Element
-curElement = (\(NodeElement e) -> e) . node
+curElement cur = case node cur of
+  NodeElement e -> e
+  n -> error $ "curElement: expected NodeElement, got " ++ show n
 
 curAnyElement :: Cursor -> [Element]
 curAnyElement = anyElement &| curElement

@@ -361,7 +361,7 @@ getStreamError e
 
   smeText = listToMaybe $ cur $/ XC.element (estreamName "text") &/ content
 
-  smeChildren = map (\(node -> NodeElement ec) -> ec) $ cur $/ checkName (\n -> n /= estreamName (injTo smeType) && n /= estreamName "text")
+  smeChildren = map curElement $ cur $/ checkName (\n -> n /= estreamName (injTo smeType) && n /= estreamName "text")
 
 createStreamSource :: (MonadStream m) => Connection -> m (StreamSettings, SealedConduitT () Element m ())
 createStreamSource conn = do
