@@ -28,6 +28,7 @@ dependencies:
   - conduit
   - conduit-extra
   - crypton-connection
+  - network
   - tls
   - stringprep
   - string-interpolate

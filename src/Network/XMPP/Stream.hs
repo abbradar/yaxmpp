@@ -24,6 +24,7 @@ module Network.XMPP.Stream (
 ) where
 
 import Control.Exception (IOException)
+import qualified Control.Exception as E
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Unlift
@@ -45,6 +46,7 @@ import qualified Data.Text.Encoding as T
 import Data.Typeable
 import Data.XML.Types (Content (..), Event (..))
 import Network.Connection
+import qualified Network.Socket as NS
 import Network.TLS (TLSException)
 import Text.XML
 import Text.XML.Cursor hiding (element)
@@ -258,6 +260,7 @@ streamTag = XMLP.force "Stream has not started" . XMLP.tag' (XMLP.matching (== s
     ssId <- XMLP.requireAttr "id"
     ssFrom <- XMLP.requireAttr "from"
     ssVersion <- XMLP.requireAttr "version"
+    XMLP.ignoreAttrs
     return StreamSettings {..}
 
 streamNS :: Text
@@ -497,9 +500,26 @@ parseFeatures stream e
   | elementName e == streamName "features" = return $ fromElement e $/ anyElement &| curElement
   | otherwise = streamThrow stream $ unexpectedStanza (elementName e) [streamName "features"]
 
+{- | Connect a TCP socket to the host/port from ConnectionParams, then
+create a Connection using the XMPP domain as the hostname (for TLS
+server name identification).
+-}
+connectWithDomain :: ConnectionContext -> ConnectionParams -> Text -> IO Connection
+connectWithDomain ctx params domain = do
+  let host = connectionHostname params
+      port = show $ connectionPort params
+  addrs <- NS.getAddrInfo (Just NS.defaultHints {NS.addrSocketType = NS.Stream}) (Just host) (Just port)
+  addr <- case addrs of
+    a : _ -> return a
+    [] -> ioError $ userError $ "DNS resolution failed for " ++ host
+  sock <- NS.socket (NS.addrFamily addr) (NS.addrSocketType addr) (NS.addrProtocol addr)
+  NS.connect sock (NS.addrAddress addr) `E.onException` NS.close sock
+  let tlsParams = params {connectionHostname = T.unpack domain, connectionUseSecure = Nothing}
+  connectFromSocket ctx sock tlsParams
+
 streamCreate :: (MonadStream m) => ConnectionSettings -> m (Either ClientError (Stream m))
 streamCreate csettings@(ConnectionSettings {..}) =
-  bracketOnError (handleConnErr $ connectTo connectionContext connectionParams {connectionUseSecure = Nothing}) (liftIO . connectionClose) initStream
+  bracketOnError (handleConnErr $ connectWithDomain connectionContext connectionParams connectionServer) (liftIO . connectionClose) initStream
  where
   initStream streamConn = do
     $(logInfo) "Initializing stream"
