@@ -70,6 +70,7 @@ main = do
       criticalThread run unmask =
         unmask run
           `catches` [ Handler (\case ThreadKilled -> return (); e -> throwTo mainTid e)
+                    , Handler (\AsyncCancelled -> return ())
                     , Handler (\(e :: SomeException) -> throwTo mainTid e)
                     ]
 
