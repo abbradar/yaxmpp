@@ -1,0 +1,5 @@
+dist-newstyle/
+yaxmpp.cabal
+*.log
+result
+.direnv/
