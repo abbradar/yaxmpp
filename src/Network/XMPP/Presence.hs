@@ -13,10 +13,14 @@ module Network.XMPP.Presence (
   PresenceEvent (..),
   presenceUpdate,
   presenceStanza,
-) where
+)
+where
 
+import Control.HandlerList (HandlerList, HandlerListRef)
+import qualified Control.HandlerList as HandlerList
 import Control.Monad
 import Control.Monad.Logger
+import Data.Injective
 import Data.Int
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -24,14 +28,6 @@ import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.XML
-import Text.XML.Cursor hiding (element)
-import qualified Text.XML.Cursor as XC
-import TextShow (showt)
-
-import Control.HandlerList (HandlerList, HandlerListRef)
-import qualified Control.HandlerList as HandlerList
-import Data.Injective
 import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Plugin
@@ -39,6 +35,10 @@ import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Utils
 import Network.XMPP.XML
+import Text.XML
+import Text.XML.Cursor hiding (element)
+import qualified Text.XML.Cursor as XC
+import TextShow (showt)
 
 data ShowState
   = ShowAway
