@@ -281,21 +281,20 @@ mucSendPresence (MUCRef {..}) addr pres = do
 
 type MUCStatusSet = Set Integer
 
-_parseMUCPresence :: Either [Element] Presence -> Maybe (MUCStatusSet, MUCPresence)
-_parseMUCPresence pres = do
-  let extended =
-        case pres of
-          Left elems -> elems
-          Right p -> presenceExtended p
+_parseMUCPresence :: ResourceStatus -> Maybe (MUCStatusSet, MUCPresence)
+_parseMUCPresence status = do
+  let extended = case status of
+        ResourceAvailable p -> presenceExtended p
+        ResourceUnavailable elems -> elems
   xE <- listToMaybe $ fromChildren extended $/ XC.element (mucUserName "x") &| curElement
   let statusSet = S.fromList $ mapMaybe (readMaybe . T.unpack) $ fromElement xE $/ XC.element (mucUserName "status") &/ attribute "code"
   item <- listToMaybe $ fromElement xE $/ XC.element (mucUserName "item") &| curElement
   mucAffiliation <- getAttr "affiliation" item >>= injFrom
   mucRole <- getAttr "role" item >>= injFrom
   let mucRealJid = getAttr "jid" item >>= (either (const Nothing) Just . xmppAddress) >>= fullJidGet
-      mucPresence = case pres of
-        Right p -> p
-        Left _ -> defaultPresence
+      mucPresence = case status of
+        ResourceAvailable p -> p
+        ResourceUnavailable _ -> defaultPresence
   return (statusSet, MUCPresence {..})
 
 mucInHandler :: (MonadStream m) => MUCRef m -> PluginInHandler m
@@ -331,13 +330,14 @@ data MUCHandleResult a
   | MUCRun a
 
 mucPresenceHandler :: (MonadStream m) => MUCRef m -> PresenceHandler m
-mucPresenceHandler (MUCRef {..}) (addr, mpres) = do
+mucPresenceHandler _ (AllResourcesOffline _ _) = return Nothing -- MUC rooms don't use bare JID presence
+mucPresenceHandler (MUCRef {..}) (ResourcePresence addr mpres) = do
   let bare = fullBare addr
       resource = fullResource addr
   processed <- atomicModifyIORef' mucRooms $ \rooms ->
     case M.lookup bare rooms of
       Just (Right (MUC {..}, _))
-        | Left _ <- mpres
+        | ResourceUnavailable _ <- mpres
         , resource == mucNick ->
             (M.delete bare rooms, MUCRun $ Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft)
       Just (Right (room@(MUC {..}), handler)) ->
@@ -347,7 +347,7 @@ mucPresenceHandler (MUCRef {..}) (addr, mpres) = do
             let room' = room {mucMembers = members}
                 mucPres =
                   MUCPresence
-                    { mucPresence = case mpres of Right p -> p; Left _ -> defaultPresence
+                    { mucPresence = case mpres of ResourceAvailable p -> p; ResourceUnavailable _ -> defaultPresence
                     , mucRealJid = Nothing
                     , mucAffiliation = AffiliationNone
                     , mucRole = RoleNone
@@ -355,7 +355,7 @@ mucPresenceHandler (MUCRef {..}) (addr, mpres) = do
              in (M.insert bare (Right (room', handler)) rooms, MUCRun $ handler room' $ RoomPresence resource (MUCUpdated mucPres))
       Just (Left pending) ->
         case mpres of
-          Right pres ->
+          ResourceAvailable pres ->
             let mucPres = MUCPresence {mucPresence = pres, mucRealJid = Nothing, mucAffiliation = AffiliationNone, mucRole = RoleNone}
                 members = M.insert resource mucPres $ pmucMembers pending
                 pending' = pending {pmucMembers = members}
@@ -372,7 +372,7 @@ mucPresenceHandler (MUCRef {..}) (addr, mpres) = do
              in if resource == pmucNick pending
                   then (M.insert bare (Right (room', pmucHandler pending)) rooms, MUCRun joinRoom)
                   else (M.insert bare (Left pending') rooms, MUCHandled)
-          Left err
+          ResourceUnavailable err
             | resource == pmucNick pending ->
                 let leaveRoom = do
                       Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft

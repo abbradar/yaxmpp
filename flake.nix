@@ -35,6 +35,7 @@
                 haskellPackages.fourmolu
                 haskellPackages.hpack
                 haskellPackages.cabal-install
+                haskellPackages.haskell-language-server
               ];
           })).env;
       };

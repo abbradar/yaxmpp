@@ -2,6 +2,8 @@
 
 module Network.XMPP.Presence (
   ShowState (..),
+  ResourceStatus (..),
+  PresenceUpdate (..),
   PresenceHandler,
   Presence (..),
   defaultPresence,
@@ -69,10 +71,26 @@ defaultPresence =
     , presenceExtended = []
     }
 
-type PresenceHandler m = (FullJID, Either [Element] Presence) -> m (Maybe ())
+-- | Status of a single resource.
+data ResourceStatus
+  = ResourceAvailable Presence
+  | -- | Resource went unavailable; carries extended stanza elements.
+    ResourceUnavailable [Element]
+  deriving (Show, Eq)
+
+{- | A presence update from a specific resource, or a bare-JID unavailable
+notification meaning all resources are offline (RFC 6121 §4.5.4).
+-}
+data PresenceUpdate
+  = ResourcePresence FullJID ResourceStatus
+  | -- | All resources offline; carries the bare JID and extended stanza elements.
+    AllResourcesOffline BareJID [Element]
+  deriving (Show, Eq)
+
+type PresenceHandler m = PresenceUpdate -> m (Maybe ())
 
 newtype PresenceRef m = PresenceRef
-  { presenceHandlersI :: HandlerList m (FullJID, Either [Element] Presence) ()
+  { presenceHandlersI :: HandlerList m PresenceUpdate ()
   }
 
 data PresenceOp
@@ -85,14 +103,14 @@ presenceOp Nothing = Just PresenceSet
 presenceOp (Just PresenceUnavailable) = Just PresenceUnset
 presenceOp _ = Nothing
 
-presenceHandlers :: PresenceRef m -> HandlerListRef m (FullJID, Either [Element] Presence) ()
+presenceHandlers :: PresenceRef m -> HandlerListRef m PresenceUpdate ()
 presenceHandlers pref = HandlerList.ref $ presenceHandlersI pref
 
-emitPresence :: (MonadStream m) => PresenceRef m -> FullJID -> Either [Element] Presence -> m ()
-emitPresence (PresenceRef {..}) addr pres = do
-  mr <- HandlerList.call presenceHandlersI (addr, pres)
+emitPresence :: (MonadStream m) => PresenceRef m -> PresenceUpdate -> m ()
+emitPresence (PresenceRef {..}) upd = do
+  mr <- HandlerList.call presenceHandlersI upd
   case mr of
-    Nothing -> $(logWarn) [i|Unhandled presence update for #{addr}: #{pres}|]
+    Nothing -> $(logWarn) [i|Unhandled presence update: #{upd}|]
     Just () -> return ()
 
 parsePresence :: [Element] -> Either StanzaError Presence
@@ -125,12 +143,17 @@ presenceInHandler pref (InStanza {istType = InPresence (Right (presenceOp -> Jus
     case op of
       PresenceSet -> case parsePresence istChildren of
         Right p -> do
-          emitPresence pref faddr $ Right p
+          emitPresence pref $ ResourcePresence faddr $ ResourceAvailable p
           return InSilent
         Left e -> return $ InError e
       PresenceUnset -> do
-        emitPresence pref faddr $ Left $ parseExtended istChildren
+        emitPresence pref $ ResourcePresence faddr $ ResourceUnavailable $ parseExtended istChildren
         return InSilent
+-- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
+presenceInHandler pref (InStanza {istType = InPresence (Right (Just PresenceUnavailable)), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
+  Just <$> do
+    emitPresence pref $ AllResourcesOffline bare (parseExtended istChildren)
+    return InSilent
 presenceInHandler _ _ = return Nothing
 
 presencePlugin :: (MonadStream m) => XMPPPluginsRef m -> m (PresenceRef m)
@@ -146,11 +169,11 @@ data PresenceEvent k
   | Removed k [Element]
   deriving (Show, Eq)
 
-presenceUpdate :: (Ord k) => k -> Either [Element] Presence -> Map k Presence -> Maybe (Map k Presence, PresenceEvent k)
-presenceUpdate k (Right v) m
+presenceUpdate :: (Ord k) => k -> ResourceStatus -> Map k Presence -> Maybe (Map k Presence, PresenceEvent k)
+presenceUpdate k (ResourceAvailable v) m
   | M.member k m = Just (M.insert k v m, Updated k v)
   | otherwise = Just (M.insert k v m, Added k v)
-presenceUpdate k (Left e) m
+presenceUpdate k (ResourceUnavailable e) m
   | M.member k m = Just (M.delete k m, Removed k e)
   | otherwise = Nothing
 

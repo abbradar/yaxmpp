@@ -30,7 +30,7 @@ data MyPresenceRef m = MyPresenceRef
   }
 
 myPresencePHandler :: (MonadStream m) => MyPresenceRef m -> PresenceHandler m
-myPresencePHandler (MyPresenceRef {..}) (from, pres)
+myPresencePHandler (MyPresenceRef {..}) (ResourcePresence from pres)
   | fullBare from == fullBare (sessionAddress $ ssSession myPresenceSession) = do
       presences <- readIORef myPresence
       case presenceUpdate (fullResource from) pres presences of
