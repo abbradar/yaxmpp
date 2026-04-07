@@ -26,7 +26,6 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Async
 import UnliftIO.Concurrent
 
-import qualified Control.HandlerList as HandlerList
 import Network.SASL
 import Network.XMPP.Address
 import Network.XMPP.Connection
@@ -41,6 +40,7 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Subscription
+import Network.XMPP.XEP.ChatStates
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
@@ -134,46 +134,55 @@ main = do
 
         oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
         pluginsRef <- newXmppPlugins sess
-        presRef <- presencePlugin pluginsRef
-        discoRef <- discoPlugin pluginsRef
-        rosterRef <- rosterPlugin pluginsRef oldRoster
-        subscrRef <- subscriptionPlugin pluginsRef rosterRef
-        (rpresH, rpresRef) <- rpresencePlugin rosterRef
-        (myPresH, myPresRef) <- myPresencePlugin sess
-        imRef <- imPlugin pluginsRef
-        mucRef <- mucPlugin pluginsRef presRef discoRef
-        void $ HandlerList.add (presenceHandlers presRef) rpresH
-        void $ HandlerList.add (presenceHandlers presRef) myPresH
-        versionPlugin pluginsRef discoRef defaultVersion
-        entityTimePlugin pluginsRef discoRef
+        presencePlugin pluginsRef
+        discoPlugin pluginsRef
+        rosterPlugin pluginsRef oldRoster
+        subscriptionPlugin pluginsRef
+        rpresencePlugin pluginsRef
+        myPresencePlugin pluginsRef
+        imPlugin pluginsRef
+        mucPlugin pluginsRef
+        chatStatePlugin pluginsRef
+        versionPlugin pluginsRef defaultVersion
+        entityTimePlugin pluginsRef
 
         let saveRoster = do
-              roster <- tryGetRoster rosterRef
+              roster <- tryGetRoster pluginsRef
               case roster of
                 Just r | Just _ <- rosterVersion r -> liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode r
                 _ -> return ()
 
         flip finally saveRoster $ do
-          void $ Slot.add (rosterSlot rosterRef) $ \(_, event) -> do
+          rSlot <- rosterSlot pluginsRef
+          void $ Slot.add rSlot $ \(_, event) -> do
             writeMessage [i|Got roster update: #{event}|]
 
-          void $ Slot.add (subscriptionSlot subscrRef) $ \(addr, stat) -> do
+          sSlot <- subscriptionSlot pluginsRef
+          void $ Slot.add sSlot $ \(addr, stat) -> do
             writeMessage [i|Got subscription update for #{addr}: #{stat}|]
 
-          void $ Slot.add (myPresenceSlot myPresRef) $ \event -> do
+          mpSlot <- myPresenceSlot pluginsRef
+          void $ Slot.add mpSlot $ \event -> do
             writeMessage [i|Got presence update for myself: #{event}|]
 
-          void $ Slot.add (rpresenceSlot rpresRef) $ \event -> do
+          rpSlot <- rpresenceSlot pluginsRef
+          void $ Slot.add rpSlot $ \event -> do
             writeMessage [i|Got presence update for roster: #{event}|]
 
-          void $ Slot.add (imSlot imRef) $ \(addr, msg) -> do
+          imS <- imSlot pluginsRef
+          void $ Slot.add imS $ \(addr, msg) -> do
             let text = localizedGet (Just "en") $ imBody msg
             writeMessage [i|#{addressToText addr}: #{text}|]
 
-          void $ Slot.add (mucSlot mucRef) $ \event -> do
+          mSlot <- mucSlot pluginsRef
+          void $ Slot.add mSlot $ \event -> do
             writeMessage [i|Got MUC event: #{event}|]
 
-          myPresenceSend myPresRef $ Just defaultPresence
+          csSlot <- chatStateSlot pluginsRef
+          void $ Slot.add csSlot $ \(addr, _msgType, cs) -> do
+            writeMessage [i|#{addressToText addr} is #{cs}|]
+
+          myPresenceSend pluginsRef $ Just defaultPresence
 
           let commands =
                 M.fromListWith
@@ -183,7 +192,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
-                              runInBase $ updateSubscriptionFrom subscrRef addr should
+                              runInBase $ updateSubscriptionFrom pluginsRef addr should
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -193,7 +202,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
-                              runInBase $ requestSubscriptionTo subscrRef addr should
+                              runInBase $ requestSubscriptionTo pluginsRef addr should
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -204,7 +213,7 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = plainIMMessage $ T.pack $ unwords msg
-                              runInBase $ imSend imRef addr imsg
+                              runInBase $ imSend pluginsRef addr imsg
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -214,7 +223,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [] -> do
-                              roster <- runInBase $ getRoster rosterRef
+                              roster <- runInBase $ getRoster pluginsRef
                               HL.outputStrLn $ show roster
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -225,7 +234,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [] -> do
-                              pres <- runInBase $ myPresenceGet myPresRef
+                              pres <- runInBase $ myPresenceGet pluginsRef
                               HL.outputStrLn $ show pres
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -236,7 +245,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [] -> do
-                              pres <- runInBase $ getRosterPresence rpresRef
+                              pres <- runInBase $ getRosterPresence pluginsRef
                               HL.outputStrLn $ show pres
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -247,7 +256,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(read -> online)] -> do
-                              runInBase $ myPresenceSend myPresRef $ if online then Just defaultPresence else Nothing
+                              runInBase $ myPresenceSend pluginsRef $ if online then Just defaultPresence else Nothing
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -257,7 +266,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              runInBase $ insertRoster rosterRef addr Nothing S.empty
+                              runInBase $ insertRoster pluginsRef addr Nothing S.empty
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -267,7 +276,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              runInBase $ deleteRoster rosterRef addr
+                              runInBase $ deleteRoster pluginsRef addr
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -277,7 +286,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              topo <- runInBase $ getDiscoTopo sess addr Nothing
+                              topo <- runInBase $ getDiscoTopo pluginsRef addr Nothing
                               case topo of
                                 Left e -> HL.outputStrLn [i|Failed to perform discovery: #{e}|]
                                 Right r -> HL.outputStrLn $ show r
@@ -290,7 +299,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              ver <- runInBase $ getVersion sess addr
+                              ver <- runInBase $ getVersion pluginsRef addr
                               HL.outputStrLn $ show ver
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -301,7 +310,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              time <- runInBase $ getEntityTime sess addr
+                              time <- runInBase $ getEntityTime pluginsRef addr
                               HL.outputStrLn $ show time
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -312,7 +321,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
-                              void $ runInBase $ mucJoin mucRef addr defaultMUCJoinSettings $ \_ event -> do
+                              void $ runInBase $ mucJoin pluginsRef addr defaultMUCJoinSettings $ \_ event -> do
                                 writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -324,7 +333,7 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = (plainIMMessage $ T.pack $ unwords msg) {imType = MessageGroupchat}
-                              runInBase $ imSend imRef addr imsg
+                              runInBase $ imSend pluginsRef addr imsg
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -334,7 +343,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr))] -> do
-                              runInBase $ mucSendPresence mucRef addr Nothing
+                              runInBase $ mucSendPresence pluginsRef addr Nothing
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

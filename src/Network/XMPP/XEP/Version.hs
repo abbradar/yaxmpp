@@ -60,8 +60,9 @@ versionIQHandler (VersionInfo {..}) (InRequestIQ {iriType = IQGet, iriChildren =
       ++ maybeToList (fmap ("os",) swOS)
 versionIQHandler _ _ = return Nothing
 
-getVersion :: (MonadStream m) => StanzaSession m -> XMPPAddress -> m (Either StanzaError VersionInfo)
-getVersion sess addr = do
+getVersion :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m (Either StanzaError VersionInfo)
+getVersion pluginsRef addr = do
+  let sess = pluginsSession pluginsRef
   ret <-
     stanzaSyncRequest
       sess
@@ -82,11 +83,13 @@ getVersion sess addr = do
  where
   getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 
-versionPlugin :: (MonadStream m) => XMPPPluginsRef m -> DiscoRef m -> VersionInfo -> m ()
-versionPlugin pluginsRef discoRef settings = do
+versionPlugin :: (MonadStream m) => XMPPPluginsRef m -> VersionInfo -> m ()
+versionPlugin pluginsRef settings = do
   let discoInfo =
         emptyDiscoInfo
           { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton versionNS}
           }
-  void $ HandlerList.add (pluginIQHandlers pluginsRef) $ versionIQHandler settings
-  void $ RefMap.add (discoInfos discoRef) $ return discoInfo
+  iqHandlers <- pluginsIQHandlers pluginsRef
+  void $ HandlerList.add iqHandlers $ versionIQHandler settings
+  dInfos <- discoInfos pluginsRef
+  void $ RefMap.add dInfos $ return discoInfo

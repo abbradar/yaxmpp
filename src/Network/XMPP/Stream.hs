@@ -292,7 +292,7 @@ parseSASL e
   | elementName e == saslName "mechanisms" = Just $ SASLFeature $ map T.encodeUtf8 $ fromElement e $/ XC.element (saslName "mechanism") &/ content
   | otherwise = Nothing
 
-type MonadStream m = (MonadMask m, MonadLogger m, MonadUnliftIO m, MonadFail m)
+type MonadStream m = (MonadMask m, MonadLogger m, MonadUnliftIO m, MonadFail m, Typeable m)
 
 data ConnectionSettings = ConnectionSettings
   { connectionParams :: ConnectionParams

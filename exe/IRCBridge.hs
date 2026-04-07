@@ -1,5 +1,4 @@
 import Control.Concurrent.STM
-import qualified Control.HandlerList as HandlerList
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
@@ -113,13 +112,12 @@ main = runStderrLoggingT $ do
     bracket (forkIO $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
       pluginsRef <- newXmppPlugins sess
-      presRef <- presencePlugin pluginsRef
-      discoRef <- discoPlugin pluginsRef
-      rosterRef <- rosterPlugin pluginsRef Nothing
-      (myPresH, myPresRef) <- myPresencePlugin sess
-      imRef <- imPlugin pluginsRef
-      mucRef <- mucPlugin pluginsRef presRef discoRef
-      void $ HandlerList.add (presenceHandlers presRef) myPresH
+      presencePlugin pluginsRef
+      discoPlugin pluginsRef
+      rosterPlugin pluginsRef Nothing
+      myPresencePlugin pluginsRef
+      imPlugin pluginsRef
+      mucPlugin pluginsRef
 
       backQueue <- liftIO newTQueueIO
       let ircReply = liftIO . atomically . writeTQueue backQueue
@@ -128,16 +126,17 @@ main = runStderrLoggingT $ do
           ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick (Just nick) (Just conferenceHost)) cmd args
 
       _ <- forkIO $ do
-        rst <- getRoster rosterRef
+        rst <- getRoster pluginsRef
         $(logInfo) [i|Got initial roster: #{rst}|]
-        myPresenceSend myPresRef (Just defaultPresence)
+        myPresenceSend pluginsRef (Just defaultPresence)
 
         let processIrcRequest = do
               $(logInfo) [i|New IRC connection|]
               nickVar <- newEmptyMVar
               let getNick = T.encodeUtf8 . resourceText <$> readMVar nickVar
 
-              void $ lift $ Slot.add (imSlot imRef) $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) ->
+              imS <- lift $ imSlot pluginsRef
+              void $ lift $ Slot.add imS $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) ->
                 if addressDomain == conferenceServer settings
                   then do
                     let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
@@ -146,7 +145,8 @@ main = runStderrLoggingT $ do
                     unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
                   else $(logWarn) [i|Got unknown message from #{addr}: #{msg}|]
 
-              void $ lift $ Slot.add (mucSlot mucRef) $ \case
+              mSlot <- lift $ mucSlot pluginsRef
+              void $ lift $ Slot.add mSlot $ \case
                 MUCJoinedRoom jid (MUC {..}) -> do
                   nick <- getNick
                   let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
@@ -176,7 +176,7 @@ main = runStderrLoggingT $ do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           joinOpts = defaultMUCJoinSettings {joinHistory = defaultMUCHistorySettings {histMaxStanzas = Just 0}}
-                      handle (\MUCAlreadyJoinedError -> return ()) $ void $ mucJoin mucRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
+                      handle (\MUCAlreadyJoinedError -> return ()) $ void $ mucJoin pluginsRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
                         case event of
                           RoomPresence otherNick' (MUCJoined _) -> do
                             let otherNick = T.encodeUtf8 $ resourceText otherNick'
@@ -209,7 +209,7 @@ main = runStderrLoggingT $ do
                               , imThread = Nothing
                               , imExtended = []
                               }
-                      imSend imRef (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
+                      imSend pluginsRef (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
                   | otherwise -> $(logWarn) [i|Unknown IRC command: #{req}|]
 
         runGeneralTCPServer (serverSettings (ircPort settings) "*") $ \app -> do

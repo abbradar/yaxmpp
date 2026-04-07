@@ -4,12 +4,11 @@ module Data.RefMap (
   RefMap,
   new,
   entries,
-  RefMapRef,
   EntryId,
-  ref,
   add,
   delete,
-) where
+)
+where
 
 import Control.Monad.IO.Class
 import Data.Map.Strict (Map)
@@ -22,8 +21,6 @@ data RefMapInternal a = RefMapInternal
   }
 
 newtype RefMap a = RefMap (IORef (RefMapInternal a))
-
-newtype RefMapRef a = RefMapRef (IORef (RefMapInternal a))
 
 newtype EntryId = EntryId Int
 
@@ -41,11 +38,8 @@ entries (RefMap r) = do
   f <- readIORef r
   return $ M.elems $ entriesMap f
 
-ref :: RefMap a -> RefMapRef a
-ref (RefMap r) = RefMapRef r
-
-add :: (MonadIO m) => RefMapRef a -> a -> m EntryId
-add (RefMapRef r) handler =
+add :: (MonadIO m) => RefMap a -> a -> m EntryId
+add (RefMap r) handler =
   atomicModifyIORef' r $ \int ->
     let newInt =
           RefMapInternal
@@ -54,6 +48,6 @@ add (RefMapRef r) handler =
             }
      in (newInt, EntryId $ lastId int)
 
-delete :: (MonadIO m) => RefMapRef a -> EntryId -> m ()
-delete (RefMapRef r) (EntryId hid) =
+delete :: (MonadIO m) => RefMap a -> EntryId -> m ()
+delete (RefMap r) (EntryId hid) =
   atomicModifyIORef' r $ \int -> (int {entriesMap = M.delete hid $ entriesMap int}, ())

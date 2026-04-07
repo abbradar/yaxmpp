@@ -109,7 +109,7 @@ restartOrThrow ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
   case ns of
     Left err -> throwE $ ClientErrorException err
     Right s -> do
-      unless (any isSM $ streamFeatures s) $ throwE StreamManagementVanished
+      unless (any isSM $ streamFeatures s) $ void $ throwE StreamManagementVanished
       streamSend s $ element (smName "resume") [("h", showt $ rsRecvN rs), ("previd", reconnectId)] []
       eanswer <- streamRecv s
       if

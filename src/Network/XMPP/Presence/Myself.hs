@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 
 module Network.XMPP.Presence.Myself (
-  MyPresenceRef,
   myPresenceGet,
   myPresenceSlot,
   myPresenceSend,
@@ -11,11 +10,14 @@ module Network.XMPP.Presence.Myself (
 import Control.Monad
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
+import Data.Proxy
 import UnliftIO.IORef
 
-import Control.Slot (Slot, SlotRef)
+import qualified Control.HandlerList as HandlerList
+import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Network.XMPP.Address
+import Network.XMPP.Plugin
 import Network.XMPP.Presence
 import Network.XMPP.Session
 import Network.XMPP.Stanza
@@ -23,37 +25,42 @@ import Network.XMPP.Stream
 
 type MyselfPresenceMap = Map XMPPResource Presence
 
-data MyPresenceRef m = MyPresenceRef
-  { myPresenceHandler :: Slot m (PresenceEvent XMPPResource)
-  , myPresence :: IORef MyselfPresenceMap
+type MyPresenceSlot m = Slot m (PresenceEvent XMPPResource)
+
+data MyPresenceState m = MyPresenceState
+  { myPresenceRef :: IORef MyselfPresenceMap
   , myPresenceSession :: StanzaSession m
   }
 
-myPresencePHandler :: (MonadStream m) => MyPresenceRef m -> PresenceHandler m
-myPresencePHandler (MyPresenceRef {..}) (ResourcePresence from pres)
+myPresencePHandler :: (MonadStream m) => MyPresenceSlot m -> MyPresenceState m -> PresenceHandler m
+myPresencePHandler slot (MyPresenceState {..}) (ResourcePresence from pres)
   | fullBare from == fullBare (sessionAddress $ ssSession myPresenceSession) = do
-      presences <- readIORef myPresence
+      presences <- readIORef myPresenceRef
       case presenceUpdate (fullResource from) pres presences of
         Nothing -> return Nothing
         Just (presences', event) -> do
-          atomicWriteIORef myPresence presences'
-          Slot.call myPresenceHandler event
+          atomicWriteIORef myPresenceRef presences'
+          Slot.call slot event
           return $ Just ()
-myPresencePHandler _ _ = return Nothing
+myPresencePHandler _ _ _ = return Nothing
 
-myPresenceGet :: (MonadStream m) => MyPresenceRef m -> m MyselfPresenceMap
-myPresenceGet = readIORef . myPresence
+myPresenceGet :: forall m. (MonadStream m) => XMPPPluginsRef m -> m MyselfPresenceMap
+myPresenceGet pluginsRef = do
+  MyPresenceState {..} <- getPluginsHook (Proxy :: Proxy (MyPresenceState m)) pluginsRef
+  readIORef myPresenceRef
 
-myPresenceSlot :: MyPresenceRef m -> SlotRef m (PresenceEvent XMPPResource)
-myPresenceSlot (MyPresenceRef {..}) = Slot.ref myPresenceHandler
+myPresenceSlot :: (MonadStream m) => XMPPPluginsRef m -> m (MyPresenceSlot m)
+myPresenceSlot = getPluginsHook Proxy
 
-myPresenceSend :: (MonadStream m) => MyPresenceRef m -> Maybe Presence -> m ()
-myPresenceSend (MyPresenceRef {..}) pres = void $ stanzaSend myPresenceSession $ presenceStanza pres
+myPresenceSend :: (MonadStream m) => XMPPPluginsRef m -> Maybe Presence -> m ()
+myPresenceSend pluginsRef pres = void $ stanzaSend (pluginsSession pluginsRef) $ presenceStanza pres
 
-myPresencePlugin :: (MonadStream m) => StanzaSession m -> m (PresenceHandler m, MyPresenceRef m)
-myPresencePlugin myPresenceSession = do
-  myPresence <- newIORef M.empty
-  myPresenceHandler <- Slot.new
-  let pref = MyPresenceRef {..}
-      phandler = myPresencePHandler pref
-  return (phandler, pref)
+myPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
+myPresencePlugin pluginsRef = do
+  myPresenceRef <- newIORef M.empty
+  let state = MyPresenceState {myPresenceSession = pluginsSession pluginsRef, ..}
+  insertPluginsHook state pluginsRef
+  slot <- Slot.new
+  insertPluginsHook slot pluginsRef
+  pHandlers <- presenceHandlers pluginsRef
+  void $ HandlerList.add pHandlers (myPresencePHandler slot state)

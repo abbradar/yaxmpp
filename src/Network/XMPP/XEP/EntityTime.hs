@@ -41,8 +41,9 @@ timeIQHandler (InRequestIQ {iriType = IQGet, iriChildren = [req]})
   timeTag = timeName "time"
 timeIQHandler _ = return Nothing
 
-getEntityTime :: (MonadStream m) => StanzaSession m -> XMPPAddress -> m (Either StanzaError ZonedTime)
-getEntityTime sess addr = do
+getEntityTime :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m (Either StanzaError ZonedTime)
+getEntityTime pluginsRef addr = do
+  let sess = pluginsSession pluginsRef
   ret <-
     stanzaSyncRequest
       sess
@@ -66,11 +67,13 @@ getEntityTime sess addr = do
  where
   getEntry r name = fromElement r $/ XC.element (timeName name) &/ content
 
-entityTimePlugin :: (MonadStream m) => XMPPPluginsRef m -> DiscoRef m -> m ()
-entityTimePlugin pluginsRef discoRef = do
+entityTimePlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
+entityTimePlugin pluginsRef = do
   let discoInfo =
         emptyDiscoInfo
           { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton timeNS}
           }
-  void $ HandlerList.add (pluginIQHandlers pluginsRef) timeIQHandler
-  void $ RefMap.add (discoInfos discoRef) $ return discoInfo
+  iqHandlers <- pluginsIQHandlers pluginsRef
+  void $ HandlerList.add iqHandlers timeIQHandler
+  dInfos <- discoInfos pluginsRef
+  void $ RefMap.add dInfos $ return discoInfo

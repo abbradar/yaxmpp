@@ -12,7 +12,6 @@ module Network.XMPP.XEP.Disco (
   getDiscoTopo,
   DiscoInfo (..),
   emptyDiscoInfo,
-  DiscoRef,
   discoInfos,
   discoPlugin,
 ) where
@@ -24,6 +23,7 @@ import Control.Monad.Trans.Except
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
+import Data.Proxy
 import Data.Set (Set)
 import qualified Data.Set as S
 import Data.String.Interpolate (i)
@@ -34,7 +34,7 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
 import qualified Control.HandlerList as HandlerList
-import Data.RefMap (RefMap, RefMapRef)
+import Data.RefMap (RefMap)
 import qualified Data.RefMap as RefMap
 import Network.XMPP.Address
 import Network.XMPP.Language
@@ -109,8 +109,9 @@ parseDiscoEntity re = do
 
   getFeature = requiredAttr "var"
 
-getDiscoEntity :: (MonadStream m) => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoEntity)
-getDiscoEntity sess addr node = do
+getDiscoEntity :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoEntity)
+getDiscoEntity pluginsRef addr node = do
+  let sess = pluginsSession pluginsRef
   ret <-
     stanzaSyncRequest
       sess
@@ -141,8 +142,9 @@ parseDiscoItems re = parseNamed re (discoItemsName "item") getItem
     let node = getAttr "node" e
     return (address, node)
 
-getDiscoItems :: (MonadStream m) => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoItems)
-getDiscoItems sess addr node = do
+getDiscoItems :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoItems)
+getDiscoItems pluginsRef addr node = do
+  let sess = pluginsSession pluginsRef
   ret <-
     stanzaSyncRequest
       sess
@@ -162,14 +164,14 @@ data DiscoTopo = DiscoTopo
   }
   deriving (Show, Eq)
 
-getDiscoTopo :: (MonadStream m) => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoTopo)
-getDiscoTopo sess addr node = runExceptT $ do
-  discoRoot <- ExceptT $ getDiscoEntity sess addr node
+getDiscoTopo :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoTopo)
+getDiscoTopo pluginsRef addr node = runExceptT $ do
+  discoRoot <- ExceptT $ getDiscoEntity pluginsRef addr node
   case node of
     Nothing -> do
-      items <- ExceptT $ getDiscoItems sess addr node
+      items <- ExceptT $ getDiscoItems pluginsRef addr node
       discoItems <- fmap M.fromList $ forM (M.toList items) $ \(k@(сaddr, cnode), name) -> do
-        topo <- lift $ getDiscoTopo sess сaddr cnode
+        topo <- lift $ getDiscoTopo pluginsRef сaddr cnode
         return (k, (name, topo))
       return DiscoTopo {..}
     Just _ ->
@@ -220,11 +222,9 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
  where
   makeItemAttr (addr, mNode) = ("jid", addressToText addr) : maybeToList (fmap ("node",) mNode)
 
-newtype DiscoRef m = DiscoRef {discoInfosI :: RefMap (m DiscoInfo)}
-
-discoIQHandler :: (MonadStream m) => DiscoRef m -> InRequestIQ -> m (Maybe RequestIQResponse)
-discoIQHandler (DiscoRef {..}) (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
-  infos <- RefMap.entries discoInfosI >>= sequence
+discoIQHandler :: (MonadStream m) => RefMap (m DiscoInfo) -> InRequestIQ -> m (Maybe RequestIQResponse)
+discoIQHandler infosRef (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
+  infos <- RefMap.entries infosRef >>= sequence
   DiscoInfo {..} <- case foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos of
     Nothing -> fail "discoIqHandler: overlapping plugins"
     Just r -> return r
@@ -248,12 +248,12 @@ discoIQHandler (DiscoRef {..}) (InRequestIQ {iriType = IQGet, iriChildren = [req
   itemsName = discoItemsName "query"
 discoIQHandler _ _ = return Nothing
 
-discoInfos :: DiscoRef m -> RefMapRef (m DiscoInfo)
-discoInfos ref = RefMap.ref $ discoInfosI ref
+discoInfos :: (MonadStream m) => XMPPPluginsRef m -> m (RefMap (m DiscoInfo))
+discoInfos = getPluginsHook Proxy
 
-discoPlugin :: (MonadStream m) => XMPPPluginsRef m -> m (DiscoRef m)
+discoPlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
 discoPlugin pluginsRef = do
-  discoInfosI <- RefMap.new
-  let discoRef = DiscoRef {..}
-  void $ HandlerList.add (pluginIQHandlers pluginsRef) $ discoIQHandler discoRef
-  return discoRef
+  infosRef <- RefMap.new
+  insertPluginsHook infosRef pluginsRef
+  iqHandlers <- pluginsIQHandlers pluginsRef
+  void $ HandlerList.add iqHandlers $ discoIQHandler infosRef

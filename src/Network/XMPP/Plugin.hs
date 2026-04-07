@@ -5,58 +5,89 @@ module Network.XMPP.Plugin (
   PluginInHandler,
   PluginIQHandler,
   XMPPPluginsRef,
+  insertPluginsHook,
+  getPluginsHook,
   newXmppPlugins,
   pluginsSession,
-  pluginInHandlers,
-  pluginIQHandlers,
+  pluginsInHandlers,
+  pluginsIQHandlers,
   pluginsSessionStep,
 ) where
 
+import Control.HandlerList (HandlerList)
+import qualified Control.HandlerList as HL
+import Control.Monad
+import Control.Monad.IO.Class
 import Control.Monad.Logger
+import Data.DynamicSet (DynamicSet)
+import qualified Data.DynamicSet as DS
+import Data.IORef
+import Data.Proxy
 import Data.String.Interpolate (i)
 import Data.Text (Text)
-
-import Control.HandlerList (HandlerList, HandlerListRef)
-import qualified Control.HandlerList as HandlerList
+import Data.Typeable (Typeable)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 
 type XMPPFeature = Text
 
-type PluginInHandler m = InStanza -> m (Maybe InResponse)
-type PluginIQHandler m = InRequestIQ -> m (Maybe RequestIQResponse)
-
 data XMPPPluginsRef m = XMPPPluginsRef
-  { pluginInHandlersI :: HandlerList m InStanza InResponse
-  , pluginIQHandlersI :: HandlerList m InRequestIQ RequestIQResponse
-  , pluginsSession :: StanzaSession m
+  { pluginsSession :: StanzaSession m
+  , pluginsHooksSet :: IORef DynamicSet
+  , pluginsInHandlers' :: HandlerList m InStanza InResponse
+  , pluginsIQHandlers' :: HandlerList m InRequestIQ RequestIQResponse
   }
 
-newXmppPlugins :: (MonadStream m) => StanzaSession m -> m (XMPPPluginsRef m)
+type PluginInHandler m = InStanza -> m (Maybe InResponse)
+
+type PluginIQHandler m = InRequestIQ -> m (Maybe RequestIQResponse)
+
+newXmppPlugins :: forall m. (MonadStream m) => StanzaSession m -> m (XMPPPluginsRef m)
 newXmppPlugins pluginsSession = do
-  pluginInHandlersI <- HandlerList.new
-  pluginIQHandlersI <- HandlerList.new
-  return $ XMPPPluginsRef {..}
+  pluginsInHandlers' <- HL.new
+  pluginsIQHandlers' <- HL.new
+  let set =
+        DS.insert pluginsInHandlers' $
+          DS.insert pluginsIQHandlers' $
+            DS.empty
+  pluginsHooksSet <- liftIO $ newIORef set
+  return XMPPPluginsRef {..}
 
-pluginInHandlers :: XMPPPluginsRef m -> HandlerListRef m InStanza InResponse
-pluginInHandlers ref = HandlerList.ref $ pluginInHandlersI ref
+-- | Insert a value into the plugins set. Fails if one already exists for this type.
+insertPluginsHook :: forall a m. (MonadStream m, Typeable a) => a -> XMPPPluginsRef m -> m ()
+insertPluginsHook v (XMPPPluginsRef {..}) = do
+  success <- liftIO $ atomicModifyIORef pluginsHooksSet $ \hooks ->
+    case DS.lookup (Proxy :: Proxy a) hooks of
+      Just _ -> (hooks, False)
+      Nothing -> (DS.insert v hooks, True)
+  unless success $ error "insertPluginsHook: hook already exists"
 
-pluginIQHandlers :: XMPPPluginsRef m -> HandlerListRef m InRequestIQ RequestIQResponse
-pluginIQHandlers ref = HandlerList.ref $ pluginIQHandlersI ref
+-- | Get an existing hook from the plugins set. Fails if it doesn't exist.
+getPluginsHook :: (MonadStream m, Typeable a) => Proxy a -> XMPPPluginsRef m -> m a
+getPluginsHook k (XMPPPluginsRef {..}) = do
+  hooks <- liftIO $ readIORef pluginsHooksSet
+  case DS.lookup k hooks of
+    Just h -> return h
+    Nothing -> error "getPluginsHook: hook does not exist; is the plugin initialized?"
+
+pluginsInHandlers :: (MonadStream m) => XMPPPluginsRef m -> m (HandlerList m InStanza InResponse)
+pluginsInHandlers = return . pluginsInHandlers'
+
+pluginsIQHandlers :: (MonadStream m) => XMPPPluginsRef m -> m (HandlerList m InRequestIQ RequestIQResponse)
+pluginsIQHandlers = return . pluginsIQHandlers'
 
 pluginsInHandler :: (MonadStream m) => XMPPPluginsRef m -> InHandler m
 pluginsInHandler (XMPPPluginsRef {..}) msg = do
-  mr <- HandlerList.call pluginInHandlersI msg
+  mr <- HL.call pluginsInHandlers' msg
   case mr of
     Nothing -> do
       $(logWarn) [i|Unhandled stanza: #{msg}|]
-      -- Shouldn't reply to unknown messages/presences.
       return InSilent
     Just r -> return r
 
 pluginsIQHandler :: (MonadStream m) => XMPPPluginsRef m -> IQHandler m
 pluginsIQHandler (XMPPPluginsRef {..}) iq = do
-  mr <- HandlerList.call pluginIQHandlersI iq
+  mr <- HL.call pluginsIQHandlers' iq
   case mr of
     Nothing -> return $ IQError $ serviceUnavailable "Unsupported request"
     Just r -> return r

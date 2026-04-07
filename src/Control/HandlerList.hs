@@ -1,18 +1,16 @@
 {-# LANGUAGE Strict #-}
 
-module Control.HandlerList (
-  module Data.RefMap,
-  HandlerList,
-  call,
-  HandlerListRef,
-) where
+module Control.HandlerList
+  ( module Data.RefMap,
+    HandlerList,
+    call,
+  )
+where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
-
 import Data.RefMap
 
 type HandlerList m a b = RefMap (a -> m (Maybe b))
-type HandlerListRef m a b = RefMapRef (a -> m (Maybe b))
 
 runUntil :: (Monad m) => [a -> m (Maybe b)] -> a -> m (Maybe b)
 runUntil [] _ = return Nothing
