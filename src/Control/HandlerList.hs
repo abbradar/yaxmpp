@@ -1,10 +1,10 @@
 {-# LANGUAGE Strict #-}
 
-module Control.HandlerList
-  ( module Data.RefMap,
-    HandlerList,
-    call,
-  )
+module Control.HandlerList (
+  module Data.RefMap,
+  HandlerList,
+  call,
+)
 where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)

@@ -19,10 +19,10 @@ import qualified Control.HandlerList as HL
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Logger
-import Data.DynamicSet (DynamicSet)
-import qualified Data.DynamicSet as DS
 import Data.IORef
 import Data.Proxy
+import Data.Registry (Registry)
+import qualified Data.Registry as Reg
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import Data.Typeable (Typeable)
@@ -33,7 +33,7 @@ type XMPPFeature = Text
 
 data XMPPPluginsRef m = XMPPPluginsRef
   { pluginsSession :: StanzaSession m
-  , pluginsHooksSet :: IORef DynamicSet
+  , pluginsHooksSet :: IORef Registry
   , pluginsInHandlers' :: HandlerList m InStanza InResponse
   , pluginsIQHandlers' :: HandlerList m InRequestIQ RequestIQResponse
   }
@@ -47,9 +47,9 @@ newXmppPlugins pluginsSession = do
   pluginsInHandlers' <- HL.new
   pluginsIQHandlers' <- HL.new
   let set =
-        DS.insert pluginsInHandlers' $
-          DS.insert pluginsIQHandlers' $
-            DS.empty
+        Reg.insert pluginsInHandlers' $
+          Reg.insert pluginsIQHandlers' $
+            Reg.empty
   pluginsHooksSet <- liftIO $ newIORef set
   return XMPPPluginsRef {..}
 
@@ -57,16 +57,16 @@ newXmppPlugins pluginsSession = do
 insertPluginsHook :: forall a m. (MonadStream m, Typeable a) => a -> XMPPPluginsRef m -> m ()
 insertPluginsHook v (XMPPPluginsRef {..}) = do
   success <- liftIO $ atomicModifyIORef pluginsHooksSet $ \hooks ->
-    case DS.lookup (Proxy :: Proxy a) hooks of
+    case Reg.lookup (Proxy :: Proxy a) hooks of
       Just _ -> (hooks, False)
-      Nothing -> (DS.insert v hooks, True)
+      Nothing -> (Reg.insert v hooks, True)
   unless success $ error "insertPluginsHook: hook already exists"
 
 -- | Get an existing hook from the plugins set. Fails if it doesn't exist.
 getPluginsHook :: (MonadStream m, Typeable a) => Proxy a -> XMPPPluginsRef m -> m a
 getPluginsHook k (XMPPPluginsRef {..}) = do
   hooks <- liftIO $ readIORef pluginsHooksSet
-  case DS.lookup k hooks of
+  case Reg.lookup k hooks of
     Just h -> return h
     Nothing -> error "getPluginsHook: hook does not exist; is the plugin initialized?"
 

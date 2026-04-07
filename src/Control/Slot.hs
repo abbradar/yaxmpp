@@ -1,10 +1,10 @@
 {-# LANGUAGE Strict #-}
 
-module Control.Slot
-  ( module Data.RefMap,
-    Slot,
-    call,
-  )
+module Control.Slot (
+  module Data.RefMap,
+  Slot,
+  call,
+)
 where
 
 import Control.Exception (SomeException)

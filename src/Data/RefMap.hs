@@ -4,6 +4,7 @@ module Data.RefMap (
   RefMap,
   new,
   entries,
+  reverseEntries,
   EntryId,
   add,
   delete,
@@ -37,6 +38,11 @@ entries :: (MonadIO m) => RefMap a -> m [a]
 entries (RefMap r) = do
   f <- readIORef r
   return $ M.elems $ entriesMap f
+
+reverseEntries :: (MonadIO m) => RefMap a -> m [a]
+reverseEntries (RefMap r) = do
+  f <- readIORef r
+  return $ map snd $ M.toDescList $ entriesMap f
 
 add :: (MonadIO m) => RefMap a -> a -> m EntryId
 add (RefMap r) handler =
