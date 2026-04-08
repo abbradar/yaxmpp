@@ -88,3 +88,13 @@ executables:
       - yaxmpp
       - yaml
       - haskeline
+
+tests:
+  yaxmpp-test:
+    main: Main.hs
+    source-dirs: test
+    dependencies:
+      - yaxmpp
+      - tasty
+      - tasty-quickcheck
+      - QuickCheck

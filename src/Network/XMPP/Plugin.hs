@@ -19,6 +19,7 @@ import qualified Control.HandlerList as HL
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Logger
+import Data.ClassBox (Unconstrained)
 import Data.IORef
 import Data.Proxy
 import Data.Registry (Registry)
@@ -33,7 +34,7 @@ type XMPPFeature = Text
 
 data XMPPPluginsRef m = XMPPPluginsRef
   { pluginsSession :: StanzaSession m
-  , pluginsHooksSet :: IORef Registry
+  , pluginsHooksSet :: IORef (Registry Unconstrained)
   , pluginsInHandlers' :: HandlerList m InStanza InResponse
   , pluginsIQHandlers' :: HandlerList m InRequestIQ RequestIQResponse
   }
@@ -57,7 +58,7 @@ newXmppPlugins pluginsSession = do
 insertPluginsHook :: forall a m. (MonadStream m, Typeable a) => a -> XMPPPluginsRef m -> m ()
 insertPluginsHook v (XMPPPluginsRef {..}) = do
   success <- liftIO $ atomicModifyIORef pluginsHooksSet $ \hooks ->
-    case Reg.tryInsertNew (Proxy :: Proxy a) v hooks of
+    case Reg.tryInsertNew v hooks of
       Nothing -> (hooks, False)
       Just hooks' -> (hooks', True)
   unless success $ error "insertPluginsHook: hook already exists"
