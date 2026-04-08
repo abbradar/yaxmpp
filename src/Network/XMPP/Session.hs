@@ -301,8 +301,14 @@ bindResource wantRes s
                     element (bindName "resource") [] [NodeContent wantRes]
                 ]
           ]
-      eresult <- streamRecv s
-      case fromElement eresult $/ XC.element (bindName "bind") &/ XC.element (bindName "jid") &/ content of
+      ebind <- streamRecv s
+      case fromElement ebind
+        $| XC.element (jcName "iq")
+        >=> attributeIs "id" "res-bind"
+        >=> attributeIs "type" "result"
+        &/ XC.element (bindName "bind")
+        &/ XC.element (bindName "jid")
+        &/ content of
         res : _ -> do
           $(logInfo) [i|Bound resource: #{res}|]
           return res
