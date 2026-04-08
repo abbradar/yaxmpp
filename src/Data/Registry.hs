@@ -1,6 +1,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE Strict #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 
 {- | A heterogeneous registry keyed by type, with a constraint on values.
 
@@ -9,6 +10,7 @@ UnsaturatedTypeFamilies once that extension is available.
 -}
 module Data.Registry (
   Registry,
+  RegistryConstraint,
   empty,
   null,
   insert,
@@ -28,7 +30,12 @@ import Data.Typeable (TypeRep, Typeable, typeOf, typeRep)
 import Unsafe.Coerce (unsafeCoerce)
 import Prelude hiding (lookup, null)
 
-newtype Registry (constr :: Type -> Constraint) = Registry (Map TypeRep (ClassBox constr))
+-- | The effective constraint on values in a Registry: both Typeable and the user-supplied constraint.
+class (Typeable a, constr a) => RegistryConstraint constr a
+
+instance (Typeable a, constr a) => RegistryConstraint constr a
+
+newtype Registry (constr :: Type -> Constraint) = Registry (Map TypeRep (ClassBox (RegistryConstraint constr)))
 
 empty :: Registry constr
 empty = Registry M.empty
@@ -59,5 +66,5 @@ lookup k (Registry m) = case M.lookup (typeRep k) m of
   Just (ClassBox v) -> Just (unsafeCoerce v)
   Nothing -> Nothing
 
-toList :: Registry constr -> [ClassBox constr]
+toList :: Registry constr -> [ClassBox (RegistryConstraint constr)]
 toList (Registry m) = M.elems m
