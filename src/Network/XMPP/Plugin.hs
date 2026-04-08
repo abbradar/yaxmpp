@@ -69,4 +69,11 @@ pluginsIQHandler (XMPPPluginsRef {..}) iq = do
     Just r -> return r
 
 pluginsSessionStep :: (MonadStream m) => XMPPPluginsRef m -> m ()
-pluginsSessionStep ref = stanzaSessionStep (pluginsSession ref) (pluginsInHandler ref) (pluginsIQHandler ref)
+pluginsSessionStep ref =
+  stanzaSessionStep
+    (pluginsSession ref)
+    SessionHooks
+      { hookInHandler = pluginsInHandler ref
+      , hookIQHandler = pluginsIQHandler ref
+      , hookOnReconnect = $(logInfo) "Session (re)connected"
+      }

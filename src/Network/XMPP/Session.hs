@@ -7,6 +7,7 @@ module Network.XMPP.Session (
   sessionAddress,
   sessionStreamFeatures,
   sessionSend,
+  SessionStep (..),
   sessionStep,
   SessionSettings (..),
   sessionCreate,
@@ -27,15 +28,15 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Typeable
 import Data.Word
-import Network.Connection
-import Text.Read
+import Text.Read (readMaybe)
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import TextShow
+import TextShow (showt)
 import UnliftIO.IORef
 import UnliftIO.MVar
 
+import Network.Connection
 import Network.XMPP.Address
 import Network.XMPP.Stream
 import Network.XMPP.Utils
@@ -52,13 +53,24 @@ data ResumptionException = ResumptionException ConnectionInterruptionException R
 
 instance Exception ResumptionException
 
-data ReadSessionData = RSData
-  { rsRecvN :: Word32
+-- | Stream management read-side data.
+data SMReadData = SMReadData
+  { smRecvN :: Word32
   }
 
-data WriteSessionData = WSData
-  { wsPending :: Seq (Word32, Element)
-  , wsPendingN :: Word32
+-- | Stream management write-side data.
+data SMWriteData = SMWriteData
+  { smPending :: Seq (Word32, Element)
+  , smPendingN :: Word32
+  }
+
+data ReadSessionData = ReadSessionData
+  { rsStreamManagement :: Maybe SMReadData
+  , rsReconnected :: Bool
+  }
+
+data WriteSessionData = WriteSessionData
+  { wsStreamManagement :: Maybe SMWriteData
   }
 
 data ReconnectInfo = ReconnectInfo
@@ -71,15 +83,12 @@ data Session m = Session
   , sessionStreamFeatures :: [Element]
   , sessionReconnect :: Maybe ReconnectInfo
   , sessionStream :: IORef (Stream m)
-  , sessionRLock :: MVar (Maybe ReadSessionData)
-  , sessionWLock :: MVar (Maybe WriteSessionData)
+  , sessionRLock :: MVar ReadSessionData
+  , sessionWLock :: MVar WriteSessionData
   }
 
 bindName :: Text -> Name
 bindName = nsName "urn:ietf:params:xml:ns:xmpp-bind"
-
-isBind :: Element -> Bool
-isBind e = elementName e == bindName "bind"
 
 smNS :: Text
 smName :: Text -> Name
@@ -88,8 +97,8 @@ smName :: Text -> Name
 isSM :: Element -> Bool
 isSM e = elementName e == smName "sm"
 
-applySentH :: Word32 -> WriteSessionData -> WriteSessionData
-applySentH h ws = ws {wsPending = go $ wsPending ws}
+applySentH :: Word32 -> SMWriteData -> SMWriteData
+applySentH h ws = ws {smPending = go $ smPending ws}
  where
   go s = case S.viewl s of
     EmptyL -> s
@@ -100,32 +109,35 @@ applySentH h ws = ws {wsPending = go $ wsPending ws}
 restartOrThrow ::
   (MonadStream m) =>
   ReconnectInfo ->
-  Maybe ReadSessionData ->
-  Maybe WriteSessionData ->
+  ReadSessionData ->
+  WriteSessionData ->
   ConnectionInterruptionException ->
   m (Stream m, WriteSessionData)
-restartOrThrow ri@(ReconnectInfo {..}) (Just rs) (Just ws) e = do
-  let throwE = throwM . ResumptionException e
-  $(logWarn) "Trying to restart the connection"
-  ns <- streamCreate reconnectSettings
-  case ns of
-    Left err -> throwE $ ClientErrorException err
-    Right s -> do
-      unless (any isSM $ streamFeatures s) $ void $ throwE StreamManagementVanished
-      streamSend s $ element (smName "resume") [("h", showt $ rsRecvN rs), ("previd", reconnectId)] []
-      eanswer <- streamRecv s
-      if
-        | elementName eanswer == smName "resumed"
-        , Just nsent <- readAttr "h" eanswer ->
-            do
-              let ws' = applySentH nsent ws
-              handle (restartOrThrow ri (Just rs) (Just ws')) $ do
-                forM_ (wsPending ws') $ \(_, stanza) -> streamSend s stanza
-                return (s, ws')
-        | otherwise -> throwE ResumptionFailed
-restartOrThrow _ _ _ e = throwM e
+restartOrThrow ri@(ReconnectInfo {..}) rs ws e =
+  case (rsStreamManagement rs, wsStreamManagement ws) of
+    (Just smr, Just smw) -> do
+      let throwE = throwM . ResumptionException e
+      $(logWarn) "Trying to restart the connection"
+      ns <- streamCreate reconnectSettings
+      case ns of
+        Left err -> throwE $ ClientErrorException err
+        Right s -> do
+          unless (any isSM $ streamFeatures s) $ void $ throwE StreamManagementVanished
+          streamSend s $ element (smName "resume") [("h", showt $ smRecvN smr), ("previd", reconnectId)] []
+          eanswer <- streamRecv s
+          if
+            | elementName eanswer == smName "resumed"
+            , Just nsent <- readAttr "h" eanswer ->
+                do
+                  let smw' = applySentH nsent smw
+                      ws' = ws {wsStreamManagement = Just smw'}
+                  handle (restartOrThrow ri rs ws') $ do
+                    forM_ (smPending smw') $ \(_, stanza) -> streamSend s stanza
+                    return (s, ws')
+            | otherwise -> throwE ResumptionFailed
+    _ -> throwM e
 
-tryRestart :: (MonadStream m) => Session m -> ReconnectInfo -> Maybe ReadSessionData -> Maybe WriteSessionData -> ConnectionInterruptionException -> m WriteSessionData
+tryRestart :: (MonadStream m) => Session m -> ReconnectInfo -> ReadSessionData -> WriteSessionData -> ConnectionInterruptionException -> m WriteSessionData
 tryRestart (Session {..}) ri rs ws e = do
   s <- readIORef sessionStream
   streamKill s
@@ -137,7 +149,7 @@ tryRestart (Session {..}) ri rs ws e = do
       writeIORef sessionStream s'
       return ws'
 
-modifyRead :: (MonadStream m) => Session m -> (Maybe ReadSessionData -> m (Maybe ReadSessionData, a)) -> m a
+modifyRead :: (MonadStream m) => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
 modifyRead sess@(Session {..}) comp = modifyMVar sessionRLock tryRun
  where
   tryRun rs = handle (tryHandle rs) $ comp rs
@@ -146,10 +158,10 @@ modifyRead sess@(Session {..}) comp = modifyMVar sessionRLock tryRun
     Just ri -> do
       modifyMVar_ sessionWLock $ \ws -> do
         ws' <- tryRestart sess ri rs ws e
-        return $ Just ws'
-      tryRun rs
+        return ws'
+      tryRun rs {rsReconnected = True}
 
-modifyWrite :: (MonadStream m) => Session m -> (Maybe WriteSessionData -> m (Maybe WriteSessionData, a)) -> m a
+modifyWrite :: (MonadStream m) => Session m -> (WriteSessionData -> m (WriteSessionData, a)) -> m a
 modifyWrite sess@(Session {..}) comp = modifyMVar sessionWLock tryRun
  where
   tryRun ws = handle (tryHandle ws) $ comp ws
@@ -158,21 +170,24 @@ modifyWrite sess@(Session {..}) comp = modifyMVar sessionWLock tryRun
     Just ri -> do
       ws' <- modifyMVar sessionRLock $ \rs -> do
         ws' <- tryRestart sess ri rs ws e
-        return (rs, Just ws')
+        return (rs {rsReconnected = True}, ws')
       tryRun ws'
 
 sessionSend :: (MonadStream m) => Session m -> Element -> m ()
 sessionSend sess e = modifyWrite sess $ \ws -> do
   s <- readIORef $ sessionStream sess
-  let ws' = case ws of
-        Just rws
+  let ws' = case wsStreamManagement ws of
+        Just smw
           | nameNamespace (elementName e) /= Just smNS ->
-              let nextp = wsPendingN rws + 1
-               in Just
-                    rws
-                      { wsPendingN = nextp
-                      , wsPending = wsPending rws |> (nextp, e)
-                      }
+              let nextp = smPendingN smw + 1
+               in ws
+                    { wsStreamManagement =
+                        Just
+                          smw
+                            { smPendingN = nextp
+                            , smPending = smPending smw |> (nextp, e)
+                            }
+                    }
         _ -> ws
   streamSend s e
   return (ws', ())
@@ -182,70 +197,45 @@ sessionThrow sess e = do
   s <- readIORef $ sessionStream sess
   streamThrow s e
 
-handleR :: (MonadStream m) => Maybe ReadSessionData -> Session m -> m ()
-handleR (Just rs) sess = do
-  s <- readIORef $ sessionStream sess
-  closed <- streamIsClosed s
-  unless closed $ sessionSend sess $ element (smName "a") [("h", showt $ rsRecvN rs)] []
-handleR _ _ = fail "handleQ: impossible"
+handleR :: (MonadStream m) => ReadSessionData -> Session m -> m ()
+handleR rs sess = case rsStreamManagement rs of
+  Just smr -> do
+    s <- readIORef $ sessionStream sess
+    closed <- streamIsClosed s
+    unless closed $ sessionSend sess $ element (smName "a") [("h", showt $ smRecvN smr)] []
+  Nothing -> fail "handleR: impossible"
 
 handleA :: (MonadStream m) => Session m -> Element -> m ()
 handleA sess e = modifyWrite sess $ \ws -> case readAttr "h" e of
-  Nothing -> sessionThrow sess $ unexpectedInput "handleR: invalid h"
-  Just nsent -> case ws of
-    Nothing -> sessionThrow sess $ unexpectedInput "handleR: stream management is not enabled"
-    Just wi -> return (Just $ applySentH nsent wi, ())
+  Nothing -> sessionThrow sess $ unexpectedInput "handleA: invalid h"
+  Just nsent -> case wsStreamManagement ws of
+    Nothing -> sessionThrow sess $ unexpectedInput "handleA: stream management is not enabled"
+    Just smw -> return (ws {wsStreamManagement = Just $ applySentH nsent smw}, ())
 
-sessionStep :: (MonadStream m) => Session m -> m (Maybe Element)
+-- | Result of a session step.
+data SessionStep
+  = -- | A stanza was received.
+    SessionStanza Element
+  | -- | The session was (re)connected since the last step.
+    SessionReconnected
+
+sessionStep :: (MonadStream m) => Session m -> m (Maybe SessionStep)
 sessionStep sess = do
-  (handler, res) <- modifyRead sess $ \ri -> do
-    s <- readIORef $ sessionStream sess
-    emsg <- streamRecv s
-    let riInc = fmap (\x -> x {rsRecvN = rsRecvN x + 1}) ri
-    if
-      | elementName emsg == smName "r" -> return (ri, (handleR ri sess, Nothing))
-      | elementName emsg == smName "a" -> return (ri, (handleA sess emsg, Nothing))
-      | otherwise -> return (riInc, (return (), Just emsg))
+  (handler, res) <- modifyRead sess $ \rs -> do
+    -- Check if we reconnected since last step
+    if rsReconnected rs
+      then return (rs {rsReconnected = False}, (return (), Just SessionReconnected))
+      else do
+        s <- readIORef $ sessionStream sess
+        emsg <- streamRecv s
+        if
+          | elementName emsg == smName "r" -> return (rs, (handleR rs sess, Nothing))
+          | elementName emsg == smName "a" -> return (rs, (handleA sess emsg, Nothing))
+          | otherwise -> do
+              let rs' = rs {rsStreamManagement = fmap (\smr -> smr {smRecvN = smRecvN smr + 1}) $ rsStreamManagement rs}
+              return (rs', (return (), Just $ SessionStanza emsg))
   handler
   return res
-
-data SessionSettings = SessionSettings
-  { ssConn :: ConnectionSettings
-  , ssResource :: Text
-  }
-
-bindResource :: (MonadStream m) => Text -> Stream m -> m Text
-bindResource wantRes s
-  | not $ any isBind $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
-  | otherwise = do
-      streamSend s $
-        element
-          (jcName "iq")
-          [("type", "set"), ("id", "res-bind")]
-          [ NodeElement $
-              element
-                (bindName "bind")
-                []
-                [ NodeElement $
-                    element
-                      (bindName "resource")
-                      []
-                      [ NodeContent wantRes
-                      ]
-                ]
-          ]
-      ebind <- streamRecv s
-      case fromElement ebind
-        $| XC.element (jcName "iq")
-        >=> attributeIs "id" "res-bind"
-        >=> attributeIs "type" "result"
-        &/ XC.element (bindName "bind")
-        &/ XC.element (bindName "jid")
-        &/ content of
-        res : _ -> do
-          $(logInfo) [i|Bound resource: #{res}|]
-          return res
-        _ -> streamThrow s $ unexpectedInput "bindResource: bind failure"
 
 parseLocation :: ConnectionSettings -> Text -> ConnectionSettings
 parseLocation csettings string =
@@ -287,6 +277,37 @@ initSM csettings s
                 else $(logWarn) "Stream management is advertised but cannot be enabled"
               return Nothing
 
+data SessionSettings = SessionSettings
+  { ssConn :: ConnectionSettings
+  , ssResource :: Text
+  }
+
+isBind :: Element -> Bool
+isBind e = elementName e == bindName "bind"
+
+bindResource :: (MonadStream m) => Text -> Stream m -> m Text
+bindResource wantRes s
+  | not $ any isBind $ streamFeatures s = streamThrow s $ unexpectedInput "bindResource: no resource bind"
+  | otherwise = do
+      streamSend s $
+        element
+          (jcName "iq")
+          [("type", "set"), ("id", "res-bind")]
+          [ NodeElement $
+              element
+                (bindName "bind")
+                []
+                [ NodeElement $
+                    element (bindName "resource") [] [NodeContent wantRes]
+                ]
+          ]
+      eresult <- streamRecv s
+      case fromElement eresult $/ XC.element (bindName "bind") &/ XC.element (bindName "jid") &/ content of
+        res : _ -> do
+          $(logInfo) [i|Bound resource: #{res}|]
+          return res
+        _ -> streamThrow s $ unexpectedInput "bindResource: bind failure"
+
 sessionCreate :: (MonadStream m) => SessionSettings -> m (Either ClientError (Session m))
 sessionCreate (SessionSettings {..}) = do
   ms <- streamCreate ssConn
@@ -300,19 +321,19 @@ sessionCreate (SessionSettings {..}) = do
       let sessionStreamFeatures = streamFeatures s
       msm <- initSM ssConn s
       sessionStream <- newIORef s
+      let smRead = SMReadData {smRecvN = 0} <$ msm
+          smWrite = SMWriteData {smPending = S.empty, smPendingN = 0} <$ msm
       sessionRLock <-
-        newMVar $
-          RSData
-            { rsRecvN = 0
+        newMVar
+          ReadSessionData
+            { rsStreamManagement = smRead
+            , rsReconnected = True -- Fire reconnect hooks on first step
             }
-            <$ msm
       sessionWLock <-
-        newMVar $
-          WSData
-            { wsPending = S.empty
-            , wsPendingN = 0
+        newMVar
+          WriteSessionData
+            { wsStreamManagement = smWrite
             }
-            <$ msm
       let sess =
             Session
               { sessionReconnect = join msm
