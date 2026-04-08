@@ -5,6 +5,7 @@ module Network.XMPP.Session (
   ResumptionException (..),
   Session,
   sessionAddress,
+  sessionStreamFeatures,
   sessionSend,
   sessionStep,
   SessionSettings (..),
@@ -67,6 +68,7 @@ data ReconnectInfo = ReconnectInfo
 
 data Session m = Session
   { sessionAddress :: FullJID
+  , sessionStreamFeatures :: [Element]
   , sessionReconnect :: Maybe ReconnectInfo
   , sessionStream :: IORef (Stream m)
   , sessionRLock :: MVar (Maybe ReadSessionData)
@@ -295,6 +297,7 @@ sessionCreate (SessionSettings {..}) = do
       sessionAddress <- case toRight (xmppAddress address) >>= fullJidGet of
         Just r -> return r
         _ -> fail "sessionCreate: can't normalize address"
+      let sessionStreamFeatures = streamFeatures s
       msm <- initSM ssConn s
       sessionStream <- newIORef s
       sessionRLock <-

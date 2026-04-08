@@ -186,9 +186,8 @@ parseInitial e = do
 
 sendFirstRequest :: (MonadStream m) => StanzaSession m -> Maybe Roster -> m Roster
 sendFirstRequest session mold = do
-  stream <- sessionGetStream $ ssSession session
   let ver =
-        if any isRosterVer $ streamFeatures stream
+        if any isRosterVer $ sessionStreamFeatures $ ssSession session
           then Just $ fromMaybe "" $ mold >>= rosterVersion
           else Nothing
       req = serverRequest IQGet [element (rosterName "query") (maybeToList $ fmap ("ver",) ver) []]

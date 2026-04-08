@@ -27,6 +27,7 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Async
 import UnliftIO.Concurrent
 
+import qualified Data.Registry.Mutable as RegRef
 import Network.SASL
 import Network.XMPP.Address
 import Network.XMPP.Connection
@@ -48,6 +49,7 @@ import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
 import Network.XMPP.XEP.Version
+import Network.XMPP.XML (showElement)
 
 newtype ClientPlugin m = ClientPlugin {clientWriteMessage :: String -> m ()}
 
@@ -181,6 +183,12 @@ main = do
         chatStatePlugin pluginsRef
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
+
+        -- Print server features
+        let rawFeatures = sessionStreamFeatures $ ssSession $ pluginsSession pluginsRef
+        $(logInfo) [i|Raw server features: #{map showElement rawFeatures}|]
+        serverFeats <- RegRef.read $ pluginsServerFeatures pluginsRef
+        $(logInfo) [i|Parsed server features: #{serverFeats}|]
 
         let saveRoster = do
               roster <- tryGetRoster pluginsRef

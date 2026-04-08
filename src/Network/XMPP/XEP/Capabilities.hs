@@ -163,8 +163,7 @@ capsPlugin pluginsRef = do
   codecs <- presenceCodecs pluginsRef
   Codec.pushNewOrFailM CapsCodec codecs
   -- Parse caps from stream:features
-  stream <- sessionGetStream $ ssSession $ pluginsSession pluginsRef
-  let features = streamFeatures stream
+  let features = sessionStreamFeatures $ ssSession $ pluginsSession pluginsRef
       (mcaps1, mcaps2, _) = extractCaps features
   let sf = pluginsServerFeatures pluginsRef
   case mcaps1 of
