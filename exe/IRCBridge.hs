@@ -147,11 +147,11 @@ main = runStderrLoggingT $ do
   bracket initMain (sessionClose . ssSession) $ \sess ->
     bracket (forkIO $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
-      pluginsRef <- newXmppPlugins sess
+      pluginsRef <- newXmppPlugins sess Nothing
       presencePlugin pluginsRef
       capsPlugin pluginsRef
       discoPlugin pluginsRef
-      rosterPlugin pluginsRef Nothing
+      rosterPlugin pluginsRef
       myPresencePlugin pluginsRef
       imPlugin pluginsRef
       delayedDeliveryPlugin pluginsRef

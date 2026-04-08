@@ -167,12 +167,12 @@ main = do
               cancel periodicId
               sessionClose $ ssSession sess
 
-        oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
-        pluginsRef <- newXmppPlugins sess
+        oldCache <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
+        pluginsRef <- newXmppPlugins sess oldCache
         presencePlugin pluginsRef
         capsPlugin pluginsRef
         discoPlugin pluginsRef
-        rosterPlugin pluginsRef oldRoster
+        rosterPlugin pluginsRef
         subscriptionPlugin pluginsRef
         rpresencePlugin pluginsRef
         myPresencePlugin pluginsRef
@@ -187,13 +187,11 @@ main = do
         serverFeats <- RegRef.read $ pluginsServerFeatures pluginsRef
         writeMessage [i|Parsed server features: #{serverFeats}|]
 
-        let saveRoster = do
-              roster <- tryGetRoster pluginsRef
-              case roster of
-                Just r | Just _ <- rosterVersion r -> liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode r
-                _ -> return ()
+        let saveCache = do
+              cache <- getCache pluginsRef
+              liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode cache
 
-        flip finally saveRoster $ do
+        flip finally saveCache $ do
           let clientPlugin = ClientPlugin writeMessage
 
           rSlot <- rosterSlot pluginsRef

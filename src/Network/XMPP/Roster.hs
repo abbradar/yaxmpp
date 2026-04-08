@@ -140,6 +140,14 @@ data RosterState m = RosterState
   , rosterSession :: StanzaSession m
   }
 
+instance (MonadStream m) => XMPPPersistentCache m (RosterState m) where
+  cacheKey _ = "roster"
+  cacheGet RosterState {..} = do
+    r <- readIORef rosterRef
+    case toRight r of
+      Just roster | Just _ <- rosterVersion roster -> return $ toJSON roster
+      _ -> return Null
+
 insertRoster :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
 insertRoster pluginsRef jid name groups = do
   void $ getRoster pluginsRef
@@ -286,8 +294,9 @@ tryGetRoster pluginsRef = do
 rosterSlot :: (MonadStream m) => XMPPPluginsRef m -> m (RosterSlot m)
 rosterSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
-rosterPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> Maybe Roster -> m ()
-rosterPlugin pluginsRef old = do
+rosterPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
+rosterPlugin pluginsRef = do
+  let old = pluginsOldCacheFor pluginsRef (Proxy :: Proxy (RosterState m)) >>= JSON.parseMaybe parseJSON
   firstRoster <- newEmptyMVar
   rosterRef <- newIORef (Left firstRoster)
   let rosterSession = pluginsSession pluginsRef
@@ -301,5 +310,6 @@ rosterPlugin pluginsRef old = do
   let plugin :: RosterPlugin m = RosterPlugin {rosterPluginState = state, ..}
   RegRef.insertNewOrFailM rosterPluginSlot $ pluginsHooksSet pluginsRef
   RegRef.insertNewOrFailM state $ pluginsHooksSet pluginsRef
+  registerCacheGetter pluginsRef state
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM plugin iqHandlers
