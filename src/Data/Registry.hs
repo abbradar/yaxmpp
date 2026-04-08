@@ -40,17 +40,14 @@ newtype Registry (constr :: Type -> Constraint) = Registry (Map TypeRep (ClassBo
 instance (forall a. (constr a) => Show a) => Show (Registry constr) where
   showsPrec d (Registry m) =
     showParen (d > 10) $
-      showString "Registry " . showRegBoxes (M.elems m)
-  show (Registry m) = "Registry " ++ showRegBoxes (M.elems m) ""
+      showString "Registry " . showBoxes (M.elems m)
+  show (Registry m) = "Registry " ++ showBoxes (M.elems m) ""
   showList xs = showString "[" . go xs . showString "]"
    where
     go :: [Registry constr] -> ShowS
     go [] = id
-    go [Registry m] = showString "Registry " . showRegBoxes (M.elems m)
-    go (Registry m : rest) = showString "Registry " . showRegBoxes (M.elems m) . showString "," . go rest
-
-showRegBoxes :: forall constr. (forall a. (constr a) => Show a) => [ClassBox (RegistryConstraint constr)] -> ShowS
-showRegBoxes xs = showBoxes xs
+    go [Registry m] = showString "Registry " . showBoxes (M.elems m)
+    go (Registry m : rest) = showString "Registry " . showBoxes (M.elems m) . showString "," . go rest
 
 empty :: Registry constr
 empty = Registry M.empty
