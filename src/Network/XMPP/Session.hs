@@ -15,7 +15,6 @@ module Network.XMPP.Session (
   sessionKill,
   sessionIsClosed,
   sessionPeriodic,
-  sessionGetStream,
 ) where
 
 import Control.Monad
@@ -78,12 +77,13 @@ data ReconnectInfo = ReconnectInfo
   , reconnectSettings :: ConnectionSettings
   }
 
+type StreamGen = Int
+
 data Session m = Session
   { sessionAddress :: FullJID
   , sessionStreamFeatures :: [Element]
   , sessionReconnect :: Maybe ReconnectInfo
-  , sessionStream :: IORef (Stream m)
-  , sessionStreamGen :: IORef Int
+  , sessionStream :: IORef (Stream m, StreamGen)
   , sessionRLock :: MVar ReadSessionData
   , sessionWLock :: MVar WriteSessionData
   }
@@ -140,15 +140,14 @@ restartOrThrow ri@(ReconnectInfo {..}) rs ws e =
 
 tryRestart :: (MonadStream m) => Session m -> ReconnectInfo -> ReadSessionData -> WriteSessionData -> ConnectionInterruptionException -> m WriteSessionData
 tryRestart (Session {..}) ri rs ws e = do
-  s <- readIORef sessionStream
+  (s, gen) <- readIORef sessionStream
   streamKill s
   closed <- streamIsClosed s
   if closed
     then throwM e
     else do
       (s', ws') <- restartOrThrow ri rs ws e
-      writeIORef sessionStream s'
-      atomicModifyIORef' sessionStreamGen $ \gen -> (gen + 1, ())
+      writeIORef sessionStream (s', gen + 1)
       return ws'
 
 modifyRead :: forall m a. (MonadStream m) => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
@@ -173,10 +172,10 @@ modifyWrite sess@(Session {..}) comp = do
     (ws', a) <- comp ws
     return (ws', Right a)
 
-  saveException :: WriteSessionData -> ConnectionInterruptionException -> m (WriteSessionData, Either (ConnectionInterruptionException, Int) a)
+  saveException :: WriteSessionData -> ConnectionInterruptionException -> m (WriteSessionData, Either (ConnectionInterruptionException, StreamGen) a)
   saveException ws e = do
     -- Remember the stream generation before releasing the write lock.
-    gen <- readIORef sessionStreamGen
+    (_, gen) <- readIORef sessionStream
     return (ws, Left (e, gen))
 
   handleResult (Right a) = return a
@@ -190,7 +189,7 @@ modifyWrite sess@(Session {..}) comp = do
 
           let continueReconnect ws = do
                 -- Check if another thread already reconnected while we were waiting.
-                currentGen <- readIORef sessionStreamGen
+                (_, currentGen) <- readIORef sessionStream
                 if currentGen /= gen
                   then return ws
                   else tryRestart sess ri rs ws e
@@ -203,7 +202,7 @@ modifyWrite sess@(Session {..}) comp = do
 
 sessionSend :: (MonadStream m) => Session m -> Element -> m ()
 sessionSend sess e = modifyWrite sess $ \ws -> do
-  s <- readIORef $ sessionStream sess
+  (s, _) <- readIORef $ sessionStream sess
   let ws' = case wsStreamManagement ws of
         Just smw
           | nameNamespace (elementName e) /= Just smNS ->
@@ -222,13 +221,13 @@ sessionSend sess e = modifyWrite sess $ \ws -> do
 
 sessionThrow :: (MonadStream m) => Session m -> StreamError -> m a
 sessionThrow sess e = do
-  s <- readIORef $ sessionStream sess
+  (s, _) <- readIORef $ sessionStream sess
   streamThrow s e
 
 handleR :: (MonadStream m) => ReadSessionData -> Session m -> m ()
 handleR rs sess = case rsStreamManagement rs of
   Just smr -> do
-    s <- readIORef $ sessionStream sess
+    (s, _) <- readIORef $ sessionStream sess
     closed <- streamIsClosed s
     unless closed $ sessionSend sess $ element (smName "a") [("h", showt $ smRecvN smr)] []
   Nothing -> fail "handleR: impossible"
@@ -254,7 +253,7 @@ sessionStep sess = do
     if rsReconnected rs
       then return (rs {rsReconnected = False}, (return (), Just SessionReconnected))
       else do
-        s <- readIORef $ sessionStream sess
+        (s, _) <- readIORef $ sessionStream sess
         emsg <- streamRecv s
         if
           | elementName emsg == smName "r" -> return (rs, (handleR rs sess, Nothing))
@@ -354,8 +353,7 @@ sessionCreate (SessionSettings {..}) = do
         _ -> fail "sessionCreate: can't normalize address"
       let sessionStreamFeatures = streamFeatures s
       msm <- initSM ssConn s
-      sessionStream <- newIORef s
-      sessionStreamGen <- newIORef 0
+      sessionStream <- newIORef (s, 0 :: StreamGen)
       let smRead = SMReadData {smRecvN = 0} <$ msm
           smWrite = SMWriteData {smPending = S.empty, smPendingN = 0} <$ msm
       sessionRLock <-
@@ -378,25 +376,22 @@ sessionCreate (SessionSettings {..}) = do
 
 sessionClose :: (MonadStream m) => Session m -> m ()
 sessionClose sess = modifyMVar_ (sessionWLock sess) $ \ws -> do
-  s <- readIORef $ sessionStream sess
+  (s, _) <- readIORef $ sessionStream sess
   streamClose s
   return ws
 
 sessionKill :: (MonadStream m) => Session m -> m ()
 sessionKill sess = modifyMVar_ (sessionRLock sess) $ \rs -> modifyMVar (sessionWLock sess) $ \ws -> do
-  s <- readIORef $ sessionStream sess
+  (s, _) <- readIORef $ sessionStream sess
   streamKill s
   return (ws, rs)
 
 sessionIsClosed :: (MonadStream m) => Session m -> m Bool
 sessionIsClosed sess = modifyMVar (sessionWLock sess) $ \ws -> do
-  s <- readIORef $ sessionStream sess
+  (s, _) <- readIORef $ sessionStream sess
   closed <- streamIsClosed s
   return (ws, closed)
 
 sessionPeriodic :: (MonadStream m) => Session m -> m ()
 sessionPeriodic sess@(Session {sessionReconnect = Just _}) = sessionSend sess $ closedElement $ smName "r"
 sessionPeriodic _ = return ()
-
-sessionGetStream :: (MonadStream m) => Session m -> m (Stream m)
-sessionGetStream (Session {..}) = readIORef sessionStream
