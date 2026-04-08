@@ -16,6 +16,7 @@ import qualified Control.Slot as Slot
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Proxy
+import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
@@ -102,11 +103,11 @@ instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m)
 
 getRosterPresence :: forall m. (MonadStream m) => XMPPPluginsRef m -> m RosterPresenceMap
 getRosterPresence pluginsRef = do
-  RosterPresenceState {..} <- getPluginsHook (Proxy :: Proxy (RosterPresenceState m)) pluginsRef
+  RosterPresenceState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (RosterPresenceState m)) $ pluginsHooksSet pluginsRef
   readIORef rpresenceRef
 
 rpresenceSlot :: (MonadStream m) => XMPPPluginsRef m -> m (RosterPresenceSlot m)
-rpresenceSlot = getPluginsHook Proxy
+rpresenceSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 rpresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 rpresencePlugin pluginsRef = do
@@ -114,7 +115,7 @@ rpresencePlugin pluginsRef = do
   let rpresencePluginState = RosterPresenceState {rpresencePluginsRef = pluginsRef, ..}
   rpresencePluginSlot <- Slot.new
   let plugin :: RosterPresencePlugin m = RosterPresencePlugin {..}
-  insertPluginsHook rpresencePluginState pluginsRef
-  insertPluginsHook rpresencePluginSlot pluginsRef
+  RegRef.insertNewOrFailM rpresencePluginState $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM rpresencePluginSlot $ pluginsHooksSet pluginsRef
   pHandlers <- presenceHandlers pluginsRef
   HL.pushNewOrFailM plugin pHandlers

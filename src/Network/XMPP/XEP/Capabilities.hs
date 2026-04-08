@@ -28,8 +28,11 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
 import qualified Data.Registry as Reg
+import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
+import Network.XMPP.Session
+import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XML
 
@@ -159,3 +162,14 @@ capsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 capsPlugin pluginsRef = do
   codecs <- presenceCodecs pluginsRef
   Codec.pushNewOrFailM CapsCodec codecs
+  -- Parse caps from stream:features
+  stream <- sessionGetStream $ ssSession $ pluginsSession pluginsRef
+  let features = streamFeatures stream
+      (mcaps1, mcaps2, _) = extractCaps features
+  let sf = pluginsServerFeatures pluginsRef
+  case mcaps1 of
+    Just caps1 -> RegRef.insert caps1 sf
+    Nothing -> return ()
+  case mcaps2 of
+    Just caps2 -> RegRef.insert caps2 sf
+    Nothing -> return ()

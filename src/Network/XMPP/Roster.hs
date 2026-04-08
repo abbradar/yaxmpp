@@ -44,6 +44,7 @@ import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Injective
+import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Session
@@ -272,7 +273,7 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (RosterPlugi
 
 getRoster :: forall m. (MonadStream m) => XMPPPluginsRef m -> m Roster
 getRoster pluginsRef = do
-  RosterState {..} <- getPluginsHook (Proxy :: Proxy (RosterState m)) pluginsRef
+  RosterState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (RosterState m)) $ pluginsHooksSet pluginsRef
   r <- readIORef rosterRef
   case r of
     Left future -> readMVar future
@@ -280,11 +281,11 @@ getRoster pluginsRef = do
 
 tryGetRoster :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (Maybe Roster)
 tryGetRoster pluginsRef = do
-  RosterState {..} <- getPluginsHook (Proxy :: Proxy (RosterState m)) pluginsRef
+  RosterState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (RosterState m)) $ pluginsHooksSet pluginsRef
   toRight <$> readIORef rosterRef
 
 rosterSlot :: (MonadStream m) => XMPPPluginsRef m -> m (RosterSlot m)
-rosterSlot = getPluginsHook Proxy
+rosterSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 rosterPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> Maybe Roster -> m ()
 rosterPlugin pluginsRef old = do
@@ -299,7 +300,7 @@ rosterPlugin pluginsRef old = do
   void $ forkIO $ tryGet `catch` \(e :: SomeException) -> putMVar firstRoster (throw e)
   rosterPluginSlot <- Slot.new
   let plugin :: RosterPlugin m = RosterPlugin {rosterPluginState = state, ..}
-  insertPluginsHook rosterPluginSlot pluginsRef
-  insertPluginsHook state pluginsRef
+  RegRef.insertNewOrFailM rosterPluginSlot $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM state $ pluginsHooksSet pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM plugin iqHandlers

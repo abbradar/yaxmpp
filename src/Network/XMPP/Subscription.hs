@@ -18,6 +18,7 @@ import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Slot (Slot, SlotSignal (..))
 import qualified Control.Slot as Slot
+import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Roster
@@ -82,7 +83,7 @@ instance (MonadStream m) => SlotSignal m (RosterEntries, RosterEvent) (Subscript
 
 requestSubscriptionTo :: (MonadStream m) => XMPPPluginsRef m -> BareJID -> Bool -> m ()
 requestSubscriptionTo pluginsRef addr status = do
-  SubscriptionState {..} <- getPluginsHook Proxy pluginsRef
+  SubscriptionState {..} <- RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
   atomicModifyIORef' subscriptionPending $ \pending -> (S.insert addr pending, ())
   void $
     stanzaSend
@@ -95,7 +96,7 @@ requestSubscriptionTo pluginsRef addr status = do
 
 updateSubscriptionFrom :: (MonadStream m) => XMPPPluginsRef m -> BareJID -> Bool -> m ()
 updateSubscriptionFrom pluginsRef addr status = do
-  SubscriptionState {..} <- getPluginsHook Proxy pluginsRef
+  SubscriptionState {..} <- RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
   void $
     stanzaSend
       subscriptionSession
@@ -107,7 +108,7 @@ updateSubscriptionFrom pluginsRef addr status = do
 
 -- | Get the subscription slot from the plugins hook set.
 subscriptionSlot :: (MonadStream m) => XMPPPluginsRef m -> m (SubscriptionSlot m)
-subscriptionSlot = getPluginsHook Proxy
+subscriptionSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 subscriptionPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 subscriptionPlugin pluginsRef = do
@@ -115,8 +116,8 @@ subscriptionPlugin pluginsRef = do
   subscriptionPending <- newIORef S.empty
   let subscriptionPluginState = SubscriptionState {subscriptionSession = pluginsSession pluginsRef, ..}
       plugin :: SubscriptionPlugin m = SubscriptionPlugin {..}
-  insertPluginsHook subscriptionPluginSlot pluginsRef
-  insertPluginsHook subscriptionPluginState pluginsRef
+  RegRef.insertNewOrFailM subscriptionPluginSlot $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM subscriptionPluginState $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
   rSlot <- rosterSlot pluginsRef

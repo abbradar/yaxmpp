@@ -20,6 +20,7 @@ import qualified Control.Slot as Slot
 import Data.Injective
 import Data.Maybe
 import Data.Proxy
+import qualified Data.Registry.Mutable as RegRef
 import Data.Text (Text)
 import Network.XMPP.Address
 import Network.XMPP.Message
@@ -82,7 +83,7 @@ hasBody :: [Element] -> Bool
 hasBody = any (\e -> elementName e == jcName "body")
 
 chatStateSlot :: (MonadStream m) => XMPPPluginsRef m -> m (ChatStateSlot m)
-chatStateSlot = getPluginsHook Proxy
+chatStateSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 chatStateSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> MessageType -> ChatState -> m ()
 chatStateSend pluginsRef to msgType cs =
@@ -99,7 +100,7 @@ chatStatePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 chatStatePlugin pluginsRef = do
   chatStatePluginSlot <- Slot.new
   let plugin :: ChatStatePlugin m = ChatStatePlugin {..}
-  insertPluginsHook chatStatePluginSlot pluginsRef
+  RegRef.insertNewOrFailM chatStatePluginSlot $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
   imS <- imSlot pluginsRef

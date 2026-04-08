@@ -30,6 +30,7 @@ import Data.Maybe
 import Data.Proxy
 import Data.Registry (Registry)
 import qualified Data.Registry as Reg
+import qualified Data.Registry.Mutable as RegRef
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -107,7 +108,7 @@ presenceOp (Just PresenceUnavailable) = Just PresenceUnset
 presenceOp _ = Nothing
 
 presenceHandlers :: (MonadStream m) => XMPPPluginsRef m -> m (HandlerList m PresenceUpdate ())
-presenceHandlers = getPluginsHook Proxy
+presenceHandlers = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 emitPresence :: (MonadStream m) => HandlerList m PresenceUpdate () -> PresenceUpdate -> m ()
 emitPresence handlers upd = do
@@ -170,15 +171,15 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
 
 -- | Get the presence codec list from the plugins hook set.
 presenceCodecs :: (MonadStream m) => XMPPPluginsRef m -> m (PresenceCodecList m)
-presenceCodecs = getPluginsHook Proxy
+presenceCodecs = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 presencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 presencePlugin pluginsRef = do
   presencePluginHandlers <- HL.new
   presencePluginCodecs <- Codec.new
   let plugin :: PresencePlugin m = PresencePlugin {..}
-  insertPluginsHook presencePluginHandlers pluginsRef
-  insertPluginsHook presencePluginCodecs pluginsRef
+  RegRef.insertNewOrFailM presencePluginHandlers $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM presencePluginCodecs $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
 

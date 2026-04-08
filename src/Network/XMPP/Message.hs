@@ -23,6 +23,7 @@ import Data.Maybe
 import Data.Proxy
 import Data.Registry (Registry)
 import qualified Data.Registry as Reg
+import qualified Data.Registry.Mutable as RegRef
 import Data.Text (Text)
 import Network.XMPP.Address
 import Network.XMPP.Language
@@ -104,11 +105,11 @@ instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
 
 -- | Get the IM message slot from the plugins hook set.
 imSlot :: (MonadStream m) => XMPPPluginsRef m -> m (IMSlot m)
-imSlot = getPluginsHook Proxy
+imSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 -- | Get the IM codec list from the plugins hook set.
 imCodecs :: (MonadStream m) => XMPPPluginsRef m -> m (IMCodecList m)
-imCodecs = getPluginsHook Proxy
+imCodecs = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 imSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> IMMessage -> m ()
 imSend pluginsRef to msg = do
@@ -132,7 +133,7 @@ imPlugin pluginsRef = do
   imPluginSlot <- Slot.new
   imPluginCodecs <- Codec.new
   let plugin :: IMPlugin m = IMPlugin {..}
-  insertPluginsHook imPluginSlot pluginsRef
-  insertPluginsHook imPluginCodecs pluginsRef
+  RegRef.insertNewOrFailM imPluginSlot $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM imPluginCodecs $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers

@@ -51,6 +51,7 @@ import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Injective
 import qualified Data.RefMap as RefMap
+import qualified Data.Registry.Mutable as RegRef
 import Data.Time.XMPP
 import Network.XMPP.Address
 import Network.XMPP.Language
@@ -213,7 +214,7 @@ defaultMUCJoinSettings =
 
 mucJoin :: forall m. (MonadStream m) => XMPPPluginsRef m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m (m MUCJoinResult)
 mucJoin pluginsRef addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler = do
-  MUCState {..} <- getPluginsHook (Proxy :: Proxy (MUCState m)) pluginsRef
+  MUCState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (MUCState m)) $ pluginsHooksSet pluginsRef
   let session = pluginsSession pluginsRef
   pmucPending <- newEmptyMVar
   let initialRoom =
@@ -270,7 +271,7 @@ instance Exception MUCAlreadyLeftError
 
 mucSendPresence :: forall m. (MonadStream m) => XMPPPluginsRef m -> BareJID -> Maybe Presence -> m ()
 mucSendPresence pluginsRef addr pres = do
-  MUCState {..} <- getPluginsHook (Proxy :: Proxy (MUCState m)) pluginsRef
+  MUCState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (MUCState m)) $ pluginsHooksSet pluginsRef
   let session = pluginsSession pluginsRef
   rooms <- readIORef mucRooms
   case M.lookup addr rooms of
@@ -401,7 +402,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
       NotMUCEvent -> return Nothing
 
 mucSlot :: (MonadStream m) => XMPPPluginsRef m -> m (MUCSlot m)
-mucSlot = getPluginsHook Proxy
+mucSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 mucPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mucPlugin pluginsRef = do
@@ -409,8 +410,8 @@ mucPlugin pluginsRef = do
   let mucPluginState = MUCState {..}
   mucPluginSlot <- Slot.new
   let plugin :: MUCPlugin m = MUCPlugin {..}
-  insertPluginsHook mucPluginState pluginsRef
-  insertPluginsHook mucPluginSlot pluginsRef
+  RegRef.insertNewOrFailM mucPluginState $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM mucPluginSlot $ pluginsHooksSet pluginsRef
   let discoInfo = emptyDiscoInfo {discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton mucNS}}
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers

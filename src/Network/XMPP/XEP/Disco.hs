@@ -37,6 +37,7 @@ import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Data.RefMap (RefMap)
 import qualified Data.RefMap as RefMap
+import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Plugin
@@ -254,12 +255,12 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin
   tryHandle _ _ = return Nothing
 
 discoInfos :: (MonadStream m) => XMPPPluginsRef m -> m (RefMap (m DiscoInfo))
-discoInfos = getPluginsHook Proxy
+discoInfos = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 discoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 discoPlugin pluginsRef = do
   discoPluginInfos <- RefMap.new
   let plugin :: DiscoPlugin m = DiscoPlugin {..}
-  insertPluginsHook discoPluginInfos pluginsRef
+  RegRef.insertNewOrFailM discoPluginInfos $ pluginsHooksSet pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM plugin iqHandlers
