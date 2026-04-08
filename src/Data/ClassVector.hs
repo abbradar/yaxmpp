@@ -1,7 +1,7 @@
 {-# LANGUAGE Strict #-}
 
 module Data.ClassVector (
-  ClassBox (..),
+  module Data.ClassBox,
   ClassVector,
   empty,
   toAscList,
@@ -13,12 +13,11 @@ module Data.ClassVector (
 )
 where
 
+import Data.ClassBox
 import Data.Kind
 import Data.Typeable
 import Data.Vector.Strict (Vector)
 import qualified Data.Vector.Strict as V
-
-data ClassBox (constr :: Type -> Constraint) = forall a. (constr a) => ClassBox {toClass :: a}
 
 newtype ClassVector (constr :: Type -> Constraint) = ClassVector (Vector (TypeRep, ClassBox constr))
 
