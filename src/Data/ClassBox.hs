@@ -5,7 +5,7 @@
 module Data.ClassBox (
   Unconstrained,
   ClassBox (..),
-  showBoxes,
+  showClassBoxList,
 ) where
 
 import Data.Kind
@@ -23,11 +23,11 @@ data ClassBox (constr :: Type -> Constraint) = forall a. (constr a) => ClassBox 
 instance (forall a. (constr a) => Show a) => Show (ClassBox constr) where
   showsPrec d (ClassBox a) = showsPrec d a
   show (ClassBox a) = show a
-  showList = showBoxes
+  showList = showClassBoxList
 
 -- | Show a list of ClassBoxes as a comma-separated list in brackets.
-showBoxes :: forall constr. (forall a. (constr a) => Show a) => [ClassBox constr] -> ShowS
-showBoxes xs = showString "[" . go xs . showString "]"
+showClassBoxList :: forall constr. (forall a. (constr a) => Show a) => [ClassBox constr] -> ShowS
+showClassBoxList xs = showString "[" . go xs . showString "]"
  where
   go :: [ClassBox constr] -> ShowS
   go [] = id

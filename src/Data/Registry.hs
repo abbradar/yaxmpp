@@ -21,7 +21,7 @@ module Data.Registry (
   toList,
 ) where
 
-import Data.ClassBox (ClassBox (..), showBoxes)
+import Data.ClassBox (ClassBox (..), showClassBoxList)
 import Data.Kind (Constraint, Type)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -40,14 +40,14 @@ newtype Registry (constr :: Type -> Constraint) = Registry (Map TypeRep (ClassBo
 instance (forall a. (constr a) => Show a) => Show (Registry constr) where
   showsPrec d (Registry m) =
     showParen (d > 10) $
-      showString "Registry " . showBoxes (M.elems m)
-  show (Registry m) = "Registry " ++ showBoxes (M.elems m) ""
+      showString "Registry " . showClassBoxList (M.elems m)
+  show (Registry m) = "Registry " ++ showClassBoxList (M.elems m) ""
   showList xs = showString "[" . go xs . showString "]"
    where
     go :: [Registry constr] -> ShowS
     go [] = id
-    go [Registry m] = showString "Registry " . showBoxes (M.elems m)
-    go (Registry m : rest) = showString "Registry " . showBoxes (M.elems m) . showString "," . go rest
+    go [Registry m] = showString "Registry " . showClassBoxList (M.elems m)
+    go (Registry m : rest) = showString "Registry " . showClassBoxList (M.elems m) . showString "," . go rest
 
 empty :: Registry constr
 empty = Registry M.empty

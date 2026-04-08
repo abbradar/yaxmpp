@@ -14,7 +14,7 @@ module Data.GenericRegistry (
   toList,
 ) where
 
-import Data.ClassBox (ClassBox (..), showBoxes)
+import Data.ClassBox (ClassBox (..), showClassBoxList)
 import Data.Kind (Constraint, Type)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -28,14 +28,14 @@ newtype GenericRegistry (f :: Type -> Type) (constr :: Type -> Constraint) = Gen
 instance (forall a. (constr a) => Show a) => Show (GenericRegistry f constr) where
   showsPrec d (GenericRegistry m) =
     showParen (d > 10) $
-      showString "GenericRegistry " . showBoxes (M.elems m)
-  show (GenericRegistry m) = "GenericRegistry " ++ showBoxes (M.elems m) ""
+      showString "GenericRegistry " . showClassBoxList (M.elems m)
+  show (GenericRegistry m) = "GenericRegistry " ++ showClassBoxList (M.elems m) ""
   showList xs = showString "[" . go xs . showString "]"
    where
     go :: [GenericRegistry f constr] -> ShowS
     go [] = id
-    go [GenericRegistry m] = showString "GenericRegistry " . showBoxes (M.elems m)
-    go (GenericRegistry m : rest) = showString "GenericRegistry " . showBoxes (M.elems m) . showString "," . go rest
+    go [GenericRegistry m] = showString "GenericRegistry " . showClassBoxList (M.elems m)
+    go (GenericRegistry m : rest) = showString "GenericRegistry " . showClassBoxList (M.elems m) . showString "," . go rest
 
 empty :: GenericRegistry f constr
 empty = GenericRegistry M.empty
