@@ -32,7 +32,7 @@ data RosterPresenceEvent
   | UpdateResource FullJID Presence
   | RemoveResource FullJID [Element]
   | LastResource FullJID [Element]
-  deriving (Show, Eq)
+  deriving (Show)
 
 type RosterPresenceSlot m = Slot m RosterPresenceEvent
 

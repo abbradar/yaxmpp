@@ -74,7 +74,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (ChatStatePlugin m) wh
 -- Extract chat states from body-ful messages (XEP-0085 §5.3).
 instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (ChatStatePlugin m) where
   emitSignal (ChatStatePlugin {..}) (from, msg) =
-    case parseChatState (imExtended msg) of
+    case parseChatState (imRaw msg) of
       Just cs -> Slot.call chatStatePluginSlot (from, imType msg, cs)
       Nothing -> return ()
 

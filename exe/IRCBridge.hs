@@ -30,6 +30,7 @@ import qualified Network.IRC as IRC
 import System.Environment
 import UnliftIO.Concurrent
 
+import qualified Data.Registry as Reg
 import Network.SASL
 import Network.XMPP.Address
 import Network.XMPP.Connection
@@ -227,7 +228,8 @@ main = runStderrLoggingT $ do
                               , imSubject = Nothing
                               , imBody = localizedFromText msgText
                               , imThread = Nothing
-                              , imExtended = []
+                              , imRaw = []
+                              , imExtended = Reg.empty
                               }
                       imSend pluginsRef (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
                   | otherwise -> $(logWarn) [i|Unknown IRC command: #{req}|]

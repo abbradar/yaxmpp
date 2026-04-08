@@ -5,11 +5,14 @@ module Network.XMPP.Message (
   IMMessage (..),
   plainIMMessage,
   imSlot,
+  imCodecs,
   imSend,
   imPlugin,
 )
 where
 
+import Control.Codec (CodecList, decodeAll, encodeAll)
+import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Monad
@@ -18,6 +21,8 @@ import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Maybe
 import Data.Proxy
+import Data.Registry (Registry)
+import qualified Data.Registry as Reg
 import Data.Text (Text)
 import Network.XMPP.Address
 import Network.XMPP.Language
@@ -40,9 +45,10 @@ data IMMessage = IMMessage
   , imSubject :: Maybe LocalizedText
   , imBody :: LocalizedText
   , imThread :: Maybe IMThread
-  , imExtended :: [Element]
+  , imRaw :: [Element]
+  , imExtended :: Registry Show
   }
-  deriving (Show, Eq)
+  deriving (Show)
 
 plainIMMessage :: Text -> IMMessage
 plainIMMessage txt =
@@ -51,13 +57,17 @@ plainIMMessage txt =
     , imSubject = Nothing
     , imBody = localizedFromText txt
     , imThread = Nothing
-    , imExtended = []
+    , imRaw = []
+    , imExtended = Reg.empty
     }
 
 type IMSlot m = Slot m (XMPPAddress, IMMessage)
 
+type IMCodecList m = CodecList m IMMessage
+
 data IMPlugin m = IMPlugin
   { imPluginSlot :: IMSlot m
+  , imPluginCodecs :: IMCodecList m
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
@@ -70,13 +80,15 @@ instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
                 imSubject <- mapM getEither $ localizedFromElement (jcName "subject") istChildren
                 let thread = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
                 imThread <- mapM (getEither . getThread) thread
-                let imExtended = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
+                let imRaw = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
+                    imExtended = Reg.empty
                 return IMMessage {..}
 
           case res of
             Left e -> return $ InError e
             Right msg -> do
-              Slot.call imPluginSlot (from, msg)
+              msg' <- decodeAll imPluginCodecs msg
+              Slot.call imPluginSlot (from, msg')
               return InSilent
    where
     cur = fromChildren istChildren
@@ -94,25 +106,33 @@ instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
 imSlot :: (MonadStream m) => XMPPPluginsRef m -> m (IMSlot m)
 imSlot = getPluginsHook Proxy
 
+-- | Get the IM codec list from the plugins hook set.
+imCodecs :: (MonadStream m) => XMPPPluginsRef m -> m (IMCodecList m)
+imCodecs = getPluginsHook Proxy
+
 imSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> IMMessage -> m ()
-imSend pluginsRef to (IMMessage {..}) =
+imSend pluginsRef to msg = do
+  codecs <- imCodecs pluginsRef
+  IMMessage {..} <- encodeAll codecs msg
+  unless (Reg.null imExtended) $ error "imSend: imExtended is not empty after encoding"
+  let subjects = maybe [] (localizedElements $ jcName "subject") imSubject
+      bodies = localizedElements (jcName "body") imBody
+      mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent",) imParent) [NodeContent imId]) imThread
   void $
     stanzaSend
       (pluginsSession pluginsRef)
       OutStanza
         { ostTo = Just to
         , ostType = OutMessage imType
-        , ostChildren = subjects ++ bodies ++ maybeToList mThread ++ imExtended
+        , ostChildren = subjects ++ bodies ++ maybeToList mThread ++ imRaw
         }
- where
-  subjects = maybe [] (localizedElements $ jcName "subject") imSubject
-  bodies = localizedElements (jcName "body") imBody
-  mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent",) imParent) [NodeContent imId]) imThread
 
 imPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 imPlugin pluginsRef = do
   imPluginSlot <- Slot.new
+  imPluginCodecs <- Codec.new
   let plugin :: IMPlugin m = IMPlugin {..}
   insertPluginsHook imPluginSlot pluginsRef
+  insertPluginsHook imPluginCodecs pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers

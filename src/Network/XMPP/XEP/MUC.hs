@@ -65,12 +65,12 @@ data MUCEvent
   = MUCJoinedRoom FullJID MUC
   | MUCRejected FullJID StanzaError
   | MUCLeftRoom FullJID MUCLeaveReason
-  deriving (Show, Eq)
+  deriving (Show)
 
 data RoomEvent
   = RoomPresence XMPPResource MUCPresenceEvent
   | RoomSubject
-  deriving (Show, Eq)
+  deriving (Show)
 
 type MUCHandler m = MUC -> RoomEvent -> m ()
 
@@ -80,13 +80,13 @@ data MUC = MUC
   , mucNick :: XMPPResource
   , mucNonAnonymous :: Bool
   }
-  deriving (Show, Eq)
+  deriving (Show)
 
 data MUCJoinResult
   = MUCJoinFinished MUC
   | MUCJoinError StanzaError
   | MUCJoinStopped [Element]
-  deriving (Show, Eq)
+  deriving (Show)
 
 data MUCRole
   = RoleVisitor
@@ -129,7 +129,7 @@ data MUCPresenceEvent
   | MUCUpdated MUCPresence
   | MUCRemoved MUCLeaveReason
   | MUCRenamed XMPPResource
-  deriving (Show, Eq)
+  deriving (Show)
 
 data MUCPresence = MUCPresence
   { mucPresence :: Presence
@@ -137,7 +137,7 @@ data MUCPresence = MUCPresence
   , mucAffiliation :: MUCAffiliation
   , mucRole :: MUCRole
   }
-  deriving (Show, Eq)
+  deriving (Show)
 
 data PendingMUC m = PendingMUC
   { pmucMembers :: Map XMPPResource MUCPresence
@@ -202,7 +202,7 @@ data MUCJoinSettings = MUCJoinSettings
   { joinHistory :: MUCHistorySettings
   , joinPresence :: Presence
   }
-  deriving (Show, Eq, Generic)
+  deriving (Show, Generic)
 
 defaultMUCJoinSettings :: MUCJoinSettings
 defaultMUCJoinSettings =
@@ -254,7 +254,7 @@ mucJoin pluginsRef addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..},
                 []
                 [ NodeElement $ element (mucName "history") historyAttrs []
                 ]
-            presStanza = presenceStanza $ Just joinPresence {presenceExtended = xElement : presenceExtended joinPresence}
+        presStanza <- presenceStanza pluginsRef $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
         void $
           stanzaSend session $
             presStanza
@@ -275,7 +275,7 @@ mucSendPresence pluginsRef addr pres = do
   rooms <- readIORef mucRooms
   case M.lookup addr rooms of
     Just (Right (room, _)) -> do
-      let presStanza = presenceStanza pres
+      presStanza <- presenceStanza pluginsRef pres
       _ <-
         stanzaSend session $
           presStanza
@@ -289,7 +289,7 @@ type MUCStatusSet = Set Integer
 _parseMUCPresence :: ResourceStatus -> Maybe (MUCStatusSet, MUCPresence)
 _parseMUCPresence status = do
   let extended = case status of
-        ResourceAvailable p -> presenceExtended p
+        ResourceAvailable p -> presenceRaw p
         ResourceUnavailable elems -> elems
   xE <- listToMaybe $ fromChildren extended $/ XC.element (mucUserName "x") &| curElement
   let statusSet = S.fromList $ mapMaybe (readMaybe . T.unpack) $ fromElement xE $/ XC.element (mucUserName "status") &/ attribute "code"

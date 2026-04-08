@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Network.XMPP.XEP.Forwarding (
   SetPage (..),
   SetQuery (..),

@@ -61,7 +61,9 @@ myPresenceSlot :: (MonadStream m) => XMPPPluginsRef m -> m (MyPresenceSlot m)
 myPresenceSlot = getPluginsHook Proxy
 
 myPresenceSend :: (MonadStream m) => XMPPPluginsRef m -> Maybe Presence -> m ()
-myPresenceSend pluginsRef pres = void $ stanzaSend (pluginsSession pluginsRef) $ presenceStanza pres
+myPresenceSend pluginsRef pres = do
+  stanza <- presenceStanza pluginsRef pres
+  void $ stanzaSend (pluginsSession pluginsRef) stanza
 
 myPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 myPresencePlugin pluginsRef = do

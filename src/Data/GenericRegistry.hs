@@ -1,4 +1,3 @@
-{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE Strict #-}
 {-# LANGUAGE UndecidableInstances #-}
 
