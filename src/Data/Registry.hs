@@ -17,6 +17,7 @@ module Data.Registry (
   insertNewOrFailM,
   delete,
   lookup,
+  pop,
   toList,
 ) where
 
@@ -76,6 +77,12 @@ lookup :: (Typeable a) => Proxy a -> Registry constr -> Maybe a
 lookup k (Registry m) = case M.lookup (typeRep k) m of
   Just (ClassBox v) -> Just (unsafeCoerce v)
   Nothing -> Nothing
+
+-- | Look up and remove a value from the registry.
+pop :: (Typeable a) => Proxy a -> Registry constr -> (Maybe a, Registry constr)
+pop k (Registry m) = case M.lookup (typeRep k) m of
+  Just (ClassBox v) -> (Just (unsafeCoerce v), Registry (M.delete (typeRep k) m))
+  Nothing -> (Nothing, Registry m)
 
 toList :: Registry constr -> [ClassBox (RegistryConstraint constr)]
 toList (Registry m) = M.elems m

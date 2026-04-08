@@ -41,7 +41,9 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Subscription
+import Network.XMPP.XEP.Capabilities
 import Network.XMPP.XEP.ChatStates
+import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
@@ -167,12 +169,14 @@ main = do
         oldRoster <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
         pluginsRef <- newXmppPlugins sess
         presencePlugin pluginsRef
+        capsPlugin pluginsRef
         discoPlugin pluginsRef
         rosterPlugin pluginsRef oldRoster
         subscriptionPlugin pluginsRef
         rpresencePlugin pluginsRef
         myPresencePlugin pluginsRef
         imPlugin pluginsRef
+        delayedDeliveryPlugin pluginsRef
         mucPlugin pluginsRef
         chatStatePlugin pluginsRef
         versionPlugin pluginsRef defaultVersion

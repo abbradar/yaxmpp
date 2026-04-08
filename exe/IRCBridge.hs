@@ -43,6 +43,8 @@ import Network.XMPP.Roster
 import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
+import Network.XMPP.XEP.Capabilities
+import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.MUC
 
@@ -147,10 +149,12 @@ main = runStderrLoggingT $ do
       $(logInfo) "Session successfully created!"
       pluginsRef <- newXmppPlugins sess
       presencePlugin pluginsRef
+      capsPlugin pluginsRef
       discoPlugin pluginsRef
       rosterPlugin pluginsRef Nothing
       myPresencePlugin pluginsRef
       imPlugin pluginsRef
+      delayedDeliveryPlugin pluginsRef
       mucPlugin pluginsRef
 
       backQueue <- liftIO newTQueueIO
