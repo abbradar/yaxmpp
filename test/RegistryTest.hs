@@ -1,3 +1,6 @@
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
+
 module RegistryTest (tests) where
 
 import Data.ClassBox (Unconstrained)
@@ -6,9 +9,14 @@ import Test.Tasty
 import Test.Tasty.QuickCheck
 
 import qualified Data.Registry as Reg
-import Prelude hiding (lookup, null)
+import Prelude
+
+class (Show a) => ShowConstr a
+
+instance (Show a) => ShowConstr a
 
 type TestReg = Reg.Registry Unconstrained
+type ShowTestReg = Reg.Registry Show
 
 prop_lookupAfterInsert :: Int -> String -> Bool -> Property
 prop_lookupAfterInsert x s b =
@@ -58,6 +66,20 @@ prop_nullNonEmpty :: Int -> Property
 prop_nullNonEmpty x =
   property $ not $ Reg.null $ Reg.insert x (Reg.empty :: TestReg)
 
+prop_showEmpty :: Property
+prop_showEmpty =
+  property $ show (Reg.empty :: ShowTestReg) == "Registry []"
+
+prop_showNonEmpty :: Int -> Property
+prop_showNonEmpty x =
+  let reg = Reg.insert x (Reg.empty :: ShowTestReg)
+   in property $ not $ Prelude.null $ show reg
+
+prop_showMultiple :: Int -> String -> Property
+prop_showMultiple x s =
+  let reg = Reg.insert x $ Reg.insert s $ (Reg.empty :: ShowTestReg)
+   in property $ not $ Prelude.null $ show reg
+
 tests :: TestTree
 tests =
   testGroup
@@ -70,4 +92,7 @@ tests =
     , testProperty "tryInsertNew fails on existing" prop_tryInsertNewFails
     , testProperty "null on empty" prop_nullEmpty
     , testProperty "null on non-empty" prop_nullNonEmpty
+    , testProperty "show empty" prop_showEmpty
+    , testProperty "show non-empty" prop_showNonEmpty
+    , testProperty "show multiple" prop_showMultiple
     ]

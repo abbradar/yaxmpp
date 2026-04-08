@@ -1,3 +1,6 @@
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
+
 module GenericRegistryTest (tests) where
 
 import Data.Functor.Identity
@@ -7,9 +10,10 @@ import Test.Tasty
 import Test.Tasty.QuickCheck
 
 import qualified Data.GenericRegistry as GR
-import Prelude hiding (lookup, null)
+import Prelude
 
 type TestGR = GR.GenericRegistry Identity Typeable
+type ShowTestGR = GR.GenericRegistry Identity Show
 
 prop_lookupAfterInsert :: Int -> String -> Bool -> Property
 prop_lookupAfterInsert x s b =
@@ -72,6 +76,23 @@ prop_nullNonEmpty :: Int -> Property
 prop_nullNonEmpty x =
   property $ not $ GR.null $ GR.insert (Proxy :: Proxy Int) (Identity x) (GR.empty :: TestGR)
 
+prop_showEmpty :: Property
+prop_showEmpty =
+  property $ show (GR.empty :: ShowTestGR) == "GenericRegistry []"
+
+prop_showNonEmpty :: Int -> Property
+prop_showNonEmpty x =
+  let reg = GR.insert (Proxy :: Proxy Int) (Identity x) (GR.empty :: ShowTestGR)
+   in property $ not $ Prelude.null $ show reg
+
+prop_showMultiple :: Int -> String -> Property
+prop_showMultiple x s =
+  let reg =
+        GR.insert (Proxy :: Proxy Int) (Identity x) $
+          GR.insert (Proxy :: Proxy String) (Identity s) $
+            (GR.empty :: ShowTestGR)
+   in property $ not $ Prelude.null $ show reg
+
 tests :: TestTree
 tests =
   testGroup
@@ -84,4 +105,7 @@ tests =
     , testProperty "tryInsertNew fails on existing" prop_tryInsertNewFails
     , testProperty "null on empty" prop_nullEmpty
     , testProperty "null on non-empty" prop_nullNonEmpty
+    , testProperty "show empty" prop_showEmpty
+    , testProperty "show non-empty" prop_showNonEmpty
+    , testProperty "show multiple" prop_showMultiple
     ]

@@ -37,6 +37,26 @@ instance (Typeable a, constr a) => RegistryConstraint constr a
 
 newtype Registry (constr :: Type -> Constraint) = Registry (Map TypeRep (ClassBox (RegistryConstraint constr)))
 
+instance (forall a. (constr a) => Show a) => Show (Registry constr) where
+  showsPrec d (Registry m) =
+    showParen (d > 10) $
+      showString "Registry " . showRegBoxes (M.elems m)
+  show (Registry m) = "Registry " ++ showRegBoxes (M.elems m) ""
+  showList xs = showString "[" . go xs . showString "]"
+   where
+    go :: [Registry constr] -> ShowS
+    go [] = id
+    go [Registry m] = showString "Registry " . showRegBoxes (M.elems m)
+    go (Registry m : rest) = showString "Registry " . showRegBoxes (M.elems m) . showString "," . go rest
+
+showRegBoxes :: forall constr. (forall a. (constr a) => Show a) => [ClassBox (RegistryConstraint constr)] -> ShowS
+showRegBoxes xs = showString "[" . go xs . showString "]"
+ where
+  go :: [ClassBox (RegistryConstraint constr)] -> ShowS
+  go [] = id
+  go [ClassBox v] = showsPrec 0 v
+  go (ClassBox v : rest) = showsPrec 0 v . showString ", " . go rest
+
 empty :: Registry constr
 empty = Registry M.empty
 
