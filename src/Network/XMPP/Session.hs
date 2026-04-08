@@ -83,6 +83,7 @@ data Session m = Session
   , sessionStreamFeatures :: [Element]
   , sessionReconnect :: Maybe ReconnectInfo
   , sessionStream :: IORef (Stream m)
+  , sessionStreamGen :: IORef Int
   , sessionRLock :: MVar ReadSessionData
   , sessionWLock :: MVar WriteSessionData
   }
@@ -147,12 +148,14 @@ tryRestart (Session {..}) ri rs ws e = do
     else do
       (s', ws') <- restartOrThrow ri rs ws e
       writeIORef sessionStream s'
+      atomicModifyIORef' sessionStreamGen $ \gen -> (gen + 1, ())
       return ws'
 
-modifyRead :: (MonadStream m) => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
+modifyRead :: forall m a. (MonadStream m) => Session m -> (ReadSessionData -> m (ReadSessionData, a)) -> m a
 modifyRead sess@(Session {..}) comp = modifyMVar sessionRLock tryRun
  where
   tryRun rs = handle (tryHandle rs) $ comp rs
+  tryHandle :: ReadSessionData -> ConnectionInterruptionException -> m a
   tryHandle rs e = case sessionReconnect of
     Nothing -> throwM e
     Just ri -> do
@@ -161,17 +164,38 @@ modifyRead sess@(Session {..}) comp = modifyMVar sessionRLock tryRun
         return ws'
       tryRun rs {rsReconnected = True}
 
-modifyWrite :: (MonadStream m) => Session m -> (WriteSessionData -> m (WriteSessionData, a)) -> m a
-modifyWrite sess@(Session {..}) comp = modifyMVar sessionWLock tryRun
+modifyWrite :: forall m a. (MonadStream m) => Session m -> (WriteSessionData -> m (WriteSessionData, a)) -> m a
+modifyWrite sess@(Session {..}) comp = do
+  result <- modifyMVar_ sessionWLock tryRun
+  handleResult result
  where
-  tryRun ws = handle (tryHandle ws) $ comp ws
-  tryHandle ws e = case sessionReconnect of
-    Nothing -> throwM e
-    Just ri -> do
-      ws' <- modifyMVar sessionRLock $ \rs -> do
-        ws' <- tryRestart sess ri rs ws e
-        return (rs {rsReconnected = True}, ws')
-      tryRun ws'
+  tryRun ws = handle saveException $ fmap Right $ comp ws
+
+  saveException :: ConnectionInterruptionException -> m (Either (ConnectionInterruptionException, Int) (WriteSessionData, a))
+  saveException e = do
+    -- Remember the stream generation before releasing the write lock.
+    gen <- readIORef sessionStreamGen
+    return Left (e, gen)
+
+  handleResult (Right a) = return a
+  handleResult (Left (e, gen)) =
+    case sessionReconnect of
+      Nothing -> throwM e
+      Just ri -> do
+        -- We want to release the read lock later if successful.
+        result <- mask $ \restore -> do
+          rs <- takeMVar sessionRLock
+
+          let continueReconnect = do
+                -- Check if another thread already reconnected while we were waiting.
+                currentGen <- readIORef sessionStreamGen
+                unless (currentGen /= gen) $ tryRestart sess ri rs ws e
+
+          modifyMVar_ sessionWLock $ \ws -> do
+            restore continueReconnect `onException` putMVar sessionRLock rs
+            putMVar sessionRLock $ rs {rsReconnected = True}
+            restore $ tryRun ws
+        handleResult result
 
 sessionSend :: (MonadStream m) => Session m -> Element -> m ()
 sessionSend sess e = modifyWrite sess $ \ws -> do
@@ -327,6 +351,7 @@ sessionCreate (SessionSettings {..}) = do
       let sessionStreamFeatures = streamFeatures s
       msm <- initSM ssConn s
       sessionStream <- newIORef s
+      sessionStreamGen <- newIORef 0
       let smRead = SMReadData {smRecvN = 0} <$ msm
           smWrite = SMWriteData {smPending = S.empty, smPendingN = 0} <$ msm
       sessionRLock <-
