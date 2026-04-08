@@ -4,6 +4,7 @@ module Data.GenericRegistry (
   GenericRegistry,
   empty,
   insert,
+  tryInsertNew,
   insertNewOrFailM,
   delete,
   lookup,
@@ -27,12 +28,17 @@ empty = GenericRegistry M.empty
 insert :: (Typeable a) => Proxy a -> f a -> GenericRegistry f -> GenericRegistry f
 insert k v (GenericRegistry m) = GenericRegistry (M.insert (typeRep k) (unsafeCoerce v) m)
 
-insertNewOrFailM :: (Typeable a, MonadFail m) => Proxy a -> f a -> GenericRegistry f -> m (GenericRegistry f)
-insertNewOrFailM k v (GenericRegistry m)
-  | Just _ <- M.lookup typ m = fail "Key already exists"
-  | otherwise = return $ GenericRegistry (M.insert typ (unsafeCoerce v) m)
+tryInsertNew :: (Typeable a) => Proxy a -> f a -> GenericRegistry f -> Maybe (GenericRegistry f)
+tryInsertNew k v (GenericRegistry m)
+  | Just _ <- M.lookup typ m = Nothing
+  | otherwise = Just $ GenericRegistry (M.insert typ (unsafeCoerce v) m)
  where
   typ = typeRep k
+
+insertNewOrFailM :: (Typeable a, MonadFail m) => Proxy a -> f a -> GenericRegistry f -> m (GenericRegistry f)
+insertNewOrFailM k v reg = case tryInsertNew k v reg of
+  Nothing -> fail "insertNewOrFailM: key already exists"
+  Just reg' -> return reg'
 
 delete :: (Typeable a) => Proxy a -> GenericRegistry f -> GenericRegistry f
 delete k (GenericRegistry m) = GenericRegistry (M.delete (typeRep k) m)

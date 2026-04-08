@@ -14,8 +14,9 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import UnliftIO.IORef
 
-import qualified Control.HandlerList as HandlerList
-import Control.Slot (Slot)
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
+import Control.Slot (Slot, SlotSignal (..))
 import qualified Control.Slot as Slot
 import Network.XMPP.Address
 import Network.XMPP.Plugin
@@ -39,31 +40,45 @@ data SubscriptionState m = SubscriptionState
   , subscriptionPending :: IORef (Set BareJID)
   }
 
-subscriptionInHandler :: (MonadStream m) => SubscriptionSlot m -> SubscriptionState m -> PluginInHandler m
-subscriptionInHandler slot _ (InStanza {istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr)}) =
-  case typ of
-    PresenceSubscribed -> do
-      Slot.call slot (addr, WeSubscribed)
-      return $ Just InSilent
-    PresenceUnsubscribed -> do
-      Slot.call slot (addr, WeUnsubscribed)
-      return $ Just InSilent
-    PresenceSubscribe -> do
-      Slot.call slot (addr, TheyRequested)
-      return $ Just InSilent
-    PresenceUnsubscribe -> do
-      Slot.call slot (addr, TheyUnsubscribed)
-      return $ Just InSilent
-    _ -> return Nothing
-subscriptionInHandler slot (SubscriptionState {..}) (InStanza {istType = InPresence (Left err), istFrom = Just (bareJidGet -> Just addr)}) = do
-  found <- atomicModifyIORef' subscriptionPending $ \pending ->
-    if addr `S.member` pending then (S.delete addr pending, True) else (pending, False)
-  if found
-    then do
-      Slot.call slot (addr, TheyUnavailable err)
-      return $ Just InSilent
-    else return Nothing
-subscriptionInHandler _ _ _ = return Nothing
+data SubscriptionPlugin m = SubscriptionPlugin
+  { subscriptionPluginSlot :: SubscriptionSlot m
+  , subscriptionPluginState :: SubscriptionState m
+  }
+
+instance (MonadStream m) => Handler m InStanza InResponse (SubscriptionPlugin m) where
+  tryHandle (SubscriptionPlugin {..}) (InStanza {istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr)}) =
+    case typ of
+      PresenceSubscribed -> do
+        Slot.call subscriptionPluginSlot (addr, WeSubscribed)
+        return $ Just InSilent
+      PresenceUnsubscribed -> do
+        Slot.call subscriptionPluginSlot (addr, WeUnsubscribed)
+        return $ Just InSilent
+      PresenceSubscribe -> do
+        Slot.call subscriptionPluginSlot (addr, TheyRequested)
+        return $ Just InSilent
+      PresenceUnsubscribe -> do
+        Slot.call subscriptionPluginSlot (addr, TheyUnsubscribed)
+        return $ Just InSilent
+      _ -> return Nothing
+  tryHandle (SubscriptionPlugin {..}) (InStanza {istType = InPresence (Left err), istFrom = Just (bareJidGet -> Just addr)}) = do
+    let SubscriptionState {..} = subscriptionPluginState
+    found <- atomicModifyIORef' subscriptionPending $ \pending ->
+      if addr `S.member` pending then (S.delete addr pending, True) else (pending, False)
+    if found
+      then do
+        Slot.call subscriptionPluginSlot (addr, TheyUnavailable err)
+        return $ Just InSilent
+      else return Nothing
+  tryHandle _ _ = return Nothing
+
+instance (MonadStream m) => SlotSignal m (RosterEntries, RosterEvent) (SubscriptionPlugin m) where
+  emitSignal (SubscriptionPlugin {..}) (_, RosterInsert (bareJidGet -> Just addr) _) = do
+    let SubscriptionState {..} = subscriptionPluginState
+    found <- atomicModifyIORef' subscriptionPending $ \pending ->
+      if addr `S.member` pending then (S.delete addr pending, True) else (pending, False)
+    when found $ Slot.call subscriptionPluginSlot (addr, TheyReceived)
+  emitSignal _ _ = return ()
 
 requestSubscriptionTo :: (MonadStream m) => XMPPPluginsRef m -> BareJID -> Bool -> m ()
 requestSubscriptionTo pluginsRef addr status = do
@@ -94,21 +109,15 @@ updateSubscriptionFrom pluginsRef addr status = do
 subscriptionSlot :: (MonadStream m) => XMPPPluginsRef m -> m (SubscriptionSlot m)
 subscriptionSlot = getPluginsHook Proxy
 
-subscriptionRosterEvent :: (MonadStream m) => SubscriptionSlot m -> SubscriptionState m -> (RosterEntries, RosterEvent) -> m ()
-subscriptionRosterEvent slot (SubscriptionState {..}) (_, RosterInsert (bareJidGet -> Just addr) _) = do
-  found <- atomicModifyIORef' subscriptionPending $ \pending ->
-    if addr `S.member` pending then (S.delete addr pending, True) else (pending, False)
-  when found $ Slot.call slot (addr, TheyReceived)
-subscriptionRosterEvent _ _ _ = return ()
-
 subscriptionPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 subscriptionPlugin pluginsRef = do
-  slot <- Slot.new
-  insertPluginsHook slot pluginsRef
+  subscriptionPluginSlot <- Slot.new
   subscriptionPending <- newIORef S.empty
-  let state = SubscriptionState {subscriptionSession = pluginsSession pluginsRef, ..}
-  insertPluginsHook state pluginsRef
+  let subscriptionPluginState = SubscriptionState {subscriptionSession = pluginsSession pluginsRef, ..}
+      plugin :: SubscriptionPlugin m = SubscriptionPlugin {..}
+  insertPluginsHook subscriptionPluginSlot pluginsRef
+  insertPluginsHook subscriptionPluginState pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
-  void $ HandlerList.add inHandlers $ subscriptionInHandler slot state
+  HL.pushNewOrFailM plugin inHandlers
   rSlot <- rosterSlot pluginsRef
-  void $ Slot.add rSlot $ subscriptionRosterEvent slot state
+  Slot.pushNewOrFailM plugin rSlot

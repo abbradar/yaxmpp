@@ -4,6 +4,7 @@ import Control.Monad.Catch
 import Control.Monad.IO.Class
 import Control.Monad.Logger
 import Control.Monad.Trans.Except
+import Control.Slot (SlotSignal (..))
 import qualified Control.Slot as Slot
 import qualified Data.Aeson as JSON
 import qualified Data.ByteString.Char8 as B
@@ -45,6 +46,37 @@ import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
 import Network.XMPP.XEP.Version
+
+newtype ClientPlugin m = ClientPlugin {clientWriteMessage :: String -> m ()}
+
+instance (MonadStream m) => SlotSignal m (RosterEntries, RosterEvent) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (_, event) =
+    clientWriteMessage [i|Got roster update: #{event}|]
+
+instance (MonadStream m) => SlotSignal m (BareJID, SubscriptionStatus) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (addr, stat) =
+    clientWriteMessage [i|Got subscription update for #{addr}: #{stat}|]
+
+instance (MonadStream m) => SlotSignal m (PresenceEvent XMPPResource) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) event =
+    clientWriteMessage [i|Got presence update for myself: #{event}|]
+
+instance (MonadStream m) => SlotSignal m RosterPresenceEvent (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) event =
+    clientWriteMessage [i|Got presence update for roster: #{event}|]
+
+instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (addr, msg) = do
+    let text = localizedGet (Just "en") $ imBody msg
+    clientWriteMessage [i|#{addressToText addr}: #{text}|]
+
+instance (MonadStream m) => SlotSignal m MUCEvent (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) event =
+    clientWriteMessage [i|Got MUC event: #{event}|]
+
+instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatState) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (addr, _msgType, cs) =
+    clientWriteMessage [i|#{addressToText addr} is #{cs}|]
 
 data Settings = Settings
   { server :: Text
@@ -153,34 +185,22 @@ main = do
                 _ -> return ()
 
         flip finally saveRoster $ do
+          let clientPlugin = ClientPlugin writeMessage
+
           rSlot <- rosterSlot pluginsRef
-          void $ Slot.add rSlot $ \(_, event) -> do
-            writeMessage [i|Got roster update: #{event}|]
-
+          Slot.pushNewOrFailM clientPlugin rSlot
           sSlot <- subscriptionSlot pluginsRef
-          void $ Slot.add sSlot $ \(addr, stat) -> do
-            writeMessage [i|Got subscription update for #{addr}: #{stat}|]
-
+          Slot.pushNewOrFailM clientPlugin sSlot
           mpSlot <- myPresenceSlot pluginsRef
-          void $ Slot.add mpSlot $ \event -> do
-            writeMessage [i|Got presence update for myself: #{event}|]
-
+          Slot.pushNewOrFailM clientPlugin mpSlot
           rpSlot <- rpresenceSlot pluginsRef
-          void $ Slot.add rpSlot $ \event -> do
-            writeMessage [i|Got presence update for roster: #{event}|]
-
+          Slot.pushNewOrFailM clientPlugin rpSlot
           imS <- imSlot pluginsRef
-          void $ Slot.add imS $ \(addr, msg) -> do
-            let text = localizedGet (Just "en") $ imBody msg
-            writeMessage [i|#{addressToText addr}: #{text}|]
-
+          Slot.pushNewOrFailM clientPlugin imS
           mSlot <- mucSlot pluginsRef
-          void $ Slot.add mSlot $ \event -> do
-            writeMessage [i|Got MUC event: #{event}|]
-
+          Slot.pushNewOrFailM clientPlugin mSlot
           csSlot <- chatStateSlot pluginsRef
-          void $ Slot.add csSlot $ \(addr, _msgType, cs) -> do
-            writeMessage [i|#{addressToText addr} is #{cs}|]
+          Slot.pushNewOrFailM clientPlugin csSlot
 
           myPresenceSend pluginsRef $ Just defaultPresence
 

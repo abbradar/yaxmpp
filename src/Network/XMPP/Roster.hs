@@ -39,7 +39,8 @@ import UnliftIO.Concurrent
 import UnliftIO.Exception (catch)
 import UnliftIO.IORef
 
-import qualified Control.HandlerList as HandlerList
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Injective
@@ -234,34 +235,40 @@ applyRosterEvent :: RosterEntries -> RosterEvent -> RosterEntries
 applyRosterEvent roster (RosterInsert jid entry) = M.insert jid entry roster
 applyRosterEvent roster (RosterDelete jid) = M.delete jid roster
 
-rosterIQHandler :: (MonadStream m) => RosterSlot m -> RosterState m -> PluginIQHandler m
-rosterIQHandler slot (RosterState {..}) (InRequestIQ {iriType = IQSet, iriFrom, iriChildren = [req]})
-  | elementName req == rosterName "query" =
-      Just <$> do
-        if not (fromServerOrMyself iriFrom rosterSession)
-          then
-            return $ IQError $ serviceUnavailable "Roster push from arbitrary entity is forbidden"
-          else do
-            case mapM getRosterEvent $ fromElement req $/ curAnyElement of
-              Left err -> return $ IQError err
-              Right events -> do
-                result <- atomicModifyIORef' rosterRef $ \case
-                  pending@(Left _) -> (pending, Nothing)
-                  Right roster ->
-                    let rosters = drop 1 $ scanl applyRosterEvent (rosterEntries roster) events
-                        finalEntries = foldl (\_ x -> x) (rosterEntries roster) rosters
-                        roster' =
-                          Roster
-                            { rosterVersion = getAttr "ver" req
-                            , rosterEntries = finalEntries
-                            }
-                     in (Right roster', Just $ zip rosters events)
-                case result of
-                  Nothing -> return $ IQError $ badRequest "Roster has not been received yet"
-                  Just revents -> do
-                    mapM_ (Slot.call slot) revents
-                    return $ IQResult []
-rosterIQHandler _ _ _ = return Nothing
+data RosterPlugin m = RosterPlugin
+  { rosterPluginSlot :: RosterSlot m
+  , rosterPluginState :: RosterState m
+  }
+
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (RosterPlugin m) where
+  tryHandle (RosterPlugin {..}) (InRequestIQ {iriType = IQSet, iriFrom, iriChildren = [req]})
+    | elementName req == rosterName "query" =
+        let RosterState {..} = rosterPluginState
+         in Just <$> do
+              if not (fromServerOrMyself iriFrom rosterSession)
+                then
+                  return $ IQError $ serviceUnavailable "Roster push from arbitrary entity is forbidden"
+                else do
+                  case mapM getRosterEvent $ fromElement req $/ curAnyElement of
+                    Left err -> return $ IQError err
+                    Right events -> do
+                      result <- atomicModifyIORef' rosterRef $ \case
+                        pending@(Left _) -> (pending, Nothing)
+                        Right roster ->
+                          let rosters = drop 1 $ scanl applyRosterEvent (rosterEntries roster) events
+                              finalEntries = foldl (\_ x -> x) (rosterEntries roster) rosters
+                              roster' =
+                                Roster
+                                  { rosterVersion = getAttr "ver" req
+                                  , rosterEntries = finalEntries
+                                  }
+                           in (Right roster', Just $ zip rosters events)
+                      case result of
+                        Nothing -> return $ IQError $ badRequest "Roster has not been received yet"
+                        Just revents -> do
+                          mapM_ (Slot.call rosterPluginSlot) revents
+                          return $ IQResult []
+  tryHandle _ _ = return Nothing
 
 getRoster :: forall m. (MonadStream m) => XMPPPluginsRef m -> m Roster
 getRoster pluginsRef = do
@@ -290,8 +297,9 @@ rosterPlugin pluginsRef old = do
         atomicWriteIORef rosterRef (Right ret)
         putMVar firstRoster ret
   void $ forkIO $ tryGet `catch` \(e :: SomeException) -> putMVar firstRoster (throw e)
-  slot <- Slot.new
-  insertPluginsHook slot pluginsRef
+  rosterPluginSlot <- Slot.new
+  let plugin :: RosterPlugin m = RosterPlugin {rosterPluginState = state, ..}
+  insertPluginsHook rosterPluginSlot pluginsRef
   insertPluginsHook state pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
-  void $ HandlerList.add iqHandlers (rosterIQHandler slot state)
+  HL.pushNewOrFailM plugin iqHandlers

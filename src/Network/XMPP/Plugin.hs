@@ -57,9 +57,9 @@ newXmppPlugins pluginsSession = do
 insertPluginsHook :: forall a m. (MonadStream m, Typeable a) => a -> XMPPPluginsRef m -> m ()
 insertPluginsHook v (XMPPPluginsRef {..}) = do
   success <- liftIO $ atomicModifyIORef pluginsHooksSet $ \hooks ->
-    case Reg.lookup (Proxy :: Proxy a) hooks of
-      Just _ -> (hooks, False)
-      Nothing -> (Reg.insert v hooks, True)
+    case Reg.tryInsertNew (Proxy :: Proxy a) v hooks of
+      Nothing -> (hooks, False)
+      Just hooks' -> (hooks', True)
   unless success $ error "insertPluginsHook: hook already exists"
 
 -- | Get an existing hook from the plugins set. Fails if it doesn't exist.

@@ -33,7 +33,8 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import qualified Control.HandlerList as HandlerList
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import Data.RefMap (RefMap)
 import qualified Data.RefMap as RefMap
 import Network.XMPP.Address
@@ -222,38 +223,43 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
  where
   makeItemAttr (addr, mNode) = ("jid", addressToText addr) : maybeToList (fmap ("node",) mNode)
 
-discoIQHandler :: (MonadStream m) => RefMap (m DiscoInfo) -> InRequestIQ -> m (Maybe RequestIQResponse)
-discoIQHandler infosRef (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
-  infos <- RefMap.entries infosRef >>= sequence
-  DiscoInfo {..} <- case foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos of
-    Nothing -> fail "discoIqHandler: overlapping plugins"
-    Just r -> return r
-  let res
-        | elementName req == infoName = Just $ fmap (infoName,) $ case getAttr "node" req of
-            Nothing -> Just $ emitDiscoEntity discoIEntity
-            Just node | Just (entity, _) <- M.lookup node discoIChildren -> Just $ emitDiscoEntity entity
-            _ -> Nothing
-        | elementName req == itemsName = Just $ fmap (itemsName,) $ case getAttr "node" req of
-            Nothing -> Just $ emitDiscoItems discoIItems
-            Just node | Just (_, items) <- M.lookup node discoIChildren -> Just $ emitDiscoItems items
-            _ -> Nothing
-        | otherwise = Nothing
-  case res of
-    Nothing -> return Nothing
-    Just Nothing -> return $ Just $ IQError $ itemNotFound "discoIqHandler: unknown node"
-    Just (Just (name, elems)) ->
-      return $ Just $ IQResult [element name (maybeToList $ ("node",) <$> getAttr "node" req) $ map NodeElement elems]
- where
-  infoName = discoInfoName "query"
-  itemsName = discoItemsName "query"
-discoIQHandler _ _ = return Nothing
+newtype DiscoPlugin m = DiscoPlugin
+  { discoPluginInfos :: RefMap (m DiscoInfo)
+  }
+
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin m) where
+  tryHandle (DiscoPlugin {..}) (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
+    infos <- RefMap.entries discoPluginInfos >>= sequence
+    DiscoInfo {..} <- case foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos of
+      Nothing -> fail "discoIqHandler: overlapping plugins"
+      Just r -> return r
+    let res
+          | elementName req == infoName = Just $ fmap (infoName,) $ case getAttr "node" req of
+              Nothing -> Just $ emitDiscoEntity discoIEntity
+              Just node | Just (entity, _) <- M.lookup node discoIChildren -> Just $ emitDiscoEntity entity
+              _ -> Nothing
+          | elementName req == itemsName = Just $ fmap (itemsName,) $ case getAttr "node" req of
+              Nothing -> Just $ emitDiscoItems discoIItems
+              Just node | Just (_, items) <- M.lookup node discoIChildren -> Just $ emitDiscoItems items
+              _ -> Nothing
+          | otherwise = Nothing
+    case res of
+      Nothing -> return Nothing
+      Just Nothing -> return $ Just $ IQError $ itemNotFound "discoIqHandler: unknown node"
+      Just (Just (name, elems)) ->
+        return $ Just $ IQResult [element name (maybeToList $ ("node",) <$> getAttr "node" req) $ map NodeElement elems]
+   where
+    infoName = discoInfoName "query"
+    itemsName = discoItemsName "query"
+  tryHandle _ _ = return Nothing
 
 discoInfos :: (MonadStream m) => XMPPPluginsRef m -> m (RefMap (m DiscoInfo))
 discoInfos = getPluginsHook Proxy
 
-discoPlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
+discoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 discoPlugin pluginsRef = do
-  infosRef <- RefMap.new
-  insertPluginsHook infosRef pluginsRef
+  discoPluginInfos <- RefMap.new
+  let plugin :: DiscoPlugin m = DiscoPlugin {..}
+  insertPluginsHook discoPluginInfos pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
-  void $ HandlerList.add iqHandlers $ discoIQHandler infosRef
+  HL.pushNewOrFailM plugin iqHandlers

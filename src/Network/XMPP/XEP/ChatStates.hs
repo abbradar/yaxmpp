@@ -12,9 +12,10 @@ module Network.XMPP.XEP.ChatStates (
 )
 where
 
-import qualified Control.HandlerList as HandlerList
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import Control.Monad
-import Control.Slot (Slot)
+import Control.Slot (Slot, SlotSignal (..))
 import qualified Control.Slot as Slot
 import Data.Injective
 import Data.Maybe
@@ -57,15 +58,25 @@ parseChatState = listToMaybe . mapMaybe tryParse
 
 type ChatStateSlot m = Slot m (XMPPAddress, MessageType, ChatState)
 
-chatStateInHandler :: (MonadStream m) => ChatStateSlot m -> PluginInHandler m
--- Only handle bodyless messages; messages with a body are handled by the IM plugin,
--- and the chat state can be extracted from IMMessage.imExtended if needed.
-chatStateInHandler slot (InStanza {istFrom = Just from, istType = InMessage (Right msgType), istChildren})
-  | not (hasBody istChildren)
-  , Just cs <- parseChatState istChildren = do
-      Slot.call slot (from, msgType, cs)
-      return $ Just InSilent
-chatStateInHandler _ _ = return Nothing
+data ChatStatePlugin m = ChatStatePlugin
+  { chatStatePluginSlot :: ChatStateSlot m
+  }
+
+-- Handle bodyless messages with chat state notifications.
+instance (MonadStream m) => Handler m InStanza InResponse (ChatStatePlugin m) where
+  tryHandle (ChatStatePlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right msgType), istChildren})
+    | not (hasBody istChildren)
+    , Just cs <- parseChatState istChildren = do
+        Slot.call chatStatePluginSlot (from, msgType, cs)
+        return $ Just InSilent
+  tryHandle _ _ = return Nothing
+
+-- Extract chat states from body-ful messages (XEP-0085 §5.3).
+instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (ChatStatePlugin m) where
+  emitSignal (ChatStatePlugin {..}) (from, msg) =
+    case parseChatState (imExtended msg) of
+      Just cs -> Slot.call chatStatePluginSlot (from, imType msg, cs)
+      Nothing -> return ()
 
 hasBody :: [Element] -> Bool
 hasBody = any (\e -> elementName e == jcName "body")
@@ -84,18 +95,12 @@ chatStateSend pluginsRef to msgType cs =
         , ostChildren = [closedElement $ chatStateName $ injTo cs]
         }
 
-chatStateImHandler :: (MonadStream m) => ChatStateSlot m -> (XMPPAddress, IMMessage) -> m ()
-chatStateImHandler slot (from, msg) =
-  case parseChatState (imExtended msg) of
-    Just cs -> Slot.call slot (from, imType msg, cs)
-    Nothing -> return ()
-
 chatStatePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 chatStatePlugin pluginsRef = do
-  slot <- Slot.new
-  insertPluginsHook slot pluginsRef
+  chatStatePluginSlot <- Slot.new
+  let plugin :: ChatStatePlugin m = ChatStatePlugin {..}
+  insertPluginsHook chatStatePluginSlot pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
-  void $ HandlerList.add inHandlers $ chatStateInHandler slot
-  -- Also extract chat states from content messages (XEP-0085 §5.3).
+  HL.pushNewOrFailM plugin inHandlers
   imS <- imSlot pluginsRef
-  void $ Slot.add imS $ chatStateImHandler slot
+  Slot.pushNewOrFailM plugin imS

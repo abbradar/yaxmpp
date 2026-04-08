@@ -15,9 +15,8 @@ module Network.XMPP.Presence (
 )
 where
 
-import Control.HandlerList (HandlerList)
-import qualified Control.HandlerList as HandlerList
-import Control.Monad
+import Control.HandlerList (Handler (..), HandlerList)
+import qualified Control.HandlerList as HL
 import Control.Monad.Logger
 import Data.Injective
 import Data.Int
@@ -104,7 +103,7 @@ presenceHandlers = getPluginsHook Proxy
 
 emitPresence :: (MonadStream m) => HandlerList m PresenceUpdate () -> PresenceUpdate -> m ()
 emitPresence handlers upd = do
-  mr <- HandlerList.call handlers upd
+  mr <- HL.call handlers upd
   case mr of
     Just () -> return ()
     Nothing -> $(logWarn) [i|Unhandled presence update: #{upd}|]
@@ -133,31 +132,36 @@ parsePresence elems = do
 parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
-presenceInHandler :: (MonadStream m) => HandlerList m PresenceUpdate () -> PluginInHandler m
-presenceInHandler handlers (InStanza {istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren}) =
-  Just <$> do
-    case op of
-      PresenceSet -> case parsePresence istChildren of
-        Right p -> do
-          emitPresence handlers $ ResourcePresence faddr $ ResourceAvailable p
+data PresencePlugin m = PresencePlugin
+  { presencePluginHandlers :: HandlerList m PresenceUpdate ()
+  }
+
+instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) where
+  tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren}) =
+    Just <$> do
+      case op of
+        PresenceSet -> case parsePresence istChildren of
+          Right p -> do
+            emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceAvailable p
+            return InSilent
+          Left e -> return $ InError e
+        PresenceUnset -> do
+          emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceUnavailable $ parseExtended istChildren
           return InSilent
-        Left e -> return $ InError e
-      PresenceUnset -> do
-        emitPresence handlers $ ResourcePresence faddr $ ResourceUnavailable $ parseExtended istChildren
-        return InSilent
--- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
-presenceInHandler handlers (InStanza {istType = InPresence (Right (Just PresenceUnavailable)), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
-  Just <$> do
-    emitPresence handlers $ AllResourcesOffline bare (parseExtended istChildren)
-    return InSilent
-presenceInHandler _ _ = return Nothing
+  -- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
+  tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Right (Just PresenceUnavailable)), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
+    Just <$> do
+      emitPresence presencePluginHandlers $ AllResourcesOffline bare (parseExtended istChildren)
+      return InSilent
+  tryHandle _ _ = return Nothing
 
 presencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 presencePlugin pluginsRef = do
-  handlers <- HandlerList.new
-  insertPluginsHook handlers pluginsRef
+  presencePluginHandlers <- HL.new
+  let plugin :: PresencePlugin m = PresencePlugin {..}
+  insertPluginsHook presencePluginHandlers pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
-  void $ HandlerList.add inHandlers (presenceInHandler handlers)
+  HL.pushNewOrFailM plugin inHandlers
 
 data PresenceEvent k
   = Added k Presence

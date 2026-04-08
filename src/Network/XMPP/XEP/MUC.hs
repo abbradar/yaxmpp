@@ -45,7 +45,8 @@ import UnliftIO.Exception (bracketOnError)
 import UnliftIO.IORef
 import UnliftIO.MVar
 
-import qualified Control.HandlerList as HandlerList
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Injective
@@ -301,93 +302,103 @@ _parseMUCPresence status = do
         ResourceUnavailable _ -> defaultPresence
   return (statusSet, MUCPresence {..})
 
-mucInHandler :: (MonadStream m) => MUCSlot m -> MUCState m -> StanzaSession m -> PluginInHandler m
-mucInHandler mucEventHandler (MUCState {..}) _session (InStanza {istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err)}) = do
-  mpromise <- atomicModifyIORef' mucRooms $ \rooms ->
-    case M.lookup (fullBare addr) rooms of
-      Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucPending pending)
-      _ -> (rooms, Nothing)
-  case mpromise of
-    Nothing -> return Nothing
-    Just promise -> do
-      Slot.call mucEventHandler $ MUCRejected addr err
-      putMVar promise (MUCJoinError err)
-      return $ Just InSilent
-mucInHandler _ (MUCState {..}) _ (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage (Right MessageGroupchat), istChildren}) =
-  case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
-    (subjE : _) -> do
-      rooms <- readIORef mucRooms
-      case M.lookup bare rooms of
-        Just (Right (room, handler)) -> do
-          let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
-              room' = room {mucSubject = subj}
-          atomicWriteIORef mucRooms $ M.insert bare (Right (room', handler)) rooms
-          handler room' RoomSubject
-          return $ Just InSilent
-        _ -> return Nothing
-    _ -> return Nothing
-mucInHandler _ _ _ _ = return Nothing
+data MUCPlugin m = MUCPlugin
+  { mucPluginSlot :: MUCSlot m
+  , mucPluginState :: MUCState m
+  }
+
+instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
+  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err)}) = do
+    let MUCState {..} = mucPluginState
+        mucEventHandler = mucPluginSlot
+    mpromise <- atomicModifyIORef' mucRooms $ \rooms ->
+      case M.lookup (fullBare addr) rooms of
+        Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucPending pending)
+        _ -> (rooms, Nothing)
+    case mpromise of
+      Nothing -> return Nothing
+      Just promise -> do
+        Slot.call mucEventHandler $ MUCRejected addr err
+        putMVar promise (MUCJoinError err)
+        return $ Just InSilent
+  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage (Right MessageGroupchat), istChildren}) = do
+    let MUCState {..} = mucPluginState
+    case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
+      (subjE : _) -> do
+        rooms <- readIORef mucRooms
+        case M.lookup bare rooms of
+          Just (Right (room, handler)) -> do
+            let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
+                room' = room {mucSubject = subj}
+            atomicWriteIORef mucRooms $ M.insert bare (Right (room', handler)) rooms
+            handler room' RoomSubject
+            return $ Just InSilent
+          _ -> return Nothing
+      _ -> return Nothing
+  tryHandle _ _ = return Nothing
 
 data MUCHandleResult a
   = NotMUCEvent
   | MUCHandled
   | MUCRun a
 
-mucPresenceHandler :: (MonadStream m) => MUCSlot m -> MUCState m -> PresenceHandler m
-mucPresenceHandler _ _ (AllResourcesOffline _ _) = return Nothing -- MUC rooms don't use bare JID presence
-mucPresenceHandler mucEventHandler (MUCState {..}) (ResourcePresence addr mpres) = do
-  let bare = fullBare addr
-      resource = fullResource addr
-  processed <- atomicModifyIORef' mucRooms $ \rooms ->
-    case M.lookup bare rooms of
-      Just (Right (MUC {..}, _))
-        | ResourceUnavailable _ <- mpres
-        , resource == mucNick ->
-            (M.delete bare rooms, MUCRun $ Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft)
-      Just (Right (room@(MUC {..}), handler)) ->
-        case presenceUpdate resource mpres mucMembers of
-          Nothing -> (rooms, MUCHandled)
-          Just (members, _event) ->
-            let room' = room {mucMembers = members}
-                mucPres =
-                  MUCPresence
-                    { mucPresence = case mpres of ResourceAvailable p -> p; ResourceUnavailable _ -> defaultPresence
-                    , mucRealJid = Nothing
-                    , mucAffiliation = AffiliationNone
-                    , mucRole = RoleNone
-                    }
-             in (M.insert bare (Right (room', handler)) rooms, MUCRun $ handler room' $ RoomPresence resource (MUCUpdated mucPres))
-      Just (Left pending) ->
-        case mpres of
-          ResourceAvailable pres ->
-            let mucPres = MUCPresence {mucPresence = pres, mucRealJid = Nothing, mucAffiliation = AffiliationNone, mucRole = RoleNone}
-                members = M.insert resource mucPres $ pmucMembers pending
-                pending' = pending {pmucMembers = members}
-                room' =
-                  MUC
-                    { mucMembers = M.map mucPresence members
-                    , mucSubject = Nothing
-                    , mucNick = pmucNick pending
-                    , mucNonAnonymous = False
-                    }
-                joinRoom = do
-                  Slot.call mucEventHandler $ MUCJoinedRoom addr room'
-                  putMVar (pmucPending pending) (MUCJoinFinished room')
-             in if resource == pmucNick pending
-                  then (M.insert bare (Right (room', pmucHandler pending)) rooms, MUCRun joinRoom)
-                  else (M.insert bare (Left pending') rooms, MUCHandled)
-          ResourceUnavailable err
-            | resource == pmucNick pending ->
-                let leaveRoom = do
-                      Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft
-                      putMVar (pmucPending pending) (MUCJoinStopped err)
-                 in (M.delete bare rooms, MUCRun leaveRoom)
-          _ -> (rooms, MUCHandled)
-      Nothing -> (rooms, NotMUCEvent)
-  case processed of
-    MUCRun action -> action >> return (Just ())
-    MUCHandled -> return (Just ())
-    NotMUCEvent -> return Nothing
+instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
+  tryHandle _ (AllResourcesOffline _ _) = return Nothing -- MUC rooms don't use bare JID presence
+  tryHandle (MUCPlugin {..}) (ResourcePresence addr mpres) = do
+    let MUCState {..} = mucPluginState
+        mucEventHandler = mucPluginSlot
+        bare = fullBare addr
+        resource = fullResource addr
+    processed <- atomicModifyIORef' mucRooms $ \rooms ->
+      case M.lookup bare rooms of
+        Just (Right (MUC {..}, _))
+          | ResourceUnavailable _ <- mpres
+          , resource == mucNick ->
+              (M.delete bare rooms, MUCRun $ Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft)
+        Just (Right (room@(MUC {..}), handler)) ->
+          case presenceUpdate resource mpres mucMembers of
+            Nothing -> (rooms, MUCHandled)
+            Just (members, _event) ->
+              let room' = room {mucMembers = members}
+                  mucPres =
+                    MUCPresence
+                      { mucPresence = case mpres of ResourceAvailable p -> p; ResourceUnavailable _ -> defaultPresence
+                      , mucRealJid = Nothing
+                      , mucAffiliation = AffiliationNone
+                      , mucRole = RoleNone
+                      }
+               in (M.insert bare (Right (room', handler)) rooms, MUCRun $ handler room' $ RoomPresence resource (MUCUpdated mucPres))
+        Just (Left pending) ->
+          case mpres of
+            ResourceAvailable pres ->
+              let mucPres = MUCPresence {mucPresence = pres, mucRealJid = Nothing, mucAffiliation = AffiliationNone, mucRole = RoleNone}
+                  members = M.insert resource mucPres $ pmucMembers pending
+                  pending' = pending {pmucMembers = members}
+                  room' =
+                    MUC
+                      { mucMembers = M.map mucPresence members
+                      , mucSubject = Nothing
+                      , mucNick = pmucNick pending
+                      , mucNonAnonymous = False
+                      }
+                  joinRoom = do
+                    Slot.call mucEventHandler $ MUCJoinedRoom addr room'
+                    putMVar (pmucPending pending) (MUCJoinFinished room')
+               in if resource == pmucNick pending
+                    then (M.insert bare (Right (room', pmucHandler pending)) rooms, MUCRun joinRoom)
+                    else (M.insert bare (Left pending') rooms, MUCHandled)
+            ResourceUnavailable err
+              | resource == pmucNick pending ->
+                  let leaveRoom = do
+                        Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft
+                        putMVar (pmucPending pending) (MUCJoinStopped err)
+                   in (M.delete bare rooms, MUCRun leaveRoom)
+            _ -> (rooms, MUCHandled)
+        Nothing -> (rooms, NotMUCEvent)
+    case processed of
+      MUCRun action -> action >> return (Just ())
+      MUCHandled -> return (Just ())
+      NotMUCEvent -> return Nothing
 
 mucSlot :: (MonadStream m) => XMPPPluginsRef m -> m (MUCSlot m)
 mucSlot = getPluginsHook Proxy
@@ -395,14 +406,15 @@ mucSlot = getPluginsHook Proxy
 mucPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mucPlugin pluginsRef = do
   mucRooms <- newIORef M.empty
-  let state = MUCState {..}
-  insertPluginsHook state pluginsRef
-  mucEventHandler <- Slot.new
-  insertPluginsHook mucEventHandler pluginsRef
+  let mucPluginState = MUCState {..}
+  mucPluginSlot <- Slot.new
+  let plugin :: MUCPlugin m = MUCPlugin {..}
+  insertPluginsHook mucPluginState pluginsRef
+  insertPluginsHook mucPluginSlot pluginsRef
   let discoInfo = emptyDiscoInfo {discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton mucNS}}
   inHandlers <- pluginsInHandlers pluginsRef
-  void $ HandlerList.add inHandlers (mucInHandler mucEventHandler state (pluginsSession pluginsRef))
+  HL.pushNewOrFailM plugin inHandlers
   pHandlers <- presenceHandlers pluginsRef
-  void $ HandlerList.add pHandlers (mucPresenceHandler mucEventHandler state)
+  HL.pushNewOrFailM plugin pHandlers
   dInfos <- discoInfos pluginsRef
   void $ RefMap.add dInfos $ return discoInfo

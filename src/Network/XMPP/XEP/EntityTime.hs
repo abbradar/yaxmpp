@@ -13,7 +13,8 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import qualified Control.HandlerList as HandlerList
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import qualified Data.RefMap as RefMap
 import Data.Time.XMPP
 import Network.XMPP.Address
@@ -27,19 +28,21 @@ timeNS :: Text
 timeName :: Text -> Name
 (timeNS, timeName) = namePair "urn:xmpp:time"
 
-timeIQHandler :: (MonadStream m) => InRequestIQ -> m (Maybe RequestIQResponse)
-timeIQHandler (InRequestIQ {iriType = IQGet, iriChildren = [req]})
-  | elementName req == timeTag = do
-      tz <- liftIO getCurrentTimeZone
-      utime <- liftIO getCurrentTime
-      let result =
-            [ ("tzo", timeZoneToXmpp tz)
-            , ("utc", utcTimeToXmpp utime)
-            ]
-      return $ Just $ IQResult [element timeTag [] $ map (\(name, value) -> NodeElement $ element (timeName name) [] [NodeContent value]) result]
- where
-  timeTag = timeName "time"
-timeIQHandler _ = return Nothing
+data EntityTimePlugin = EntityTimePlugin
+
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse EntityTimePlugin where
+  tryHandle _ (InRequestIQ {iriType = IQGet, iriChildren = [req]})
+    | elementName req == timeTag = do
+        tz <- liftIO getCurrentTimeZone
+        utime <- liftIO getCurrentTime
+        let result =
+              [ ("tzo", timeZoneToXmpp tz)
+              , ("utc", utcTimeToXmpp utime)
+              ]
+        return $ Just $ IQResult [element timeTag [] $ map (\(name, value) -> NodeElement $ element (timeName name) [] [NodeContent value]) result]
+   where
+    timeTag = timeName "time"
+  tryHandle _ _ = return Nothing
 
 getEntityTime :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m (Either StanzaError ZonedTime)
 getEntityTime pluginsRef addr = do
@@ -74,6 +77,6 @@ entityTimePlugin pluginsRef = do
           { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton timeNS}
           }
   iqHandlers <- pluginsIQHandlers pluginsRef
-  void $ HandlerList.add iqHandlers timeIQHandler
+  HL.pushNewOrFailM EntityTimePlugin iqHandlers
   dInfos <- discoInfos pluginsRef
   void $ RefMap.add dInfos $ return discoInfo

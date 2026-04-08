@@ -5,6 +5,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Logger
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Except
+import Control.Slot (SlotSignal (..))
 import qualified Control.Slot as Slot
 import qualified Data.Aeson as JSON
 import Data.ByteString.Char8 (ByteString)
@@ -55,6 +56,38 @@ data Settings = Settings
   deriving (Show, Eq, Generic)
 
 instance JSON.FromJSON Settings
+
+data IRCBridgePlugin m = IRCBridgePlugin
+  { ircConferenceServer :: XMPPDomain
+  , ircGetNick :: m ByteString
+  , ircServReply :: ByteString -> [ByteString] -> m ()
+  , ircUserReply :: ByteString -> ByteString -> [ByteString] -> m ()
+  }
+
+instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (IRCBridgePlugin m) where
+  emitSignal (IRCBridgePlugin {..}) (addr@(XMPPAddress {..}), IMMessage {..}) =
+    if addressDomain == ircConferenceServer
+      then do
+        let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
+            otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
+        nick <- ircGetNick
+        unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
+      else $(logWarn) [i|Got unknown message from #{addr}: #{imBody}|]
+
+instance (MonadStream m) => SlotSignal m MUCEvent (IRCBridgePlugin m) where
+  emitSignal (IRCBridgePlugin {..}) = \case
+    MUCJoinedRoom jid (MUC {..}) -> do
+      nick <- ircGetNick
+      let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
+          users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys mucMembers
+      ircServReply "JOIN" [channel]
+      case mucSubject of
+        Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
+        _ -> return ()
+      ircServReply rplNAMREPLY [nick, "*", channel, users]
+      ircServReply rplENDOFNAMES [nick, channel]
+    MUCRejected _ _ -> fail "MUC rejected"
+    MUCLeftRoom _ _ -> fail "MUC left"
 
 rplWELCOME :: ByteString
 rplWELCOME = "001"
@@ -135,30 +168,17 @@ main = runStderrLoggingT $ do
               nickVar <- newEmptyMVar
               let getNick = T.encodeUtf8 . resourceText <$> readMVar nickVar
 
+              let bridgePlugin =
+                    IRCBridgePlugin
+                      { ircConferenceServer = conferenceServer settings
+                      , ircGetNick = getNick
+                      , ircServReply = ircServReply
+                      , ircUserReply = ircUserReply
+                      }
               imS <- lift $ imSlot pluginsRef
-              void $ lift $ Slot.add imS $ \(addr@(XMPPAddress {..}), msg@(IMMessage {..})) ->
-                if addressDomain == conferenceServer settings
-                  then do
-                    let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
-                        otherNick = T.encodeUtf8 $ T.map (\x -> if x == ' ' then '\xA0' else x) $ resourceText $ fromJust addressResource
-                    nick <- getNick
-                    unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
-                  else $(logWarn) [i|Got unknown message from #{addr}: #{msg}|]
-
+              lift $ Slot.pushNewOrFailM bridgePlugin imS
               mSlot <- lift $ mucSlot pluginsRef
-              void $ lift $ Slot.add mSlot $ \case
-                MUCJoinedRoom jid (MUC {..}) -> do
-                  nick <- getNick
-                  let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
-                      users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys mucMembers
-                  ircServReply "JOIN" [channel]
-                  case mucSubject of
-                    Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
-                    _ -> return ()
-                  ircServReply rplNAMREPLY [nick, "*", channel, users]
-                  ircServReply rplENDOFNAMES [nick, channel]
-                MUCRejected _ _ -> fail "MUC rejected"
-                MUCLeftRoom _ _ -> fail "MUC left"
+              lift $ Slot.pushNewOrFailM bridgePlugin mSlot
 
               C.mapM_ $ \req -> do
                 $(logDebug) [i|Got IRC request: #{req}|]

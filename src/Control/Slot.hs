@@ -1,24 +1,28 @@
 {-# LANGUAGE Strict #-}
 
 module Control.Slot (
-  module Data.RefMap,
+  module Data.ClassVector.Mutable,
+  SlotSignal (..),
   Slot,
   call,
-)
-where
+) where
 
 import Control.Exception (SomeException)
 import Control.Monad
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.Logger
-import Data.RefMap
+import Data.ClassVector (ClassBox (..))
+import Data.ClassVector.Mutable
 import Data.String.Interpolate (i)
 import UnliftIO.Exception (catch)
 
-type Slot m a = RefMap (a -> m ())
+class SlotSignal m a s where
+  emitSignal :: s -> a -> m ()
+
+type Slot m a = ClassVectorRef (SlotSignal m a)
 
 call :: (MonadLogger m, MonadUnliftIO m) => Slot m a -> a -> m ()
-call r a = do
-  callbacks <- entries r
-  forM_ callbacks $ \handler ->
-    handler a `catch` \(e :: SomeException) -> $(logError) [i|Unhandled exception in handler: #{e}|]
+call slot a = do
+  signals <- toAscList slot
+  forM_ signals $ \(ClassBox s) ->
+    emitSignal s a `catch` \(e :: SomeException) -> $(logError) [i|Unhandled exception in slot handler: #{e}|]

@@ -18,7 +18,8 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import qualified Control.HandlerList as HandlerList
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import qualified Data.RefMap as RefMap
 import Network.XMPP.Address
 import Network.XMPP.Plugin
@@ -47,18 +48,20 @@ defaultVersion =
     , swOS = Just $ T.pack os
     }
 
-versionIQHandler :: (MonadStream m) => VersionInfo -> InRequestIQ -> m (Maybe RequestIQResponse)
-versionIQHandler (VersionInfo {..}) (InRequestIQ {iriType = IQGet, iriChildren = [req]})
-  | elementName req == queryTag =
-      return $ Just $ IQResult [element queryTag [] $ map (\(name, value) -> NodeElement $ element (versionName name) [] [NodeContent value]) result]
- where
-  queryTag = versionName "query"
-  result =
-    [ ("name", swName)
-    , ("version", swVersion)
-    ]
-      ++ maybeToList (fmap ("os",) swOS)
-versionIQHandler _ _ = return Nothing
+newtype VersionPlugin = VersionPlugin VersionInfo
+
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse VersionPlugin where
+  tryHandle (VersionPlugin (VersionInfo {..})) (InRequestIQ {iriType = IQGet, iriChildren = [req]})
+    | elementName req == queryTag =
+        return $ Just $ IQResult [element queryTag [] $ map (\(name, value) -> NodeElement $ element (versionName name) [] [NodeContent value]) result]
+   where
+    queryTag = versionName "query"
+    result =
+      [ ("name", swName)
+      , ("version", swVersion)
+      ]
+        ++ maybeToList (fmap ("os",) swOS)
+  tryHandle _ _ = return Nothing
 
 getVersion :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m (Either StanzaError VersionInfo)
 getVersion pluginsRef addr = do
@@ -90,6 +93,6 @@ versionPlugin pluginsRef settings = do
           { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton versionNS}
           }
   iqHandlers <- pluginsIQHandlers pluginsRef
-  void $ HandlerList.add iqHandlers $ versionIQHandler settings
+  HL.pushNewOrFailM (VersionPlugin settings) iqHandlers
   dInfos <- discoInfos pluginsRef
   void $ RefMap.add dInfos $ return discoInfo
