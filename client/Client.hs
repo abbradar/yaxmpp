@@ -86,7 +86,7 @@ data Settings = Settings
   , user :: Text
   , password :: Text
   , resource :: Text
-  , rosterCache :: FilePath
+  , cachePath :: FilePath
   , logFile :: FilePath
   }
   deriving (Show, Eq, Generic)
@@ -167,7 +167,7 @@ main = do
               cancel periodicId
               sessionClose $ ssSession sess
 
-        oldCache <- liftIO $ (JSON.decodeStrict <$> B.readFile (rosterCache settings)) `catch` (\(SomeException _) -> return Nothing)
+        oldCache <- liftIO $ (JSON.decodeStrict <$> B.readFile (cachePath settings)) `catch` (\(SomeException _) -> return Nothing)
         pluginsRef <- newXmppPlugins sess oldCache
         presencePlugin pluginsRef
         capsPlugin pluginsRef
@@ -189,7 +189,7 @@ main = do
 
         let saveCache = do
               cache <- getCache pluginsRef
-              liftIO $ BL.writeFile (rosterCache settings) $ JSON.encode cache
+              liftIO $ BL.writeFile (cachePath settings) $ JSON.encode cache
 
         flip finally saveCache $ do
           let clientPlugin = ClientPlugin writeMessage

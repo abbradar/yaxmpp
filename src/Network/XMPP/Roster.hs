@@ -204,7 +204,9 @@ sendFirstRequest session mold = do
 
   case (mold, resp) of
     (_, Left err) -> fail [i|handleFirstRequest: error while requesting roster: #{err}|]
-    (Just old, Right []) | isJust $ rosterVersion old -> return old
+    (Just old, Right []) | isJust $ rosterVersion old -> do
+      $(logInfo) [i|Reusing cached roster (version: #{rosterVersion old})|]
+      return old
     (_, Right [res]) | elementName res == rosterName "query" ->
       case mapM parseInitial $ fromElement res $/ curAnyElement of
         Left e -> fail $ T.unpack e
