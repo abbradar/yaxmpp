@@ -155,27 +155,29 @@ modifyRead :: forall m a. (MonadStream m) => Session m -> (ReadSessionData -> m 
 modifyRead sess@(Session {..}) comp = modifyMVar sessionRLock tryRun
  where
   tryRun rs = handle (tryHandle rs) $ comp rs
-  tryHandle :: ReadSessionData -> ConnectionInterruptionException -> m a
+  tryHandle :: ReadSessionData -> ConnectionInterruptionException -> m (ReadSessionData, a)
   tryHandle rs e = case sessionReconnect of
     Nothing -> throwM e
     Just ri -> do
       modifyMVar_ sessionWLock $ \ws -> do
         ws' <- tryRestart sess ri rs ws e
         return ws'
-      tryRun rs {rsReconnected = True}
+      tryRun $ rs {rsReconnected = True}
 
 modifyWrite :: forall m a. (MonadStream m) => Session m -> (WriteSessionData -> m (WriteSessionData, a)) -> m a
 modifyWrite sess@(Session {..}) comp = do
-  result <- modifyMVar_ sessionWLock tryRun
+  result <- modifyMVar sessionWLock tryRun
   handleResult result
  where
-  tryRun ws = handle saveException $ fmap Right $ comp ws
+  tryRun ws = handle (saveException ws) $ do
+    (ws', a) <- comp ws
+    return (ws', Right a)
 
-  saveException :: ConnectionInterruptionException -> m (Either (ConnectionInterruptionException, Int) (WriteSessionData, a))
-  saveException e = do
+  saveException :: WriteSessionData -> ConnectionInterruptionException -> m (WriteSessionData, Either (ConnectionInterruptionException, Int) a)
+  saveException ws e = do
     -- Remember the stream generation before releasing the write lock.
     gen <- readIORef sessionStreamGen
-    return Left (e, gen)
+    return (ws, Left (e, gen))
 
   handleResult (Right a) = return a
   handleResult (Left (e, gen)) =
@@ -186,15 +188,17 @@ modifyWrite sess@(Session {..}) comp = do
         result <- mask $ \restore -> do
           rs <- takeMVar sessionRLock
 
-          let continueReconnect = do
+          let continueReconnect ws = do
                 -- Check if another thread already reconnected while we were waiting.
                 currentGen <- readIORef sessionStreamGen
-                unless (currentGen /= gen) $ tryRestart sess ri rs ws e
+                if currentGen /= gen
+                  then return ws
+                  else tryRestart sess ri rs ws e
 
-          modifyMVar_ sessionWLock $ \ws -> do
-            restore continueReconnect `onException` putMVar sessionRLock rs
+          modifyMVar sessionWLock $ \ws -> do
+            ws' <- restore (continueReconnect ws) `onException` putMVar sessionRLock rs
             putMVar sessionRLock $ rs {rsReconnected = True}
-            restore $ tryRun ws
+            restore $ tryRun ws'
         handleResult result
 
 sessionSend :: (MonadStream m) => Session m -> Element -> m ()
