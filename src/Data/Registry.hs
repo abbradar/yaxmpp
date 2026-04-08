@@ -21,7 +21,7 @@ module Data.Registry (
   toList,
 ) where
 
-import Data.ClassBox (ClassBox (..))
+import Data.ClassBox (ClassBox (..), showBoxes)
 import Data.Kind (Constraint, Type)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -50,12 +50,7 @@ instance (forall a. (constr a) => Show a) => Show (Registry constr) where
     go (Registry m : rest) = showString "Registry " . showRegBoxes (M.elems m) . showString "," . go rest
 
 showRegBoxes :: forall constr. (forall a. (constr a) => Show a) => [ClassBox (RegistryConstraint constr)] -> ShowS
-showRegBoxes xs = showString "[" . go xs . showString "]"
- where
-  go :: [ClassBox (RegistryConstraint constr)] -> ShowS
-  go [] = id
-  go [ClassBox v] = showsPrec 0 v
-  go (ClassBox v : rest) = showsPrec 0 v . showString ", " . go rest
+showRegBoxes xs = showBoxes xs
 
 empty :: Registry constr
 empty = Registry M.empty
