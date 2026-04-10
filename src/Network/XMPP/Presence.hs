@@ -13,6 +13,8 @@ module Network.XMPP.Presence (
   PresenceEvent (..),
   presenceUpdate,
   presenceStanza,
+  AllPresencesMap,
+  getAllPresences,
 )
 where
 
@@ -45,6 +47,7 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import TextShow (showt)
+import UnliftIO.IORef
 
 data ShowState
   = ShowAway
@@ -144,28 +147,42 @@ parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameName
 
 type PresenceCodecList m = CodecList m Presence
 
+type AllPresencesMap = Map FullJID Presence
+
+newtype PresenceState = PresenceState
+  { allPresencesRef :: IORef AllPresencesMap
+  }
+
 data PresencePlugin m = PresencePlugin
   { presencePluginHandlers :: HandlerList m PresenceUpdate ()
   , presencePluginCodecs :: PresenceCodecList m
+  , presencePluginState :: PresenceState
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) where
   tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren}) =
     Just <$> do
+      let PresenceState {..} = presencePluginState
       case op of
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
             p' <- decodeAll presencePluginCodecs p
+            atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.insert faddr p'
             emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceAvailable p'
             return InSilent
           Left e -> return $ InError e
         PresenceUnset -> do
-          emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceUnavailable $ parseExtended istChildren
+          let extended = parseExtended istChildren
+          atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.delete faddr
+          emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceUnavailable extended
           return InSilent
   -- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
   tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Right (Just PresenceUnavailable)), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
     Just <$> do
-      emitPresence presencePluginHandlers $ AllResourcesOffline bare (parseExtended istChildren)
+      let PresenceState {..} = presencePluginState
+          extended = parseExtended istChildren
+      atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.filterWithKey (\k _ -> fullBare k /= bare)
+      emitPresence presencePluginHandlers $ AllResourcesOffline bare extended
       return InSilent
   tryHandle _ _ = return Nothing
 
@@ -173,13 +190,22 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
 presenceCodecs :: (MonadStream m) => XMPPPluginsRef m -> m (PresenceCodecList m)
 presenceCodecs = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
+-- | Get the map of all currently available presences.
+getAllPresences :: (MonadStream m) => XMPPPluginsRef m -> m AllPresencesMap
+getAllPresences pluginsRef = do
+  PresenceState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy PresenceState) $ pluginsHooksSet pluginsRef
+  readIORef allPresencesRef
+
 presencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 presencePlugin pluginsRef = do
   presencePluginHandlers <- HL.new
   presencePluginCodecs <- Codec.new
-  let plugin :: PresencePlugin m = PresencePlugin {..}
+  allPresencesRef <- newIORef M.empty
+  let presencePluginState = PresenceState {..}
+      plugin :: PresencePlugin m = PresencePlugin {..}
   RegRef.insertNewOrFailM presencePluginHandlers $ pluginsHooksSet pluginsRef
   RegRef.insertNewOrFailM presencePluginCodecs $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM presencePluginState $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
 

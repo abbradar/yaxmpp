@@ -183,20 +183,22 @@ modifyWrite sess@(Session {..}) comp = do
     case sessionReconnect of
       Nothing -> throwM e
       Just ri -> do
+        let continueReconnect rs ws = do
+              -- Check if another thread already reconnected while we were waiting.
+              (_, currentGen) <- readIORef sessionStream
+              if currentGen /= gen
+                then return (rs, ws)
+                else do
+                  ws' <- tryRestart sess ri rs ws e
+                  let rs' = rs {rsReconnected = True}
+                  return (rs', ws')
+
         -- We want to release the read lock later if successful.
         result <- mask $ \restore -> do
           rs <- takeMVar sessionRLock
-
-          let continueReconnect ws = do
-                -- Check if another thread already reconnected while we were waiting.
-                (_, currentGen) <- readIORef sessionStream
-                if currentGen /= gen
-                  then return ws
-                  else tryRestart sess ri rs ws e
-
           modifyMVar sessionWLock $ \ws -> do
-            ws' <- restore (continueReconnect ws) `onException` putMVar sessionRLock rs
-            putMVar sessionRLock $ rs {rsReconnected = True}
+            (rs', ws') <- restore (continueReconnect rs ws) `onException` putMVar sessionRLock rs
+            putMVar sessionRLock rs'
             restore $ tryRun ws'
         handleResult result
 

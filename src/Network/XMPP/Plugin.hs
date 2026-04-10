@@ -21,7 +21,7 @@ import qualified Control.HandlerList as HL
 import Control.Monad
 import Control.Monad.Logger
 import qualified Data.Aeson as JSON
-import Data.ClassBox (Unconstrained)
+import Data.ClassBox (ClassBox (..), Unconstrained)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Proxy
@@ -39,8 +39,6 @@ class XMPPPersistentCache m a | a -> m where
   cacheKey :: Proxy a -> Text
   cacheGet :: a -> m JSON.Value
 
-data SomePersistentCache m = forall a. XMPPPersistentCache m a => SomePersistentCache a
-
 data XMPPPluginsRef m = XMPPPluginsRef
   { pluginsSession :: StanzaSession m
   , pluginsHooksSet :: RegistryRef Unconstrained
@@ -48,7 +46,7 @@ data XMPPPluginsRef m = XMPPPluginsRef
   , pluginsInHandlers' :: HandlerList m InStanza InResponse
   , pluginsIQHandlers' :: HandlerList m InRequestIQ RequestIQResponse
   , pluginsOldCache :: Map Text JSON.Value
-  , pluginsCacheGetters :: IORef (Map Text (SomePersistentCache m))
+  , pluginsCacheGetters :: IORef (Map Text (ClassBox (XMPPPersistentCache m)))
   }
 
 type PluginInHandler m = InStanza -> m (Maybe InResponse)
@@ -110,11 +108,11 @@ registerCacheGetter ref a = do
   success <- atomicModifyIORef' (pluginsCacheGetters ref) $ \m ->
     if M.member key m
       then (m, False)
-      else (M.insert key (SomePersistentCache a) m, True)
+      else (M.insert key (ClassBox a) m, True)
   unless success $ fail [i|registerCacheGetter: duplicate cache key: #{key}|]
 
 getCache :: (MonadStream m) => XMPPPluginsRef m -> m JSON.Value
 getCache ref = do
   getters <- readIORef (pluginsCacheGetters ref)
-  values <- mapM (\(SomePersistentCache a) -> cacheGet a) getters
+  values <- mapM (\(ClassBox a) -> cacheGet a) getters
   return $ JSON.toJSON $ M.filter (/= JSON.Null) values
