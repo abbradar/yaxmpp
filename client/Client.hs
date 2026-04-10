@@ -1,4 +1,3 @@
-import Control.Exception (AsyncException (..))
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Logger
@@ -22,8 +21,8 @@ import Network.Connection
 import Network.DNS
 import qualified System.Console.Haskeline as HL
 import System.Environment
-import UnliftIO (MonadIO, liftIO, withRunInIO)
-import UnliftIO.Async
+import Control.Concurrent.Linked
+import UnliftIO (liftIO, withRunInIO)
 import UnliftIO.Concurrent
 
 import qualified Data.Registry.Mutable as RegRef
@@ -99,15 +98,6 @@ instance JSON.FromJSON Settings
 
 main :: IO ()
 main = do
-  mainTid <- myThreadId
-  let criticalThread :: (MonadIO m, MonadMask m) => m () -> (forall a. m a -> m a) -> m ()
-      criticalThread run unmask =
-        unmask run
-          `catches` [ Handler (\case ThreadKilled -> return (); e -> throwTo mainTid e)
-                    , Handler (\AsyncCancelled -> return ())
-                    , Handler (\(e :: SomeException) -> throwTo mainTid e)
-                    ]
-
   [settingsFile] <- getArgs
   Right settings <- Yaml.decodeFileEither settingsFile
   logChanFile <- newChan
@@ -119,7 +109,7 @@ main = do
 
       fileLogThread = runFileLoggingT (logFile settings) $ unChanLoggingT logChanFile
 
-  withAsyncWithUnmask (criticalThread fileLogThread) $ \_ -> withAsyncWithUnmask (criticalThread logMessageThread) $ \_ -> runChanLoggingT logChanFile $ do
+  bracket (forkLinked fileLogThread) killThread $ \_ -> bracket (forkLinked logMessageThread) killThread $ \_ -> runChanLoggingT logChanFile $ do
     rs <- liftIO $ makeResolvSeed defaultResolvConf
     Right svrs <- liftIO $ withResolver rs $ \resolver -> runExceptT $ findServers resolver (T.encodeUtf8 $ server settings) Nothing
     $(logInfo) [i|Found servers: #{svrs}|]
@@ -161,9 +151,9 @@ main = do
     bracket initMain (sessionKill . ssSession) $ \sess -> do
       let periodicThread = forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)
 
-      withAsyncWithUnmask (criticalThread periodicThread) $ \periodicId -> do
+      bracket (forkLinked periodicThread) killThread $ \periodicId -> do
         let terminate = do
-              cancel periodicId
+              killThread periodicId
               sessionClose $ ssSession sess
 
         oldCache <- liftIO $ (JSON.decodeStrict <$> B.readFile (cachePath settings)) `catch` (\(SomeException _) -> return Nothing)
@@ -401,10 +391,10 @@ main = do
               promptThread = withRunInIO $ \runInBase -> HL.runInputT inputSettings $ do
                 printFunc <- HL.getExternalPrint
                 let writeThread = forever (readChan consoleChan >>= printFunc . (++ "\n"))
-                bracket (liftIO $ forkIOWithUnmask $ criticalThread writeThread) (liftIO . killThread) $ \_ -> do
+                bracket (liftIO $ forkLinked writeThread) (liftIO . killThread) $ \_ -> do
                   promptLoop runInBase
 
-          withAsyncWithUnmask (\unmask -> unmask promptThread `finally` terminate) $ \_ -> do
+          bracket (forkLinked $ promptThread `finally` terminate) killThread $ \_ -> do
             let checkClosed e@ConnectionClosedException = do
                   closed <- sessionIsClosed $ ssSession sess
                   unless closed $ throwM e

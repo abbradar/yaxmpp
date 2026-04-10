@@ -17,7 +17,9 @@ module Network.XMPP.XEP.Disco (
 ) where
 
 import Control.Arrow
+import Control.Concurrent.Linked
 import Control.Monad
+import Control.Monad.Logger
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -46,6 +48,7 @@ import Network.XMPP.Stream
 import Network.XMPP.Utils
 import Network.XMPP.XML
 import UnliftIO.IORef
+import UnliftIO.MVar
 
 data DiscoIdentity = DiscoIdentity
   { discoCategory :: Text
@@ -136,8 +139,11 @@ getDiscoEntity pluginsRef addr node handler = do
   cache <- readIORef discoCacheRef
   let key = (addr, node)
   case M.lookup key cache of
-    Just entity -> handler $ Right entity
+    Just entity -> do
+      $(logDebug) [i|getDiscoEntity: cache hit for #{addressToText addr} node=#{show node}|]
+      handler $ Right entity
     Nothing -> do
+      $(logDebug) [i|getDiscoEntity: cache miss for #{addressToText addr} node=#{show node}, sending request|]
       let sess = pluginsSession pluginsRef
           req =
             OutRequestIQ
@@ -146,6 +152,7 @@ getDiscoEntity pluginsRef addr node handler = do
               , oriChildren = [element (discoInfoName "query") (maybeToList $ fmap ("node",) node) []]
               }
       stanzaRequest sess req $ \ret -> do
+        $(logDebug) [i|getDiscoEntity: got response for #{addressToText addr} node=#{show node}: #{show ret}|]
         let result = case ret of
               Left e -> Left e
               Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
@@ -197,9 +204,12 @@ data DiscoTopo = DiscoTopo
   deriving (Show, Eq)
 
 getDiscoTopo :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoTopo -> m ()) -> m ()
-getDiscoTopo pluginsRef addr node handler =
+getDiscoTopo pluginsRef addr node handler = do
+  $(logDebug) [i|getDiscoTopo: starting for #{addressToText addr} node=#{show node}|]
   getDiscoEntity pluginsRef addr node $ \case
-    Left e -> handler $ Left e
+    Left e -> do
+      $(logDebug) [i|getDiscoTopo: entity error for #{addressToText addr}: #{e}|]
+      handler $ Left e
     Right discoRoot ->
       case node of
         Just _ ->
@@ -208,20 +218,25 @@ getDiscoTopo pluginsRef addr node handler =
           getDiscoItems pluginsRef addr node $ \case
             Left e -> handler $ Left e
             Right items ->
-              getDiscoTopoItems pluginsRef (M.toList items) [] $ \discoItems ->
-                handler $ Right DiscoTopo {discoItems = M.fromList discoItems, ..}
+              getDiscoTopoItems pluginsRef (M.toList items) $ \discoItems ->
+                handler $ Right DiscoTopo {..}
 
 getDiscoTopoItems ::
   (MonadStream m) =>
   XMPPPluginsRef m ->
   [((XMPPAddress, Maybe DiscoNode), Maybe LocalizedText)] ->
-  [((XMPPAddress, Maybe DiscoNode), (Maybe LocalizedText, Either StanzaError DiscoTopo))] ->
-  ([((XMPPAddress, Maybe DiscoNode), (Maybe LocalizedText, Either StanzaError DiscoTopo))] -> m ()) ->
+  (Map (XMPPAddress, Maybe DiscoNode) (Maybe LocalizedText, Either StanzaError DiscoTopo) -> m ()) ->
   m ()
-getDiscoTopoItems _ [] acc handler = handler $ reverse acc
-getDiscoTopoItems pluginsRef ((k@(сaddr, cnode), name) : rest) acc handler =
-  getDiscoTopo pluginsRef сaddr cnode $ \topo ->
-    getDiscoTopoItems pluginsRef rest ((k, (name, topo)) : acc) handler
+getDiscoTopoItems _ [] handler = handler M.empty
+getDiscoTopoItems pluginsRef items handler = void $ forkLinked $ do
+  vars <- forM items $ \(k@(сaddr, cnode), name) -> do
+    resultVar <- newEmptyMVar
+    getDiscoTopo pluginsRef сaddr cnode $ putMVar resultVar
+    return (k, name, resultVar)
+  results <- forM vars $ \(k, name, resultVar) -> do
+    topo <- takeMVar resultVar
+    return (k, (name, topo))
+  handler $ M.fromList results
 
 emitNamed :: Map k (Maybe LocalizedText) -> Name -> (k -> [(Name, Text)]) -> [Element]
 emitNamed elems name toAttrs = concatMap toNamed $ M.toAscList elems

@@ -27,6 +27,7 @@ import Network.Connection
 import Network.DNS
 import qualified Network.IRC as IRC
 import System.Environment
+import Control.Concurrent.Linked
 import UnliftIO (liftIO)
 import UnliftIO.Concurrent
 
@@ -145,7 +146,7 @@ main = runStderrLoggingT $ do
           Right s -> stanzaSessionCreate s
 
   bracket initMain (sessionClose . ssSession) $ \sess ->
-    bracket (forkIO $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
+    bracket (forkLinked $ forever $ threadDelay 5000000 >> sessionPeriodic (ssSession sess)) killThread $ \_ -> do
       $(logInfo) "Session successfully created!"
       pluginsRef <- newXmppPlugins sess Nothing
       presencePlugin pluginsRef
@@ -163,7 +164,7 @@ main = runStderrLoggingT $ do
           ircServReply cmd args = ircReply $ IRC.Message (Just $ IRC.Server conferenceHost) cmd args
           ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick (Just nick) (Just conferenceHost)) cmd args
 
-      _ <- forkIO $ do
+      _ <- forkLinked $ do
         rst <- getRoster pluginsRef
         $(logInfo) [i|Got initial roster: #{rst}|]
         myPresenceSend pluginsRef (Just defaultPresence)
@@ -252,7 +253,7 @@ main = runStderrLoggingT $ do
                 when (isNothing res) $ $(logWarn) [i|Failed to parse IRC message: #{dat}|]
                 return res
 
-          _ <- forkIO $ runConduit $ sourceTQueue backQueue .| C.map IRC.encode .| C.mapM clearReply .| appSink app
+          _ <- forkLinked $ runConduit $ sourceTQueue backQueue .| C.map IRC.encode .| C.mapM clearReply .| appSink app
           runConduit $ appSource app .| C.concatMapAccum resplit "" .| C.mapMaybeM parseMsg .| processIrcRequest
 
       forever $ pluginsSessionStep pluginsRef
