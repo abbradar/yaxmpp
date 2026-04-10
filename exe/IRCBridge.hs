@@ -1,7 +1,6 @@
 import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.Catch
-import Control.Monad.IO.Class
 import Control.Monad.Logger
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Except
@@ -28,6 +27,7 @@ import Network.Connection
 import Network.DNS
 import qualified Network.IRC as IRC
 import System.Environment
+import UnliftIO (liftIO)
 import UnliftIO.Concurrent
 
 import qualified Data.Registry as Reg

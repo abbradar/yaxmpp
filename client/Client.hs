@@ -1,7 +1,6 @@
 import Control.Exception (AsyncException (..))
 import Control.Monad
 import Control.Monad.Catch
-import Control.Monad.IO.Class
 import Control.Monad.Logger
 import Control.Monad.Trans.Except
 import Control.Slot (SlotSignal (..))
@@ -23,7 +22,7 @@ import Network.Connection
 import Network.DNS
 import qualified System.Console.Haskeline as HL
 import System.Environment
-import UnliftIO (withRunInIO)
+import UnliftIO (MonadIO, liftIO, withRunInIO)
 import UnliftIO.Async
 import UnliftIO.Concurrent
 
