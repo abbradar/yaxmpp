@@ -192,31 +192,30 @@ parseInitial e = do
           }
   return (jid, entry)
 
-sendFirstRequest :: (MonadStream m) => StanzaSession m -> Maybe Roster -> m Roster
-sendFirstRequest session mold = do
+sendFirstRequest :: (MonadStream m) => StanzaSession m -> Maybe Roster -> (Roster -> m ()) -> m ()
+sendFirstRequest session mold handler = do
   let ver =
         if any isRosterVer $ sessionStreamFeatures $ ssSession session
           then Just $ fromMaybe "" $ mold >>= rosterVersion
           else Nothing
       req = serverRequest IQGet [element (rosterName "query") (maybeToList $ fmap ("ver",) ver) []]
 
-  resp <- stanzaSyncRequest session req
-
-  case (mold, resp) of
-    (_, Left err) -> fail [i|handleFirstRequest: error while requesting roster: #{err}|]
-    (Just old, Right []) | isJust $ rosterVersion old -> do
-      $(logInfo) [i|Reusing cached roster (version: #{rosterVersion old})|]
-      return old
-    (_, Right [res]) | elementName res == rosterName "query" ->
-      case mapM parseInitial $ fromElement res $/ curAnyElement of
-        Left e -> fail $ T.unpack e
-        Right entries ->
-          return $
-            Roster
-              { rosterVersion = getAttr "ver" res
-              , rosterEntries = M.fromList entries
-              }
-    _ -> fail "handleFirstRequest: invalid roster response"
+  stanzaRequest session req $ \resp ->
+    case (mold, resp) of
+      (_, Left err) -> fail [i|handleFirstRequest: error while requesting roster: #{err}|]
+      (Just old, Right []) | isJust $ rosterVersion old -> do
+        $(logInfo) [i|Reusing cached roster (version: #{rosterVersion old})|]
+        handler old
+      (_, Right [res]) | elementName res == rosterName "query" ->
+        case mapM parseInitial $ fromElement res $/ curAnyElement of
+          Left e -> fail $ T.unpack e
+          Right entries ->
+            handler $
+              Roster
+                { rosterVersion = getAttr "ver" res
+                , rosterEntries = M.fromList entries
+                }
+      _ -> fail "handleFirstRequest: invalid roster response"
 
 getRosterEvent :: Element -> Either StanzaError RosterEvent
 getRosterEvent e = do
@@ -303,8 +302,7 @@ rosterPlugin pluginsRef = do
   rosterRef <- newIORef (Left firstRoster)
   let rosterSession = pluginsSession pluginsRef
       state = RosterState {..}
-      tryGet = do
-        ret <- sendFirstRequest rosterSession old
+      tryGet = sendFirstRequest rosterSession old $ \ret -> do
         atomicWriteIORef rosterRef (Right ret)
         putMVar firstRoster ret
   void $ forkIO $ tryGet `catch` \(e :: SomeException) -> putMVar firstRoster (throw e)

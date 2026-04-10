@@ -27,7 +27,6 @@ module Network.XMPP.Stanza (
   stanzaSend,
   stanzaSend',
   stanzaRequest,
-  stanzaSyncRequest,
   InResponse (..),
   InHandler,
   RequestIQResponse (..),
@@ -56,7 +55,6 @@ import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import UnliftIO.Exception
 import UnliftIO.IORef
-import UnliftIO.MVar
 
 import Data.Injective
 import Network.XMPP.Address
@@ -351,11 +349,6 @@ stanzaRequest StanzaSession {..} OutRequestIQ {..} handler = do
       cleanup = atomicModifyIORef' ssRequests $ \reqs -> (M.delete (oriTo, sid) reqs, ())
   sessionSend ssSession msg `onException` cleanup
 
-stanzaSyncRequest :: (MonadStream m) => StanzaSession m -> OutRequestIQ -> m IQResponse
-stanzaSyncRequest session req = do
-  ret <- newEmptyMVar
-  stanzaRequest session req $ \res -> putMVar ret res
-  takeMVar ret
 
 stanzaSendError :: (MonadStream m) => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError StanzaSession {..} e err@StanzaError {..} = do

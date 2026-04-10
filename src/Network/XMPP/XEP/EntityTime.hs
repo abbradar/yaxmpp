@@ -46,29 +46,28 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse EntityTimePl
     timeTag = timeName "time"
   tryHandle _ _ = return Nothing
 
-getEntityTime :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m (Either StanzaError ZonedTime)
-getEntityTime pluginsRef addr = do
+getEntityTime :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> (Either StanzaError ZonedTime -> m ()) -> m ()
+getEntityTime pluginsRef addr handler = do
   let sess = pluginsSession pluginsRef
-  ret <-
-    stanzaSyncRequest
-      sess
-      OutRequestIQ
-        { oriTo = Just addr
-        , oriIqType = IQGet
-        , oriChildren = [closedElement (timeName "time")]
-        }
-  return $ case ret of
-    Left e -> Left e
-    Right [r]
-      | elementName r == timeName "time"
-      , [tzoStr] <- getEntry r "tzo"
-      , Right tz <- xmppTimeZone tzoStr
-      , [utcStr] <- getEntry r "utc"
-      , Right utime <- xmppZonedTime utcStr
-      , -- Not strictly required but is a MUST by XEP
-        zonedTimeZone utime == utc ->
-          Right $ utcToZonedTime tz $ zonedTimeToUTC utime
-    _ -> Left $ badRequest "getEntityTime: invalid response"
+  stanzaRequest
+    sess
+    OutRequestIQ
+      { oriTo = Just addr
+      , oriIqType = IQGet
+      , oriChildren = [closedElement (timeName "time")]
+      }
+    $ \resp -> handler $ case resp of
+        Left e -> Left e
+        Right [r]
+          | elementName r == timeName "time"
+          , [tzoStr] <- getEntry r "tzo"
+          , Right tz <- xmppTimeZone tzoStr
+          , [utcStr] <- getEntry r "utc"
+          , Right utime <- xmppZonedTime utcStr
+          , -- Not strictly required but is a MUST by XEP
+            zonedTimeZone utime == utc ->
+              Right $ utcToZonedTime tz $ zonedTimeToUTC utime
+        _ -> Left $ badRequest "getEntityTime: invalid response"
  where
   getEntry r name = fromElement r $/ XC.element (timeName name) &/ content
 

@@ -18,8 +18,6 @@ module Network.XMPP.XEP.Disco (
 
 import Control.Arrow
 import Control.Monad
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Except
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -41,10 +39,13 @@ import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Plugin
+import Network.XMPP.Presence
+import Network.XMPP.Session (sessionAddress)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Utils
 import Network.XMPP.XML
+import UnliftIO.IORef
 
 data DiscoIdentity = DiscoIdentity
   { discoCategory :: Text
@@ -111,21 +112,51 @@ parseDiscoEntity re = do
 
   getFeature = requiredAttr "var"
 
-getDiscoEntity :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoEntity)
-getDiscoEntity pluginsRef addr node = do
-  let sess = pluginsSession pluginsRef
-  ret <-
-    stanzaSyncRequest
-      sess
-      OutRequestIQ
-        { oriTo = Just addr
-        , oriIqType = IQGet
-        , oriChildren = [element (discoInfoName "query") (maybeToList $ fmap ("node",) node) []]
-        }
-  return $ case ret of
-    Left e -> Left e
-    Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
-    _ -> Left $ badRequest "getDiscoEntity: invalid response"
+type DiscoCache = Map (XMPPAddress, Maybe DiscoNode) DiscoEntity
+
+newtype DiscoCacheState = DiscoCacheState
+  { discoCacheRef :: IORef DiscoCache
+  }
+
+-- | Check whether a disco result for the given address should be cached.
+shouldCache :: XMPPPluginsRef m -> XMPPAddress -> AllPresencesMap -> Bool
+shouldCache pluginsRef addr presences =
+  isHomeServer || hasPresence
+ where
+  myAddress = sessionAddress $ ssSession $ pluginsSession pluginsRef
+  isHomeServer = addressLocal addr == Nothing && addressResource addr == Nothing && addressDomain addr == bareDomain (fullBare myAddress)
+  hasPresence = case fullJidGet addr of
+    Just full -> M.member full presences
+    Nothing -> False
+
+-- | Checks cache, then fires an IQ request if needed. Calls handler with the result.
+getDiscoEntity :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
+getDiscoEntity pluginsRef addr node handler = do
+  DiscoCacheState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy DiscoCacheState) $ pluginsHooksSet pluginsRef
+  cache <- readIORef discoCacheRef
+  let key = (addr, node)
+  case M.lookup key cache of
+    Just entity -> handler $ Right entity
+    Nothing -> do
+      let sess = pluginsSession pluginsRef
+          req =
+            OutRequestIQ
+              { oriTo = Just addr
+              , oriIqType = IQGet
+              , oriChildren = [element (discoInfoName "query") (maybeToList $ fmap ("node",) node) []]
+              }
+      stanzaRequest sess req $ \ret -> do
+        let result = case ret of
+              Left e -> Left e
+              Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
+              _ -> Left $ badRequest "getDiscoEntity: invalid response"
+        case result of
+          Right entity -> do
+            presences <- getAllPresences pluginsRef
+            when (shouldCache pluginsRef addr presences) $
+              atomicModifyIORef' discoCacheRef $ \m -> (M.insert key entity m, ())
+          Left _ -> return ()
+        handler result
 
 type DiscoNode = Text
 type DiscoItems = Map (XMPPAddress, Maybe DiscoNode) (Maybe LocalizedText)
@@ -144,21 +175,20 @@ parseDiscoItems re = parseNamed re (discoItemsName "item") getItem
     let node = getAttr "node" e
     return (address, node)
 
-getDiscoItems :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoItems)
-getDiscoItems pluginsRef addr node = do
+getDiscoItems :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoItems -> m ()) -> m ()
+getDiscoItems pluginsRef addr node handler = do
   let sess = pluginsSession pluginsRef
-  ret <-
-    stanzaSyncRequest
-      sess
-      OutRequestIQ
-        { oriTo = Just addr
-        , oriIqType = IQGet
-        , oriChildren = [element (discoItemsName "query") (maybeToList $ fmap ("node",) node) []]
-        }
-  return $ case ret of
-    Left e -> Left e
-    Right [r] -> parseDiscoItems r
-    _ -> Left $ badRequest "getDiscoItems: multiple elements in response"
+  stanzaRequest
+    sess
+    OutRequestIQ
+      { oriTo = Just addr
+      , oriIqType = IQGet
+      , oriChildren = [element (discoItemsName "query") (maybeToList $ fmap ("node",) node) []]
+      }
+    $ \resp -> handler $ case resp of
+        Left e -> Left e
+        Right [r] -> parseDiscoItems r
+        _ -> Left $ badRequest "getDiscoItems: multiple elements in response"
 
 data DiscoTopo = DiscoTopo
   { discoRoot :: DiscoEntity
@@ -166,22 +196,32 @@ data DiscoTopo = DiscoTopo
   }
   deriving (Show, Eq)
 
-getDiscoTopo :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> m (Either StanzaError DiscoTopo)
-getDiscoTopo pluginsRef addr node = runExceptT $ do
-  discoRoot <- ExceptT $ getDiscoEntity pluginsRef addr node
-  case node of
-    Nothing -> do
-      items <- ExceptT $ getDiscoItems pluginsRef addr node
-      discoItems <- fmap M.fromList $ forM (M.toList items) $ \(k@(сaddr, cnode), name) -> do
-        topo <- lift $ getDiscoTopo pluginsRef сaddr cnode
-        return (k, (name, topo))
-      return DiscoTopo {..}
-    Just _ ->
-      return
-        DiscoTopo
-          { discoItems = M.empty
-          , ..
-          }
+getDiscoTopo :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoTopo -> m ()) -> m ()
+getDiscoTopo pluginsRef addr node handler =
+  getDiscoEntity pluginsRef addr node $ \case
+    Left e -> handler $ Left e
+    Right discoRoot ->
+      case node of
+        Just _ ->
+          handler $ Right DiscoTopo {discoItems = M.empty, ..}
+        Nothing ->
+          getDiscoItems pluginsRef addr node $ \case
+            Left e -> handler $ Left e
+            Right items ->
+              getDiscoTopoItems pluginsRef (M.toList items) [] $ \discoItems ->
+                handler $ Right DiscoTopo {discoItems = M.fromList discoItems, ..}
+
+getDiscoTopoItems ::
+  (MonadStream m) =>
+  XMPPPluginsRef m ->
+  [((XMPPAddress, Maybe DiscoNode), Maybe LocalizedText)] ->
+  [((XMPPAddress, Maybe DiscoNode), (Maybe LocalizedText, Either StanzaError DiscoTopo))] ->
+  ([((XMPPAddress, Maybe DiscoNode), (Maybe LocalizedText, Either StanzaError DiscoTopo))] -> m ()) ->
+  m ()
+getDiscoTopoItems _ [] acc handler = handler $ reverse acc
+getDiscoTopoItems pluginsRef ((k@(сaddr, cnode), name) : rest) acc handler =
+  getDiscoTopo pluginsRef сaddr cnode $ \topo ->
+    getDiscoTopoItems pluginsRef rest ((k, (name, topo)) : acc) handler
 
 emitNamed :: Map k (Maybe LocalizedText) -> Name -> (k -> [(Name, Text)]) -> [Element]
 emitNamed elems name toAttrs = concatMap toNamed $ M.toAscList elems
@@ -224,8 +264,9 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
  where
   makeItemAttr (addr, mNode) = ("jid", addressToText addr) : maybeToList (fmap ("node",) mNode)
 
-newtype DiscoPlugin m = DiscoPlugin
+data DiscoPlugin m = DiscoPlugin
   { discoPluginInfos :: RefMap (m DiscoInfo)
+  , discoPluginCacheState :: DiscoCacheState
   }
 
 instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin m) where
@@ -254,13 +295,31 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin
     itemsName = discoItemsName "query"
   tryHandle _ _ = return Nothing
 
+instance (MonadStream m) => Handler m PresenceUpdate () (DiscoPlugin m) where
+  tryHandle (DiscoPlugin {..}) (ResourcePresence full (ResourceUnavailable _)) = do
+    let DiscoCacheState {..} = discoPluginCacheState
+        addr = fullJidAddress full
+    atomicModifyIORef' discoCacheRef $ \m -> (M.filterWithKey (\(a, _) _ -> a /= addr) m, ())
+    return Nothing
+  tryHandle (DiscoPlugin {..}) (AllResourcesOffline bare _) = do
+    let DiscoCacheState {..} = discoPluginCacheState
+        bareAddr = bareJidAddress bare
+    atomicModifyIORef' discoCacheRef $ \m -> (M.filterWithKey (\(a, _) _ -> addressBare a /= bareAddr) m, ())
+    return Nothing
+  tryHandle _ _ = return Nothing
+
 discoInfos :: (MonadStream m) => XMPPPluginsRef m -> m (RefMap (m DiscoInfo))
 discoInfos = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
 
 discoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 discoPlugin pluginsRef = do
   discoPluginInfos <- RefMap.new
-  let plugin :: DiscoPlugin m = DiscoPlugin {..}
+  discoCacheRef <- newIORef M.empty
+  let discoPluginCacheState = DiscoCacheState {..}
+      plugin :: DiscoPlugin m = DiscoPlugin {..}
   RegRef.insertNewOrFailM discoPluginInfos $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM discoPluginCacheState $ pluginsHooksSet pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM plugin iqHandlers
+  pHandlers <- presenceHandlers pluginsRef
+  HL.pushNewOrFailM plugin pHandlers

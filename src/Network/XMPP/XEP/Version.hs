@@ -63,26 +63,25 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse VersionPlugi
         ++ maybeToList (fmap ("os",) swOS)
   tryHandle _ _ = return Nothing
 
-getVersion :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m (Either StanzaError VersionInfo)
-getVersion pluginsRef addr = do
+getVersion :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
+getVersion pluginsRef addr handler = do
   let sess = pluginsSession pluginsRef
-  ret <-
-    stanzaSyncRequest
-      sess
-      OutRequestIQ
-        { oriTo = Just addr
-        , oriIqType = IQGet
-        , oriChildren = [closedElement (versionName "query")]
-        }
-  return $ case ret of
-    Left e -> Left e
-    Right [r]
-      | elementName r == versionName "query"
-      , [swName] <- getEntry r "name"
-      , [swVersion] <- getEntry r "version"
-      , swOS <- listToMaybe $ getEntry r "os" ->
-          Right $ VersionInfo {..}
-    _ -> Left $ badRequest "getVersion: invalid response"
+  stanzaRequest
+    sess
+    OutRequestIQ
+      { oriTo = Just addr
+      , oriIqType = IQGet
+      , oriChildren = [closedElement (versionName "query")]
+      }
+    $ \resp -> handler $ case resp of
+        Left e -> Left e
+        Right [r]
+          | elementName r == versionName "query"
+          , [swName] <- getEntry r "name"
+          , [swVersion] <- getEntry r "version"
+          , swOS <- listToMaybe $ getEntry r "os" ->
+              Right $ VersionInfo {..}
+        _ -> Left $ badRequest "getVersion: invalid response"
  where
   getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 

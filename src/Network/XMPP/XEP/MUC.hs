@@ -232,35 +232,35 @@ mucJoin pluginsRef addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..},
             Just _ -> (rooms, False)
         unless good $ throwM MUCAlreadyJoinedError
       cleanupRoom = atomicModifyIORef' mucRooms $ \rooms -> (M.delete roomAddr rooms, ())
-      joinRoom = do
-        nickResp <- getDiscoEntity pluginsRef (fullJidAddress addr) (Just mucNickNode)
-        resource' <- case nickResp of
-          Right ent | Just (Just n) <- M.lookup mucNickIdentity $ discoIdentities ent ->
-            case resourceFromText $ localizedGet Nothing n of
-              Nothing -> fail "mucJoin: invalid resource name proposed by server"
-              Just r -> do
-                atomicModifyIORef' mucRooms $ \rooms -> (M.insert roomAddr (Left $ initialRoom {pmucNick = r}) rooms, ())
-                return r
-          _ -> return $ fullResource addr
-        let historyAttrs =
-              catMaybes
-                [ fmap (\i -> ("maxchars", showt i)) histMaxChars
-                , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
-                , fmap (\i -> ("seconds", showt i)) histSeconds
-                , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
-                ]
-            xElement =
-              element
-                (mucName "x")
-                []
-                [ NodeElement $ element (mucName "history") historyAttrs []
-                ]
-        presStanza <- presenceStanza pluginsRef $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
-        void $
-          stanzaSend session $
-            presStanza
-              { ostTo = Just $ fullJidAddress $ addr {fullResource = resource'}
-              }
+      joinRoom =
+        getDiscoEntity pluginsRef (fullJidAddress addr) (Just mucNickNode) $ \nickResp -> do
+          resource' <- case nickResp of
+            Right ent | Just (Just n) <- M.lookup mucNickIdentity $ discoIdentities ent ->
+              case resourceFromText $ localizedGet Nothing n of
+                Nothing -> fail "mucJoin: invalid resource name proposed by server"
+                Just r -> do
+                  atomicModifyIORef' mucRooms $ \rooms -> (M.insert roomAddr (Left $ initialRoom {pmucNick = r}) rooms, ())
+                  return r
+            _ -> return $ fullResource addr
+          let historyAttrs =
+                catMaybes
+                  [ fmap (\i -> ("maxchars", showt i)) histMaxChars
+                  , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
+                  , fmap (\i -> ("seconds", showt i)) histSeconds
+                  , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
+                  ]
+              xElement =
+                element
+                  (mucName "x")
+                  []
+                  [ NodeElement $ element (mucName "history") historyAttrs []
+                  ]
+          presStanza <- presenceStanza pluginsRef $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
+          void $
+            stanzaSend session $
+              presStanza
+                { ostTo = Just $ fullJidAddress $ addr {fullResource = resource'}
+                }
   bracketOnError takeRoom (const cleanupRoom) (const joinRoom)
   return $ readMVar pmucPending
 

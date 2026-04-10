@@ -312,11 +312,10 @@ main = do
                     ( "disco"
                     , Command
                         { commandHandler = \runInBase args -> case args of
-                            [(xmppAddress . T.pack -> Right addr)] -> do
-                              topo <- runInBase $ getDiscoTopo pluginsRef addr Nothing
-                              case topo of
-                                Left e -> HL.outputStrLn [i|Failed to perform discovery: #{e}|]
-                                Right r -> HL.outputStrLn $ show r
+                            [(xmppAddress . T.pack -> Right addr)] ->
+                              runInBase $ getDiscoTopo pluginsRef addr Nothing $ \case
+                                Left e -> liftIO $ putStrLn [i|Failed to perform discovery: #{e}|]
+                                Right r -> liftIO $ putStrLn $ show r
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -325,9 +324,9 @@ main = do
                     ( "version"
                     , Command
                         { commandHandler = \runInBase args -> case args of
-                            [(xmppAddress . T.pack -> Right addr)] -> do
-                              ver <- runInBase $ getVersion pluginsRef addr
-                              HL.outputStrLn $ show ver
+                            [(xmppAddress . T.pack -> Right addr)] ->
+                              runInBase $ getVersion pluginsRef addr $ \ver ->
+                                liftIO $ putStrLn $ show ver
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -336,9 +335,9 @@ main = do
                     ( "time"
                     , Command
                         { commandHandler = \runInBase args -> case args of
-                            [(xmppAddress . T.pack -> Right addr)] -> do
-                              time <- runInBase $ getEntityTime pluginsRef addr
-                              HL.outputStrLn $ show time
+                            [(xmppAddress . T.pack -> Right addr)] ->
+                              runInBase $ getEntityTime pluginsRef addr $ \time ->
+                                liftIO $ putStrLn $ show time
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
