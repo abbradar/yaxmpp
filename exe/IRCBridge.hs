@@ -1,3 +1,4 @@
+import Control.Concurrent.Linked
 import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.Catch
@@ -27,7 +28,6 @@ import Network.Connection
 import Network.DNS
 import qualified Network.IRC as IRC
 import System.Environment
-import Control.Concurrent.Linked
 import UnliftIO (liftIO)
 import UnliftIO.Concurrent
 

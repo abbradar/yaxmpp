@@ -1,3 +1,4 @@
+import Control.Concurrent.Linked
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Logger
@@ -21,7 +22,6 @@ import Network.Connection
 import Network.DNS
 import qualified System.Console.Haskeline as HL
 import System.Environment
-import Control.Concurrent.Linked
 import UnliftIO (liftIO, withRunInIO)
 import UnliftIO.Concurrent
 

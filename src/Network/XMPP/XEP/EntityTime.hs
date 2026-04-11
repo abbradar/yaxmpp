@@ -57,17 +57,17 @@ getEntityTime pluginsRef addr handler = do
       , oriChildren = [closedElement (timeName "time")]
       }
     $ \resp -> handler $ case resp of
-        Left e -> Left e
-        Right [r]
-          | elementName r == timeName "time"
-          , [tzoStr] <- getEntry r "tzo"
-          , Right tz <- xmppTimeZone tzoStr
-          , [utcStr] <- getEntry r "utc"
-          , Right utime <- xmppZonedTime utcStr
-          , -- Not strictly required but is a MUST by XEP
-            zonedTimeZone utime == utc ->
-              Right $ utcToZonedTime tz $ zonedTimeToUTC utime
-        _ -> Left $ badRequest "getEntityTime: invalid response"
+      Left e -> Left e
+      Right [r]
+        | elementName r == timeName "time"
+        , [tzoStr] <- getEntry r "tzo"
+        , Right tz <- xmppTimeZone tzoStr
+        , [utcStr] <- getEntry r "utc"
+        , Right utime <- xmppZonedTime utcStr
+        , -- Not strictly required but is a MUST by XEP
+          zonedTimeZone utime == utc ->
+            Right $ utcToZonedTime tz $ zonedTimeToUTC utime
+      _ -> Left $ badRequest "getEntityTime: invalid response"
  where
   getEntry r name = fromElement r $/ XC.element (timeName name) &/ content
 

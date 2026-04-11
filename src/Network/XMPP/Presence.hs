@@ -168,13 +168,13 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
             p' <- decodeAll presencePluginCodecs faddr p
-            atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.insert faddr p'
+            atomicModifyIORef' allPresencesRef . ((,()) .) $ M.insert faddr p'
             emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceAvailable p'
             return InSilent
           Left e -> return $ InError e
         PresenceUnset -> do
           let extended = parseExtended istChildren
-          atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.delete faddr
+          atomicModifyIORef' allPresencesRef . ((,()) .) $ M.delete faddr
           emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceUnavailable extended
           return InSilent
   -- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
@@ -182,7 +182,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
     Just <$> do
       let PresenceState {..} = presencePluginState
           extended = parseExtended istChildren
-      atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.filterWithKey (\k _ -> fullBare k /= bare)
+      atomicModifyIORef' allPresencesRef . ((,()) .) $ M.filterWithKey (\k _ -> fullBare k /= bare)
       emitPresence presencePluginHandlers $ AllResourcesOffline bare extended
       return InSilent
   tryHandle _ _ = return Nothing

@@ -349,7 +349,6 @@ stanzaRequest StanzaSession {..} OutRequestIQ {..} handler = do
       cleanup = atomicModifyIORef' ssRequests $ \reqs -> (M.delete (oriTo, sid) reqs, ())
   sessionSend ssSession msg `onException` cleanup
 
-
 stanzaSendError :: (MonadStream m) => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError StanzaSession {..} e err@StanzaError {..} = do
   $(logWarn) [i|Stanza error sent: #{err}|]

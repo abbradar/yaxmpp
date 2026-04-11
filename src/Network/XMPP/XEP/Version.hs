@@ -74,14 +74,14 @@ getVersion pluginsRef addr handler = do
       , oriChildren = [closedElement (versionName "query")]
       }
     $ \resp -> handler $ case resp of
-        Left e -> Left e
-        Right [r]
-          | elementName r == versionName "query"
-          , [swName] <- getEntry r "name"
-          , [swVersion] <- getEntry r "version"
-          , swOS <- listToMaybe $ getEntry r "os" ->
-              Right $ VersionInfo {..}
-        _ -> Left $ badRequest "getVersion: invalid response"
+      Left e -> Left e
+      Right [r]
+        | elementName r == versionName "query"
+        , [swName] <- getEntry r "name"
+        , [swVersion] <- getEntry r "version"
+        , swOS <- listToMaybe $ getEntry r "os" ->
+            Right $ VersionInfo {..}
+      _ -> Left $ badRequest "getVersion: invalid response"
  where
   getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 
