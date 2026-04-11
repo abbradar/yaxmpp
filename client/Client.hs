@@ -46,6 +46,7 @@ import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
+import Network.XMPP.XEP.Ping
 import Network.XMPP.XEP.Version
 
 newtype ClientPlugin m = ClientPlugin {clientWriteMessage :: String -> m ()}
@@ -171,6 +172,7 @@ main = do
         chatStatePlugin pluginsRef
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
+        pingPlugin pluginsRef
 
         -- Print server features
         serverFeats <- RegRef.read $ pluginsServerFeatures pluginsRef
@@ -327,6 +329,19 @@ main = do
                             [(xmppAddress . T.pack -> Right addr)] ->
                               runInBase $ getEntityTime pluginsRef addr $ \time ->
                                 liftIO $ putStrLn $ show time
+                            _ -> HL.outputStrLn "Invalid arguments"
+                        , commandAutocomplete = \_ _ -> return []
+                        }
+                    )
+                  ,
+                    ( "ping"
+                    , Command
+                        { commandHandler = \runInBase args -> case args of
+                            [(xmppAddress . T.pack -> Right addr)] ->
+                              runInBase $ sendPing pluginsRef addr $ \result ->
+                                liftIO $ putStrLn $ case result of
+                                  Right () -> "Pong!"
+                                  Left e -> "Ping failed: " ++ show e
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

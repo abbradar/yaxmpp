@@ -135,7 +135,8 @@ instance Show (LazyDiscoEntity m) where
 newtype DiscoHomeCache m = DiscoHomeCache (MemoAsync m (Either StanzaError DiscoEntity))
 
 -- | Handler list for resolving disco entity requests from cache (e.g. Caps).
-type DiscoEntityCacheHandlers m = HandlerList m (XMPPAddress, Maybe DiscoNode) (Either StanzaError DiscoEntity)
+-- If a handler handles the request, it must fire the callback itself and return @Just ()@.
+type DiscoEntityCacheHandlers m = HandlerList m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) ()
 
 -- | Get the disco entity cache handler list from the plugins hook set.
 discoEntityCacheHandlers :: (MonadStream m) => XMPPPluginsRef m -> m (DiscoEntityCacheHandlers m)
@@ -161,9 +162,9 @@ then falling back to an IQ request.
 doGetDiscoEntity :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
 doGetDiscoEntity pluginsRef addr node handler = do
   cacheHandlers <- discoEntityCacheHandlers pluginsRef
-  cached <- HL.call cacheHandlers (addr, node)
-  case cached of
-    Just result -> handler result
+  handled <- HL.call cacheHandlers (addr, node, handler)
+  case handled of
+    Just () -> return ()
     Nothing -> do
       let sess = pluginsSession pluginsRef
           req =
