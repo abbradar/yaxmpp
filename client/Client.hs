@@ -25,7 +25,6 @@ import System.Environment
 import UnliftIO (liftIO, withRunInIO)
 import UnliftIO.Concurrent
 
-import qualified Data.Registry.Mutable as RegRef
 import Network.SASL
 import Network.XMPP.Address
 import Network.XMPP.Connection
@@ -173,10 +172,6 @@ main = do
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
-
-        -- Print server features
-        serverFeats <- RegRef.read $ pluginsServerFeatures pluginsRef
-        writeMessage [i|Parsed server features: #{serverFeats}|]
 
         let saveCache = do
               cache <- getCache pluginsRef

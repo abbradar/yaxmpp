@@ -42,7 +42,6 @@ class XMPPPersistentCache m a | a -> m where
 data XMPPPluginsRef m = XMPPPluginsRef
   { pluginsSession :: StanzaSession m
   , pluginsHooksSet :: RegistryRef Unconstrained
-  , pluginsServerFeatures :: RegistryRef Show
   , pluginsInHandlers' :: HandlerList m InStanza InResponse
   , pluginsIQHandlers' :: HandlerList m InRequestIQ RequestIQResponse
   , pluginsOldCache :: Map Text JSON.Value
@@ -63,7 +62,6 @@ newXmppPlugins pluginsSession oldCache = do
   pluginsHooksSet <- RegRef.new
   RegRef.insert pluginsInHandlers' pluginsHooksSet
   RegRef.insert pluginsIQHandlers' pluginsHooksSet
-  pluginsServerFeatures <- RegRef.new
   pluginsCacheGetters <- newIORef M.empty
   return XMPPPluginsRef {..}
 
