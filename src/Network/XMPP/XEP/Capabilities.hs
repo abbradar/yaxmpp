@@ -29,6 +29,7 @@ import qualified Text.XML.Cursor as XC
 
 import qualified Data.Registry as Reg
 import qualified Data.Registry.Mutable as RegRef
+import Network.XMPP.Address (FullJID)
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
 import Network.XMPP.Session
@@ -129,15 +130,15 @@ caps2InfoToElement (Caps2Info {..}) =
 
 data CapsCodec = CapsCodec
 
-instance (MonadStream m) => Codec m Presence CapsCodec where
-  codecDecode _ pres =
+instance (MonadStream m) => Codec m FullJID Presence CapsCodec where
+  codecDecode _ _ pres =
     let (mcaps1, mcaps2, raw') = extractCaps (presenceRaw pres)
         ext = presenceExtended pres
         ext' = maybe ext (\c -> Reg.insert c ext) mcaps1
         ext'' = maybe ext' (\c -> Reg.insert c ext') mcaps2
      in return $ pres {presenceRaw = raw', presenceExtended = ext''}
 
-  codecEncode _ pres =
+  codecEncode _ _ pres =
     let ext = presenceExtended pres
         (mcaps1, ext') = Reg.pop (Proxy :: Proxy CapsInfo) ext
         (mcaps2, ext'') = Reg.pop (Proxy :: Proxy Caps2Info) ext'

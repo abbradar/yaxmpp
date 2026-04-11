@@ -39,6 +39,7 @@ import qualified Data.Text as T
 import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Plugin
+import Network.XMPP.Session (sessionAddress)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Utils
@@ -145,7 +146,7 @@ parsePresence elems = do
 parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
-type PresenceCodecList m = CodecList m Presence
+type PresenceCodecList m = CodecList m FullJID Presence
 
 type AllPresencesMap = Map FullJID Presence
 
@@ -166,7 +167,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
       case op of
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
-            p' <- decodeAll presencePluginCodecs p
+            p' <- decodeAll presencePluginCodecs faddr p
             atomicModifyIORef' allPresencesRef . ((, ()) .) $ M.insert faddr p'
             emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceAvailable p'
             return InSilent
@@ -226,7 +227,8 @@ presenceUpdate k (ResourceUnavailable e) m
 presenceStanza :: (MonadStream m) => XMPPPluginsRef m -> Maybe Presence -> m OutStanza
 presenceStanza pluginsRef (Just pres) = do
   codecs <- presenceCodecs pluginsRef
-  Presence {..} <- encodeAll codecs pres
+  let myAddr = sessionAddress $ ssSession $ pluginsSession pluginsRef
+  Presence {..} <- encodeAll codecs myAddr pres
   unless (Reg.null presenceExtended) $ error "presenceStanza: presenceExtended is not empty after encoding"
   let priority = element (jcName "priority") [] [NodeContent $ showt presencePriority]
       mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow

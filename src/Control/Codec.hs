@@ -16,24 +16,25 @@ import Data.ClassVector.Mutable
 
 {- | A bidirectional monadic codec between a container @value@ and a structured type @a@.
 
+@meta@ is additional context passed to the codec (e.g. the source address).
 @codecDecode@ transforms the @value@ by parsing raw data into @a@ and storing it.
 @codecEncode@ transforms the @value@ by serializing @a@ back into raw data.
 -}
-class Codec m value a where
-  codecDecode :: a -> value -> m value
-  codecEncode :: a -> value -> m value
+class Codec m meta value a where
+  codecDecode :: a -> meta -> value -> m value
+  codecEncode :: a -> meta -> value -> m value
 
 -- | A mutable list of codecs operating on the same @value@ type.
-type CodecList m value = ClassVectorRef (Codec m value)
+type CodecList m meta value = ClassVectorRef (Codec m meta value)
 
 -- | Run all decoders in order, threading the value through each.
-decodeAll :: (MonadIO m) => CodecList m value -> value -> m value
-decodeAll codecs val = do
+decodeAll :: (MonadIO m) => CodecList m meta value -> meta -> value -> m value
+decodeAll codecs meta val = do
   es <- toAscList codecs
-  foldM (\v (ClassBox c) -> codecDecode c v) val es
+  foldM (\v (ClassBox c) -> codecDecode c meta v) val es
 
 -- | Run all encoders in reverse order, threading the value through each.
-encodeAll :: (MonadIO m) => CodecList m value -> value -> m value
-encodeAll codecs val = do
+encodeAll :: (MonadIO m) => CodecList m meta value -> meta -> value -> m value
+encodeAll codecs meta val = do
   es <- toDescList codecs
-  foldM (\v (ClassBox c) -> codecEncode c v) val es
+  foldM (\v (ClassBox c) -> codecEncode c meta v) val es

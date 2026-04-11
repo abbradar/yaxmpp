@@ -64,7 +64,7 @@ plainIMMessage txt =
 
 type IMSlot m = Slot m (XMPPAddress, IMMessage)
 
-type IMCodecList m = CodecList m IMMessage
+type IMCodecList m = CodecList m XMPPAddress IMMessage
 
 data IMPlugin m = IMPlugin
   { imPluginSlot :: IMSlot m
@@ -88,7 +88,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
           case res of
             Left e -> return $ InError e
             Right msg -> do
-              msg' <- decodeAll imPluginCodecs msg
+              msg' <- decodeAll imPluginCodecs from msg
               Slot.call imPluginSlot (from, msg')
               return InSilent
    where
@@ -114,7 +114,7 @@ imCodecs = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRe
 imSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> IMMessage -> m ()
 imSend pluginsRef to msg = do
   codecs <- imCodecs pluginsRef
-  IMMessage {..} <- encodeAll codecs msg
+  IMMessage {..} <- encodeAll codecs to msg
   unless (Reg.null imExtended) $ error "imSend: imExtended is not empty after encoding"
   let subjects = maybe [] (localizedElements $ jcName "subject") imSubject
       bodies = localizedElements (jcName "body") imBody

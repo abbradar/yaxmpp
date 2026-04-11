@@ -18,6 +18,7 @@ import Text.XML.Cursor hiding (element)
 
 import qualified Data.Registry as Reg
 import Data.Time.XMPP
+import Network.XMPP.Address (FullJID, XMPPAddress)
 import Network.XMPP.Message
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
@@ -61,28 +62,28 @@ delayToElement (DelayInfo {..}) =
 
 data DelayedDeliveryPlugin = DelayedDeliveryPlugin
 
-instance (MonadStream m) => Codec m Presence DelayedDeliveryPlugin where
-  codecDecode _ pres =
+instance (MonadStream m) => Codec m FullJID Presence DelayedDeliveryPlugin where
+  codecDecode _ _ pres =
     let (mdelay, raw') = extractDelay (presenceRaw pres)
         ext = presenceExtended pres
         ext' = maybe ext (\d -> Reg.insert d ext) mdelay
      in return $ pres {presenceRaw = raw', presenceExtended = ext'}
 
-  codecEncode _ pres =
+  codecEncode _ _ pres =
     let ext = presenceExtended pres
         (mdelay, ext') = Reg.pop (Proxy :: Proxy DelayInfo) ext
         raw = presenceRaw pres
         raw' = maybe raw (\d -> delayToElement d : raw) mdelay
      in return $ pres {presenceRaw = raw', presenceExtended = ext'}
 
-instance (MonadStream m) => Codec m IMMessage DelayedDeliveryPlugin where
-  codecDecode _ msg =
+instance (MonadStream m) => Codec m XMPPAddress IMMessage DelayedDeliveryPlugin where
+  codecDecode _ _ msg =
     let (mdelay, raw') = extractDelay (imRaw msg)
         ext = imExtended msg
         ext' = maybe ext (\d -> Reg.insert d ext) mdelay
      in return $ msg {imRaw = raw', imExtended = ext'}
 
-  codecEncode _ msg =
+  codecEncode _ _ msg =
     let ext = imExtended msg
         (mdelay, ext') = Reg.pop (Proxy :: Proxy DelayInfo) ext
         raw = imRaw msg
