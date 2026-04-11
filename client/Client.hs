@@ -108,7 +108,9 @@ main = do
   let logMessage _ _ _ msg = writeChan consoleChan $ B.unpack $ fromLogStr msg
       logMessageThread = forever $ flip runLoggingT logMessage $ filterLogger (\_ lvl -> lvl > LevelInfo) $ unChanLoggingT logChanTerm
 
-      fileLogThread = runFileLoggingT (logFile settings) $ unChanLoggingT logChanFile
+      fileLogThread = do
+        liftIO $ B.writeFile (logFile settings) B.empty
+        runFileLoggingT (logFile settings) $ unChanLoggingT logChanFile
 
   bracket (forkLinked fileLogThread) killThread $ \_ -> bracket (forkLinked logMessageThread) killThread $ \_ -> runChanLoggingT logChanFile $ do
     rs <- liftIO $ makeResolvSeed defaultResolvConf
