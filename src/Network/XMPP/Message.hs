@@ -71,36 +71,54 @@ data IMPlugin m = IMPlugin
   , imPluginCodecs :: IMCodecList m
   }
 
+-- | Parse a raw IM message from its type and child elements.
+-- Returns 'Nothing' if there is no body, or @Just (Left err)@ if malformed.
+parseRawIMMessage :: MessageType -> [Element] -> Maybe (Either StanzaError IMMessage)
+parseRawIMMessage imType children =
+  case localizedFromElement (jcName "body") children of
+    Nothing -> Nothing
+    Just _ -> Just $ runExcept $ do
+      let getEither = either throwE return
+          cur = fromChildren children
+      imBody <- case localizedFromElement (jcName "body") children of
+        Nothing -> throwE $ badRequest "parseRawIMMessage: no body"
+        Just bodyRes -> getEither bodyRes
+      imSubject <- mapM getEither $ localizedFromElement (jcName "subject") children
+      let thread = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
+      imThread <- mapM (getEither . getThread) thread
+      let imRaw = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
+          imExtended = Reg.empty
+      return IMMessage {..}
+ where
+  getThread e@(Element {elementNodes = [NodeContent imId]}) =
+    return
+      IMThread
+        { imParent = getAttr "parent" e
+        , ..
+        }
+  getThread _ = Left $ badRequest "parseRawIMMessage: invalid thread element"
+
+-- | Parse and decode a message through IM codecs. Returns 'Nothing' if there is no body.
+parseIMMessage :: (MonadStream m) => IMPlugin m -> XMPPAddress -> MessageType -> [Element] -> m (Maybe (Either StanzaError IMMessage))
+parseIMMessage (IMPlugin {..}) from msgType children =
+  case parseRawIMMessage msgType children of
+    Nothing -> return Nothing
+    Just (Left e) -> return $ Just $ Left e
+    Just (Right msg) -> do
+      msg' <- decodeAll imPluginCodecs from msg
+      return $ Just $ Right msg'
+
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
-  tryHandle (IMPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right imType), istChildren})
-    | Just bodyRes <- localizedFromElement (jcName "body") istChildren =
+  tryHandle plugin@(IMPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right imType), istChildren})
+    | Just _ <- localizedFromElement (jcName "body") istChildren =
         Just <$> do
-          let res = runExcept $ do
-                let getEither = either throwE return
-                imBody <- getEither bodyRes
-                imSubject <- mapM getEither $ localizedFromElement (jcName "subject") istChildren
-                let thread = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
-                imThread <- mapM (getEither . getThread) thread
-                let imRaw = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
-                    imExtended = Reg.empty
-                return IMMessage {..}
-
-          case res of
-            Left e -> return $ InError e
-            Right msg -> do
-              msg' <- decodeAll imPluginCodecs from msg
-              Slot.call imPluginSlot (from, msg')
+          result <- parseIMMessage plugin from imType istChildren
+          case result of
+            Nothing -> return InSilent
+            Just (Left e) -> return $ InError e
+            Just (Right msg) -> do
+              Slot.call imPluginSlot (from, msg)
               return InSilent
-   where
-    cur = fromChildren istChildren
-
-    getThread e@(Element {elementNodes = [NodeContent imId]}) =
-      return
-        IMThread
-          { imParent = getAttr "parent" e
-          , ..
-          }
-    getThread _ = Left $ badRequest "getThread: invalid thread element"
   tryHandle _ _ = return Nothing
 
 -- | Get the IM message slot from the plugins hook set.

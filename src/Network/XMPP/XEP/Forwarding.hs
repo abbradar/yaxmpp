@@ -1,83 +1,41 @@
 {-# LANGUAGE Strict #-}
 
+-- | XEP-0297: Stanza Forwarding
 module Network.XMPP.XEP.Forwarding (
-  SetPage (..),
-  SetQuery (..),
-  ResultSetRange (..),
-  ResultSet (..),
-  rsmElement,
-  parseRSM,
+  forwardNS,
+  Forwarded (..),
+  parseForwarded,
 ) where
 
-import Control.Monad
 import Data.Maybe
 import Data.Text (Text)
-import qualified Data.Text as T
-import Text.Read
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import TextShow (showt)
 
-import Network.XMPP.Utils
+import Network.XMPP.Stanza (StanzaError, badRequest)
+import Network.XMPP.XEP.DelayedDelivery (DelayInfo)
+import qualified Network.XMPP.XEP.DelayedDelivery as DD
 import Network.XMPP.XML
 
-_rsmNS :: Text
-rsmName :: Text -> Name
-(_rsmNS, rsmName) = namePair "http://jabber.org/protocol/rsm"
+forwardNS :: Text
+forwardName :: Text -> Name
+(forwardNS, forwardName) = namePair "urn:xmpp:forward:0"
 
-data SetPage
-  = Before (Maybe Text)
-  | After Text
-  | Index Integer
-  deriving (Show, Eq)
-
-data SetQuery = SetQuery
-  { rsmMax :: Integer
-  , rsmPage :: Maybe SetPage
+data Forwarded = Forwarded
+  { fwdDelay :: Maybe DelayInfo
+  , fwdMessage :: Element
   }
-  deriving (Show, Eq)
+  deriving (Show)
 
-data ResultSetRange = ResultSetRange
-  { rsmFirst :: Text
-  , rsmFirstIndex :: Integer
-  , rsmLast :: Text
-  }
-  deriving (Show, Eq)
-
-data ResultSet = ResultSet
-  { rsmCount :: Integer
-  , rsmRange :: Maybe ResultSetRange
-  }
-  deriving (Show, Eq)
-
-rsmElement :: SetQuery -> Element
-rsmElement (SetQuery {..}) = element (rsmName "set") [] (maxElement : filterElements)
- where
-  maxElement = NodeElement (element (rsmName "max") [] [NodeContent $ showt rsmMax])
-  filterElements = maybeToList $ fmap (NodeElement . resultPageElement) rsmPage
-
-  resultPageElement (Before ment) = element (rsmName "before") [] $ maybeToList $ fmap NodeContent ment
-  resultPageElement (After ent) = element (rsmName "after") [] [NodeContent ent]
-  resultPageElement (Index idx) = element (rsmName "index") [] [NodeContent $ showt idx]
-
-parseRSM :: Element -> Either String (Maybe ResultSet)
-parseRSM el =
-  case fromElement el $/ XC.element (rsmName "set") &| curElement of
-    [] -> Right Nothing
-    setE : _ -> do
-      let cursor = fromElement setE
-      countText <- maybeToEither "No count" $ listToMaybe $ cursor $/ XC.element (rsmName "count") &/ content
-      rsmCount <- maybeToEither "Invalid count" $ readMaybe $ T.unpack countText
-      when (rsmCount < 0) $ Left "Invalid count"
-      let firstEs = cursor $/ XC.element (rsmName "first") &| curElement
-      let lastEs = cursor $/ XC.element (rsmName "last") &| curElement
-      case (firstEs, lastEs) of
-        ([], []) -> return $ Just ResultSet {rsmCount, rsmRange = Nothing}
-        (firstE : _, lastE : _) -> do
-          rsmFirst <- maybeToEither "No first item" $ listToMaybe $ fromElement firstE $/ content
-          rsmFirstIndex <- maybeToEither "Invalid index" $ readAttr (rsmName "index") firstE
-          when (rsmFirstIndex < 0) $ Left "Invalid count"
-          rsmLast <- maybeToEither "No last item" $ listToMaybe $ fromElement lastE $/ content
-          return $ Just ResultSet {rsmCount, rsmRange = Just $ ResultSetRange {..}}
-        _ -> Left "Invalid first/last items"
+-- | Parse a @\<forwarded\>@ element, extracting an optional @\<delay\>@ and the inner @\<message\>@.
+-- Returns @Nothing@ if the element is not @\<forwarded\>@, or @Just (Left err)@ if malformed.
+parseForwarded :: Element -> Maybe (Either StanzaError Forwarded)
+parseForwarded e
+  | elementName e == forwardName "forwarded" =
+      let cur = fromElement e
+          fwdDelay = listToMaybe $ mapMaybe DD.parseDelay $ cur $/ curAnyElement
+       in Just $ case listToMaybe $ cur $/ XC.element (jcName "message") &| curElement of
+            Nothing -> Left $ badRequest "parseForwarded: no <message> in <forwarded>"
+            Just fwdMessage -> Right Forwarded {..}
+  | otherwise = Nothing

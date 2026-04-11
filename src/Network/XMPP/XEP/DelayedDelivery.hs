@@ -3,6 +3,7 @@
 -- | XEP-0203: Delayed Delivery
 module Network.XMPP.XEP.DelayedDelivery (
   DelayInfo (..),
+  parseDelay,
   delayedDeliveryPlugin,
 ) where
 
