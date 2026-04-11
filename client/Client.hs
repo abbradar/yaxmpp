@@ -46,6 +46,7 @@ import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
 import Network.XMPP.XEP.Ping
+import Network.XMPP.XEP.StanzaIds
 import Network.XMPP.XEP.Version
 
 newtype ClientPlugin m = ClientPlugin {clientWriteMessage :: String -> m ()}
@@ -172,6 +173,7 @@ main = do
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
+        stanzaIdsPlugin pluginsRef
 
         let saveCache = do
               cache <- getCache pluginsRef
