@@ -12,9 +12,13 @@ module Network.XMPP.XEP.Disco (
   getDiscoItems,
   DiscoTopo (..),
   getDiscoTopo,
+  DiscoNodeInfo (..),
+  emptyDiscoNodeInfo,
   DiscoInfo (..),
   emptyDiscoInfo,
-  discoInfos,
+  DiscoInfoProvider (..),
+  featuresDiscoInfo,
+  addDiscoInfo,
   discoEntityCacheHandlers,
   discoPlugin,
 )
@@ -30,18 +34,20 @@ import Control.MemoAsync (MemoAsync)
 import qualified Control.MemoAsync as MemoAsync
 import Control.Monad
 import Control.Monad.Logger
+import Data.ClassBox (ClassBox (..))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Proxy
-import Data.RefMap (RefMap)
-import qualified Data.RefMap as RefMap
+import Data.Registry (Registry)
 import qualified Data.Registry as Reg
+import Data.Registry.Mutable (RegistryRef)
 import qualified Data.Registry.Mutable as RegRef
 import Data.Set (Set)
 import qualified Data.Set as S
 import Data.String.Interpolate (i)
 import Data.Text (Text)
+import Data.Typeable
 import GHC.Generics (Generic)
 import Network.XMPP.Address
 import Network.XMPP.Language
@@ -55,6 +61,7 @@ import Network.XMPP.XML
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
+import UnliftIO.IORef
 import UnliftIO.MVar
 
 data DiscoIdentity = DiscoIdentity
@@ -134,8 +141,9 @@ instance Show (LazyDiscoEntity m) where
 -- | Homeserver disco entity cache.
 newtype DiscoHomeCache m = DiscoHomeCache (MemoAsync m (Either StanzaError DiscoEntity))
 
--- | Handler list for resolving disco entity requests from cache (e.g. Caps).
--- If a handler handles the request, it must fire the callback itself and return @Just ()@.
+{- | Handler list for resolving disco entity requests from cache (e.g. Caps).
+If a handler handles the request, it must fire the callback itself and return @Just ()@.
+-}
 type DiscoEntityCacheHandlers m = HandlerList m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) ()
 
 -- | Get the disco entity cache handler list from the plugins hook set.
@@ -284,24 +292,42 @@ emitNamed elems name toAttrs = concatMap toNamed $ M.toAscList elems
    where
     toOne (lang, text) = element name ([("name", text)] ++ xmlLangAttr lang ++ toAttrs k) []
 
+data DiscoNodeInfo = DiscoNodeInfo
+  { discoNEntity :: DiscoEntity
+  , discoNItems :: Maybe DiscoItems
+  }
+
+emptyDiscoNodeInfo :: DiscoNodeInfo
+emptyDiscoNodeInfo =
+  DiscoNodeInfo
+    { discoNEntity = emptyDiscoEntity
+    , discoNItems = Nothing
+    }
+
+discoNodeInfoUnion :: DiscoNodeInfo -> DiscoNodeInfo -> Maybe DiscoNodeInfo
+discoNodeInfoUnion a b = do
+  discoNEntity <- discoEntityUnion (discoNEntity a) (discoNEntity b)
+  discoNItems <- case (discoNItems a, discoNItems b) of
+    (Nothing, x) -> Just x
+    (x, Nothing) -> Just x
+    (Just ia, Just ib) -> Just <$> mapDisjointUnion ia ib
+  return DiscoNodeInfo {..}
+
 data DiscoInfo = DiscoInfo
-  { discoIEntity :: DiscoEntity
-  , discoIItems :: DiscoItems
-  , discoIChildren :: Map DiscoNode (DiscoEntity, DiscoItems)
+  { discoINode :: DiscoNodeInfo
+  , discoIChildren :: Map DiscoNode DiscoNodeInfo
   }
 
 emptyDiscoInfo :: DiscoInfo
 emptyDiscoInfo =
   DiscoInfo
-    { discoIEntity = emptyDiscoEntity
-    , discoIItems = M.empty
+    { discoINode = emptyDiscoNodeInfo
     , discoIChildren = M.empty
     }
 
 discoInfoUnion :: DiscoInfo -> DiscoInfo -> Maybe DiscoInfo
 discoInfoUnion a b = do
-  discoIEntity <- discoEntityUnion (discoIEntity a) (discoIEntity b)
-  discoIItems <- mapDisjointUnion (discoIItems a) (discoIItems b)
+  discoINode <- discoNodeInfoUnion (discoINode a) (discoINode b)
   discoIChildren <- mapDisjointUnion (discoIChildren a) (discoIChildren b)
   return DiscoInfo {..}
 
@@ -317,29 +343,48 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
  where
   makeItemAttr (addr, mNode) = ("jid", addressToText addr) : maybeToList (fmap ("node",) mNode)
 
-newtype DiscoPlugin m = DiscoPlugin
-  { discoPluginInfos :: RefMap (m DiscoInfo)
+-- | Class for disco info providers. Each provider type can only be registered once.
+class (Typeable a) => DiscoInfoProvider a where
+  discoProviderInfo :: a -> DiscoInfo
+
+data DiscoPluginState = DiscoPluginState
+  { discoPluginProviders :: RegistryRef DiscoInfoProvider
+  , discoPluginMerged :: IORef DiscoInfo
   }
 
-instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin m) where
-  tryHandle (DiscoPlugin {..}) (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
-    infos <- RefMap.entries discoPluginInfos >>= sequence
-    DiscoInfo {..} <- case foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos of
-      Nothing -> fail "discoIqHandler: overlapping plugins"
-      Just r -> return r
+-- | Add disco#items feature to a node info if it has items.
+addItemsFeature :: DiscoNodeInfo -> Maybe DiscoNodeInfo
+addItemsFeature node = case discoNItems node of
+  Nothing -> Just node
+  Just _ -> discoNodeInfoUnion node $ featuresDiscoNodeInfo $ S.singleton discoItemsNS
+
+mergeProviders :: Registry DiscoInfoProvider -> Maybe DiscoInfo
+mergeProviders reg = do
+  let infos = map (\(ClassBox p) -> discoProviderInfo p) $ Reg.toList reg
+  r <- foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos
+  rootNode <- addItemsFeature $ discoINode r
+  children <- mapM addItemsFeature $ discoIChildren r
+  let r' = r {discoINode = rootNode, discoIChildren = children}
+  discoInfoUnion r' $ featuresDiscoInfo Nothing $ S.singleton discoInfoNS
+
+newtype DiscoPlugin = DiscoPlugin DiscoPluginState
+
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse DiscoPlugin where
+  tryHandle (DiscoPlugin state) (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
+    DiscoInfo {discoINode = DiscoNodeInfo {..}, ..} <- readIORef $ discoPluginMerged state
     let res
           | elementName req == infoName = Just $ fmap (infoName,) $ case getAttr "node" req of
-              Nothing -> Just $ emitDiscoEntity discoIEntity
-              Just node | Just (entity, _) <- M.lookup node discoIChildren -> Just $ emitDiscoEntity entity
+              Nothing -> Just $ emitDiscoEntity discoNEntity
+              Just node | Just DiscoNodeInfo {discoNEntity = entity} <- M.lookup node discoIChildren -> Just $ emitDiscoEntity entity
               _ -> Nothing
           | elementName req == itemsName = Just $ fmap (itemsName,) $ case getAttr "node" req of
-              Nothing -> Just $ emitDiscoItems discoIItems
-              Just node | Just (_, items) <- M.lookup node discoIChildren -> Just $ emitDiscoItems items
+              Nothing -> fmap emitDiscoItems discoNItems
+              Just node | Just DiscoNodeInfo {discoNItems = Just items} <- M.lookup node discoIChildren -> Just $ emitDiscoItems items
               _ -> Nothing
           | otherwise = Nothing
     case res of
       Nothing -> return Nothing
-      Just Nothing -> return $ Just $ IQError $ itemNotFound "discoIqHandler: unknown node"
+      Just Nothing -> return $ Just $ IQError $ itemNotFound "unknown node"
       Just (Just (name, elems)) ->
         return $ Just $ IQResult [element name (maybeToList $ ("node",) <$> getAttr "node" req) $ map NodeElement elems]
    where
@@ -347,21 +392,51 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin
     itemsName = discoItemsName "query"
   tryHandle _ _ = return Nothing
 
-discoInfos :: (MonadStream m) => XMPPPluginsRef m -> m (RefMap (m DiscoInfo))
-discoInfos = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+addDiscoInfo :: forall m a. (MonadStream m, DiscoInfoProvider a) => XMPPPluginsRef m -> a -> m ()
+addDiscoInfo pluginsRef provider = do
+  state <- RegRef.lookupOrFailM (Proxy :: Proxy DiscoPluginState) $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM provider $ discoPluginProviders state
+  reg <- RegRef.read $ discoPluginProviders state
+  success <- atomicModifyIORef (discoPluginMerged state) $ \old ->
+    case mergeProviders reg of
+      Nothing -> (old, False)
+      Just merged -> (merged, True)
+  unless success $ do
+    RegRef.delete (Proxy :: Proxy a) $ discoPluginProviders state
+    fail "addDiscoInfo: overlapping disco infos"
+
+featuresDiscoNodeInfo :: Set DiscoFeature -> DiscoNodeInfo
+featuresDiscoNodeInfo features = emptyDiscoNodeInfo {discoNEntity = emptyDiscoEntity {discoFeatures = features}}
+
+featuresDiscoInfo :: Maybe DiscoNode -> Set DiscoFeature -> DiscoInfo
+featuresDiscoInfo Nothing features = emptyDiscoInfo {discoINode = featuresDiscoNodeInfo features}
+featuresDiscoInfo (Just node) features = emptyDiscoInfo {discoIChildren = M.singleton node $ featuresDiscoNodeInfo features}
+
+-- | Initial internal disco info provider (always present).
+data DiscoSelfInfo = DiscoSelfInfo
+  deriving (Typeable)
+
+instance DiscoInfoProvider DiscoSelfInfo where
+  discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton discoInfoNS
 
 discoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 discoPlugin pluginsRef = do
-  discoPluginInfos <- RefMap.new
+  discoPluginProviders <- RegRef.new
+  -- Register the initial provider so the merged IORef always has disco#info.
+  RegRef.insertNewOrFailM DiscoSelfInfo discoPluginProviders
+  initialReg <- RegRef.read discoPluginProviders
+  discoPluginMerged <- case mergeProviders initialReg of
+    Nothing -> fail "discoPlugin: initial merge failed"
+    Just merged -> newIORef merged
+  let state = DiscoPluginState {..}
   discoCacheHandlers <- HL.new :: m (DiscoEntityCacheHandlers m)
   let myAddress = sessionAddress $ ssSession $ pluginsSession pluginsRef
       homeAddr = XMPPAddress Nothing (bareDomain $ fullBare myAddress) Nothing
   homeLazy <- MemoAsync.new $ doGetDiscoEntity pluginsRef homeAddr Nothing
-  let plugin :: DiscoPlugin m = DiscoPlugin {..}
-  RegRef.insertNewOrFailM discoPluginInfos $ pluginsHooksSet pluginsRef
+  RegRef.insertNewOrFailM state $ pluginsHooksSet pluginsRef
   RegRef.insertNewOrFailM discoCacheHandlers $ pluginsHooksSet pluginsRef
   RegRef.insertNewOrFailM (DiscoHomeCache homeLazy :: DiscoHomeCache m) $ pluginsHooksSet pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM plugin iqHandlers
+  HL.pushNewOrFailM (DiscoPlugin state) iqHandlers
   codecs <- presenceCodecs pluginsRef
   Codec.pushNewOrFailM (DiscoEntityCodec pluginsRef :: DiscoEntityCodec m) codecs

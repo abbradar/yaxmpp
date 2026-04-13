@@ -21,12 +21,14 @@ import Data.Injective
 import Data.Maybe
 import Data.Proxy
 import qualified Data.Registry.Mutable as RegRef
+import qualified Data.Set as S
 import Data.Text (Text)
 import Network.XMPP.Address
 import Network.XMPP.Message
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
+import Network.XMPP.XEP.Disco
 import Network.XMPP.XML
 import Text.XML
 
@@ -46,15 +48,15 @@ instance Injective ChatState Text where
     Inactive -> "inactive"
     Gone -> "gone"
 
-_chatStatesNS :: Text
+chatStatesNS :: Text
 chatStateName :: Text -> Name
-(_chatStatesNS, chatStateName) = namePair "http://jabber.org/protocol/chatstates"
+(chatStatesNS, chatStateName) = namePair "http://jabber.org/protocol/chatstates"
 
 parseChatState :: [Element] -> Maybe ChatState
 parseChatState = listToMaybe . mapMaybe tryParse
  where
   tryParse e
-    | nameNamespace (elementName e) == Just _chatStatesNS = injFrom $ nameLocalName $ elementName e
+    | nameNamespace (elementName e) == Just chatStatesNS = injFrom $ nameLocalName $ elementName e
     | otherwise = Nothing
 
 type ChatStateSlot m = Slot m (XMPPAddress, MessageType, ChatState)
@@ -96,6 +98,11 @@ chatStateSend pluginsRef to msgType cs =
         , ostChildren = [closedElement $ chatStateName $ injTo cs]
         }
 
+data ChatStateDisco = ChatStateDisco
+
+instance DiscoInfoProvider ChatStateDisco where
+  discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton chatStatesNS
+
 chatStatePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 chatStatePlugin pluginsRef = do
   chatStatePluginSlot <- Slot.new
@@ -105,3 +112,4 @@ chatStatePlugin pluginsRef = do
   HL.pushNewOrFailM plugin inHandlers
   imS <- imSlot pluginsRef
   Slot.pushNewOrFailM plugin imS
+  addDiscoInfo pluginsRef ChatStateDisco

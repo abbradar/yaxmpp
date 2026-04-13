@@ -50,7 +50,6 @@ import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Injective
-import qualified Data.RefMap as RefMap
 import qualified Data.Registry.Mutable as RegRef
 import Data.Time.XMPP
 import Network.XMPP.Address
@@ -158,6 +157,11 @@ data MUCState m = MUCState
 mucNS :: Text
 mucName :: Text -> Name
 (mucNS, mucName) = namePair "http://jabber.org/protocol/muc"
+
+data MUCDisco = MUCDisco
+
+instance DiscoInfoProvider MUCDisco where
+  discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton mucNS
 
 mucNickNode :: Text
 mucNickNode = "x-roomuser-item"
@@ -412,10 +416,8 @@ mucPlugin pluginsRef = do
   let plugin :: MUCPlugin m = MUCPlugin {..}
   RegRef.insertNewOrFailM mucPluginState $ pluginsHooksSet pluginsRef
   RegRef.insertNewOrFailM mucPluginSlot $ pluginsHooksSet pluginsRef
-  let discoInfo = emptyDiscoInfo {discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton mucNS}}
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
   pHandlers <- presenceHandlers pluginsRef
   HL.pushNewOrFailM plugin pHandlers
-  dInfos <- discoInfos pluginsRef
-  void $ RefMap.add dInfos $ return discoInfo
+  addDiscoInfo pluginsRef MUCDisco

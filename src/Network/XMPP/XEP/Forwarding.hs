@@ -28,8 +28,9 @@ data Forwarded = Forwarded
   }
   deriving (Show)
 
--- | Parse a @\<forwarded\>@ element, extracting an optional @\<delay\>@ and the inner @\<message\>@.
--- Returns @Nothing@ if the element is not @\<forwarded\>@, or @Just (Left err)@ if malformed.
+{- | Parse a @\<forwarded\>@ element, extracting an optional @\<delay\>@ and the inner @\<message\>@.
+Returns @Nothing@ if the element is not @\<forwarded\>@, or @Just (Left err)@ if malformed.
+-}
 parseForwarded :: Element -> Maybe (Either StanzaError Forwarded)
 parseForwarded e
   | elementName e == forwardName "forwarded" =

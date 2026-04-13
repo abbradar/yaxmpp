@@ -71,8 +71,9 @@ data IMPlugin m = IMPlugin
   , imPluginCodecs :: IMCodecList m
   }
 
--- | Parse a raw IM message from its type and child elements.
--- Returns 'Nothing' if there is no body, or @Just (Left err)@ if malformed.
+{- | Parse a raw IM message from its type and child elements.
+Returns 'Nothing' if there is no body, or @Just (Left err)@ if malformed.
+-}
 parseRawIMMessage :: MessageType -> [Element] -> Maybe (Either StanzaError IMMessage)
 parseRawIMMessage imType children =
   case localizedFromElement (jcName "body") children of

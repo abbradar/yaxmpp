@@ -28,7 +28,6 @@ import qualified Text.XML.Cursor as XC
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import qualified Data.RefMap as RefMap
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
@@ -117,8 +116,9 @@ doGetVersion pluginsRef addr handler = do
  where
   getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 
--- | Get version info, using cached MemoAsync values for JIDs with
--- active presences and for the homeserver.
+{- | Get version info, using cached MemoAsync values for JIDs with
+active presences and for the homeserver.
+-}
 getVersion :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
 getVersion pluginsRef addr handler
   | isHomeServer = do
@@ -136,19 +136,19 @@ getVersion pluginsRef addr handler
   myAddress = sessionAddress $ ssSession $ pluginsSession pluginsRef
   isHomeServer = addressLocal addr == Nothing && addressResource addr == Nothing && addressDomain addr == bareDomain (fullBare myAddress)
 
+data VersionDisco = VersionDisco
+
+instance DiscoInfoProvider VersionDisco where
+  discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton versionNS
+
 versionPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> VersionInfo -> m ()
 versionPlugin pluginsRef settings = do
-  let discoInfo =
-        emptyDiscoInfo
-          { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton versionNS}
-          }
-      myAddress = sessionAddress $ ssSession $ pluginsSession pluginsRef
+  let myAddress = sessionAddress $ ssSession $ pluginsSession pluginsRef
       homeAddr = XMPPAddress Nothing (bareDomain $ fullBare myAddress) Nothing
   homeLazy <- MemoAsync.new $ doGetVersion pluginsRef homeAddr
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM (VersionPlugin settings) iqHandlers
-  dInfos <- discoInfos pluginsRef
-  void $ RefMap.add dInfos $ return discoInfo
+  addDiscoInfo pluginsRef VersionDisco
   RegRef.insertNewOrFailM (VersionHomeCache homeLazy :: VersionHomeCache m) $ pluginsHooksSet pluginsRef
   codecs <- presenceCodecs pluginsRef
   Codec.pushNewOrFailM (VersionCodec pluginsRef :: VersionCodec m) codecs

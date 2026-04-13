@@ -40,6 +40,7 @@ import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Subscription
 import Network.XMPP.XEP.Capabilities
+import Network.XMPP.XEP.ChatMarkers
 import Network.XMPP.XEP.ChatStates
 import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
@@ -79,6 +80,10 @@ instance (MonadStream m) => SlotSignal m MUCEvent (ClientPlugin m) where
 instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatState) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) (addr, _msgType, cs) =
     clientWriteMessage [i|#{addressToText addr} is #{cs}|]
+
+instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatMarker) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (addr, _msgType, marker) =
+    clientWriteMessage [i|#{addressToText addr} marker: #{marker}|]
 
 data Settings = Settings
   { server :: Text
@@ -172,6 +177,7 @@ main = do
         delayedDeliveryPlugin pluginsRef
         mucPlugin pluginsRef
         chatStatePlugin pluginsRef
+        chatMarkersPlugin pluginsRef
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
@@ -198,6 +204,8 @@ main = do
           Slot.pushNewOrFailM clientPlugin mSlot
           csSlot <- chatStateSlot pluginsRef
           Slot.pushNewOrFailM clientPlugin csSlot
+          cmSlot <- chatMarkerSlot pluginsRef
+          Slot.pushNewOrFailM clientPlugin cmSlot
 
           myPresenceSend pluginsRef $ Just defaultPresence
 

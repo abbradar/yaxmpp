@@ -17,7 +17,6 @@ import qualified Text.XML.Cursor as XC
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import qualified Data.RefMap as RefMap
 import Data.Time.XMPP
 import Network.XMPP.Address
 import Network.XMPP.Plugin
@@ -31,6 +30,9 @@ timeName :: Text -> Name
 (timeNS, timeName) = namePair "urn:xmpp:time"
 
 data EntityTimePlugin = EntityTimePlugin
+
+instance DiscoInfoProvider EntityTimePlugin where
+  discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton timeNS
 
 instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse EntityTimePlugin where
   tryHandle _ (InRequestIQ {iriType = IQGet, iriChildren = [req]})
@@ -73,11 +75,6 @@ getEntityTime pluginsRef addr handler = do
 
 entityTimePlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
 entityTimePlugin pluginsRef = do
-  let discoInfo =
-        emptyDiscoInfo
-          { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton timeNS}
-          }
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM EntityTimePlugin iqHandlers
-  dInfos <- discoInfos pluginsRef
-  void $ RefMap.add dInfos $ return discoInfo
+  addDiscoInfo pluginsRef EntityTimePlugin

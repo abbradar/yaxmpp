@@ -12,7 +12,6 @@ import Text.XML (Name, elementName)
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import qualified Data.RefMap as RefMap
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
@@ -26,14 +25,18 @@ pingName :: Text -> Name
 
 data PingPlugin = PingPlugin
 
+instance DiscoInfoProvider PingPlugin where
+  discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton pingNS
+
 instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse PingPlugin where
   tryHandle _ (InRequestIQ {iriType = IQGet, iriChildren = [req]})
     | elementName req == pingName "ping" =
         return $ Just $ IQResult []
   tryHandle _ _ = return Nothing
 
--- | Send a ping to the given address. Calls the handler with 'Right ()' on
--- success (result IQ) or 'Left err' on error.
+{- | Send a ping to the given address. Calls the handler with 'Right ()' on
+success (result IQ) or 'Left err' on error.
+-}
 sendPing :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> (Either StanzaError () -> m ()) -> m ()
 sendPing pluginsRef addr handler = do
   let sess = pluginsSession pluginsRef
@@ -50,11 +53,6 @@ sendPing pluginsRef addr handler = do
 
 pingPlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
 pingPlugin pluginsRef = do
-  let discoInfo =
-        emptyDiscoInfo
-          { discoIEntity = emptyDiscoEntity {discoFeatures = S.singleton pingNS}
-          }
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM PingPlugin iqHandlers
-  dInfos <- discoInfos pluginsRef
-  void $ RefMap.add dInfos $ return discoInfo
+  addDiscoInfo pluginsRef PingPlugin

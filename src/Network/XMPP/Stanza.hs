@@ -9,6 +9,7 @@ module Network.XMPP.Stanza (
   featureNotImplemented,
   serviceUnavailable,
   itemNotFound,
+  MessageId,
   MessageType (..),
   PresenceType (..),
   OutStanzaType (..),
@@ -183,6 +184,9 @@ itemNotFound desc =
     , szeText = Just desc
     }
 
+-- | A stanza @id@ attribute value.
+type MessageId = Text
+
 data MessageType
   = MessageChat
   | MessageGroupchat
@@ -235,7 +239,7 @@ data InStanzaType
 data InStanza = InStanza
   { istFrom :: Maybe XMPPAddress
   , istTo :: Maybe XMPPAddress
-  , istId :: Maybe Text
+  , istId :: Maybe MessageId
   , istType :: InStanzaType
   , istChildren :: [Element]
   }

@@ -75,8 +75,9 @@ extractStanzaIds elems =
 
 data StanzaIdsCodec = StanzaIdsCodec
 
--- | Message codec: on decode, extract origin-id and stanza-ids into extended.
--- On encode, generate a fresh origin-id and insert it.
+{- | Message codec: on decode, extract origin-id and stanza-ids into extended.
+On encode, generate a fresh origin-id and insert it.
+-}
 instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsCodec where
   codecDecode _ _ msg =
     let (ids, raw') = extractStanzaIds (imRaw msg)
