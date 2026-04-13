@@ -384,7 +384,7 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse DiscoPlugin 
           | otherwise = Nothing
     case res of
       Nothing -> return Nothing
-      Just Nothing -> return $ Just $ IQError $ itemNotFound "unknown node"
+      Just Nothing -> return $ Just $ IQError $ itemNotFound "Unknown node"
       Just (Just (name, elems)) ->
         return $ Just $ IQResult [element name (maybeToList $ ("node",) <$> getAttr "node" req) $ map NodeElement elems]
    where
