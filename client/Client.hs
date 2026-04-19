@@ -46,6 +46,7 @@ import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
+import Network.XMPP.XEP.OccupantId
 import Network.XMPP.XEP.Ping
 import Network.XMPP.XEP.StanzaIds
 import Network.XMPP.XEP.Version
@@ -182,6 +183,7 @@ main = do
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
         stanzaIdsPlugin pluginsRef
+        occupantIdPlugin pluginsRef
 
         let saveCache = do
               cache <- getCache pluginsRef
