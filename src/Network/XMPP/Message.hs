@@ -8,6 +8,7 @@ module Network.XMPP.Message (
   imCodecs,
   imSend,
   imPlugin,
+  parseIMMessage,
 )
 where
 
@@ -82,7 +83,7 @@ parseRawIMMessage imType children =
       let getEither = either throwE return
           cur = fromChildren children
       imBody <- case localizedFromElement (jcName "body") children of
-        Nothing -> throwE $ badRequest "parseRawIMMessage: no body"
+        Nothing -> throwE $ badRequest "message has no <body>"
         Just bodyRes -> getEither bodyRes
       imSubject <- mapM getEither $ localizedFromElement (jcName "subject") children
       let thread = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
@@ -97,23 +98,28 @@ parseRawIMMessage imType children =
         { imParent = getAttr "parent" e
         , ..
         }
-  getThread _ = Left $ badRequest "parseRawIMMessage: invalid thread element"
+  getThread _ = Left $ badRequest "invalid <thread> element"
 
 -- | Parse and decode a message through IM codecs. Returns 'Nothing' if there is no body.
-parseIMMessage :: (MonadStream m) => IMPlugin m -> XMPPAddress -> MessageType -> [Element] -> m (Maybe (Either StanzaError IMMessage))
-parseIMMessage (IMPlugin {..}) from msgType children =
+parseIMMessage :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> MessageType -> [Element] -> m (Maybe (Either StanzaError IMMessage))
+parseIMMessage pluginsRef from msgType children = do
+  codecs <- imCodecs pluginsRef
+  parseIMMessageWith codecs from msgType children
+
+parseIMMessageWith :: (MonadStream m) => IMCodecList m -> XMPPAddress -> MessageType -> [Element] -> m (Maybe (Either StanzaError IMMessage))
+parseIMMessageWith codecs from msgType children =
   case parseRawIMMessage msgType children of
     Nothing -> return Nothing
     Just (Left e) -> return $ Just $ Left e
     Just (Right msg) -> do
-      msg' <- decodeAll imPluginCodecs from msg
+      msg' <- decodeAll codecs from msg
       return $ Just $ Right msg'
 
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
-  tryHandle plugin@(IMPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right imType), istChildren})
+  tryHandle (IMPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right imType), istChildren})
     | Just _ <- localizedFromElement (jcName "body") istChildren =
         Just <$> do
-          result <- parseIMMessage plugin from imType istChildren
+          result <- parseIMMessageWith imPluginCodecs from imType istChildren
           case result of
             Nothing -> return InSilent
             Just (Left e) -> return $ InError e

@@ -112,7 +112,7 @@ doGetVersion pluginsRef addr handler = do
         , [swVersion] <- getEntry r "version"
         , swOS <- listToMaybe $ getEntry r "os" ->
             Right $ VersionInfo {..}
-      _ -> Left $ badRequest "getVersion: invalid response"
+      _ -> Left $ badRequest "invalid version response"
  where
   getEntry r name = fromElement r $/ XC.element (versionName name) &/ content
 

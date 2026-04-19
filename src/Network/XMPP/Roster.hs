@@ -219,14 +219,14 @@ sendFirstRequest session mold handler = do
 
 getRosterEvent :: Element -> Either StanzaError RosterEvent
 getRosterEvent e = do
-  unless (elementName e == rosterName "item") $ Left $ badRequest [i|getRosterEvent: invalid roster item #{e}|]
+  unless (elementName e == rosterName "item") $ Left $ badRequest [i|invalid roster item #{e}|]
   jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
-    Nothing -> Left $ jidMalformed "getRosterEvent: invalid jid in roster push"
+    Nothing -> Left $ jidMalformed "invalid jid in roster push"
     Just r -> return r
   rentrySubscriptionAsked <- case getAttr "ask" e of
     Nothing -> return False
     Just "subscribe" -> return True
-    _ -> Left $ badRequest "getRosterEvent: invalid ask type"
+    _ -> Left $ badRequest "invalid ask type"
   let subscr = fromMaybe "none" (getAttr "subscription" e)
   case injFrom subscr of
     Just rentrySubscription -> do
@@ -238,7 +238,7 @@ getRosterEvent e = do
               }
       return $ RosterInsert jid entry'
     Nothing | subscr == "remove" -> return $ RosterDelete jid
-    _ -> Left $ badRequest "getRosterEvent: invalid subscription attribute"
+    _ -> Left $ badRequest "invalid subscription attribute"
 
 applyRosterEvent :: RosterEntries -> RosterEvent -> RosterEntries
 applyRosterEvent roster (RosterInsert jid entry) = M.insert jid entry roster

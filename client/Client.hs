@@ -40,6 +40,7 @@ import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Subscription
 import Network.XMPP.XEP.Capabilities
+import Network.XMPP.XEP.Carbons
 import Network.XMPP.XEP.ChatMarkers
 import Network.XMPP.XEP.ChatStates
 import Network.XMPP.XEP.DelayedDelivery
@@ -85,6 +86,14 @@ instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatState) (
 instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatMarker) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) (addr, _msgType, marker) =
     clientWriteMessage [i|#{addressToText addr} marker: #{marker}|]
+
+instance (MonadStream m) => SlotSignal m (CarbonDirection, XMPPAddress, IMMessage) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (dir, addr, msg) = do
+    let text = localizedGet (Just "en") $ imBody msg
+        arrow :: Text = case dir of
+          CarbonReceived -> "<-"
+          CarbonSent -> "->"
+    clientWriteMessage [i|carbon #{arrow} #{addressToText addr}: #{text}|]
 
 data Settings = Settings
   { server :: Text
@@ -179,6 +188,7 @@ main = do
         mucPlugin pluginsRef
         chatStatePlugin pluginsRef
         chatMarkersPlugin pluginsRef
+        carbonsPlugin pluginsRef
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
@@ -208,6 +218,8 @@ main = do
           Slot.pushNewOrFailM clientPlugin csSlot
           cmSlot <- chatMarkerSlot pluginsRef
           Slot.pushNewOrFailM clientPlugin cmSlot
+          cbSlot <- carbonSlot pluginsRef
+          Slot.pushNewOrFailM clientPlugin cbSlot
 
           myPresenceSend pluginsRef $ Just defaultPresence
 
@@ -373,6 +385,28 @@ main = do
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = (plainIMMessage $ T.pack $ unwords msg) {imType = MessageGroupchat}
                               runInBase $ imSend pluginsRef addr imsg
+                            _ -> HL.outputStrLn "Invalid arguments"
+                        , commandAutocomplete = \_ _ -> return []
+                        }
+                    )
+                  ,
+                    ( "carbons_enable"
+                    , Command
+                        { commandHandler = \runInBase args -> case args of
+                            [] -> runInBase $ carbonsEnable pluginsRef $ \case
+                              Right () -> liftIO $ putStrLn "Carbons enabled"
+                              Left e -> liftIO $ putStrLn [i|Failed to enable carbons: #{e}|]
+                            _ -> HL.outputStrLn "Invalid arguments"
+                        , commandAutocomplete = \_ _ -> return []
+                        }
+                    )
+                  ,
+                    ( "carbons_disable"
+                    , Command
+                        { commandHandler = \runInBase args -> case args of
+                            [] -> runInBase $ carbonsDisable pluginsRef $ \case
+                              Right () -> liftIO $ putStrLn "Carbons disabled"
+                              Left e -> liftIO $ putStrLn [i|Failed to disable carbons: #{e}|]
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

@@ -69,7 +69,7 @@ getEntityTime pluginsRef addr handler = do
         , -- Not strictly required but is a MUST by XEP
           zonedTimeZone utime == utc ->
             Right $ utcToZonedTime tz $ zonedTimeToUTC utime
-      _ -> Left $ badRequest "getEntityTime: invalid response"
+      _ -> Left $ badRequest "invalid entity time response"
  where
   getEntry r name = fromElement r $/ XC.element (timeName name) &/ content
 

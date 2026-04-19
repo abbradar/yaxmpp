@@ -128,16 +128,16 @@ parsePresence elems = do
   presenceShow <- case cur $/ XC.element (jcName "show") &/ content of
     [val] -> case injFrom val of
       Just sh -> return $ Just sh
-      Nothing -> Left $ badRequest "parsePresence: invalid show"
+      Nothing -> Left $ badRequest "invalid <show> value"
     [] -> return Nothing
-    _ -> Left $ badRequest "parsePresence: multiple show values"
+    _ -> Left $ badRequest "multiple <show> values"
   presenceStatus <- sequence $ localizedFromElement (jcName "status") elems
   presencePriority <- case cur $/ XC.element (jcName "priority") &/ content of
     [val] -> case readIntMaybe $ T.unpack val of
-      Nothing -> Left $ badRequest "parsePresence: invalid priority value"
+      Nothing -> Left $ badRequest "invalid <priority> value"
       Just r -> return r
     [] -> return 0
-    _ -> Left $ badRequest "parsePresence: multiple priority values"
+    _ -> Left $ badRequest "multiple <priority> values"
   let presenceRaw = parseExtended elems
       presenceExtended = Reg.empty
 

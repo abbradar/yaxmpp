@@ -37,6 +37,6 @@ parseForwarded e
       let cur = fromElement e
           fwdDelay = listToMaybe $ mapMaybe DD.parseDelay $ cur $/ curAnyElement
        in Just $ case listToMaybe $ cur $/ XC.element (jcName "message") &| curElement of
-            Nothing -> Left $ badRequest "parseForwarded: no <message> in <forwarded>"
+            Nothing -> Left $ badRequest "no <message> in <forwarded>"
             Just fwdMessage -> Right Forwarded {..}
   | otherwise = Nothing

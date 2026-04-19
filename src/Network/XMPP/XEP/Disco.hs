@@ -97,7 +97,7 @@ discoInfoName :: Text -> Name
 
 requiredAttr :: Name -> Element -> Either StanzaError Text
 requiredAttr name e = case getAttr name e of
-  Nothing -> Left $ badRequest [i|requiredAttr: no $name attribute in #{elementName e}|]
+  Nothing -> Left $ badRequest [i|no #{name} attribute in #{elementName e}|]
   Just r -> return r
 
 parseNamed :: (Show k, Ord k) => Element -> Name -> (Element -> Either StanzaError k) -> Either StanzaError (Map k (Maybe LocalizedText))
@@ -112,14 +112,14 @@ parseNamed root name getKey = do
           Nothing -> M.empty
           Just text -> M.singleton (xmlLangGet e) text
     return (k, names)
-  conflict feature _ _ = Left $ badRequest [i|parseNamed: conflicting feature #{show feature}|]
+  conflict feature _ _ = Left $ badRequest [i|conflicting feature #{show feature}|]
 
 parseDiscoEntity :: Element -> Either StanzaError DiscoEntity
 parseDiscoEntity re = do
   discoIdentities <- parseNamed re (discoInfoName "identity") getIdentity
   features <- mapM getFeature $ fromElement re $/ XC.element (discoInfoName "feature") &| curElement
   let discoFeatures' = S.fromList features
-  when (S.size discoFeatures' /= length features) $ Left $ badRequest [i|parseDiscoEntity: non-unique features|]
+  when (S.size discoFeatures' /= length features) $ Left $ badRequest [i|non-unique features|]
   -- XEP-0030: expect disco#info to be supported even if not advertised.
   let discoFeatures = S.insert discoInfoNS discoFeatures'
 
@@ -185,7 +185,7 @@ doGetDiscoEntity pluginsRef addr node handler = do
         let result = case ret of
               Left e -> Left e
               Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
-              _ -> Left $ badRequest "getDiscoEntity: invalid response"
+              _ -> Left $ badRequest "invalid disco#info response"
         handler result
 
 {- | Get disco entity info, using cached MemoAsync values for JIDs with
@@ -224,7 +224,7 @@ parseDiscoItems re = parseNamed re (discoItemsName "item") getItem
   getItem e = do
     address' <- requiredAttr "jid" e
     address <- case xmppAddress address' of
-      Left err -> Left $ jidMalformed [i|parseDiscoItems: malformed jid #{address'}: #{err}|]
+      Left err -> Left $ jidMalformed [i|malformed jid #{address'}: #{err}|]
       Right r -> return r
     let node = getAttr "node" e
     return (address, node)
@@ -242,7 +242,7 @@ getDiscoItems pluginsRef addr node handler = do
     $ \resp -> handler $ case resp of
       Left e -> Left e
       Right [r] -> parseDiscoItems r
-      _ -> Left $ badRequest "getDiscoItems: multiple elements in response"
+      _ -> Left $ badRequest "multiple elements in disco#items response"
 
 data DiscoTopo = DiscoTopo
   { discoRoot :: DiscoEntity
@@ -364,8 +364,7 @@ mergeProviders reg = do
   r <- foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos
   rootNode <- addItemsFeature $ discoINode r
   children <- mapM addItemsFeature $ discoIChildren r
-  let r' = r {discoINode = rootNode, discoIChildren = children}
-  discoInfoUnion r' $ featuresDiscoInfo Nothing $ S.singleton discoInfoNS
+  return r {discoINode = rootNode, discoIChildren = children}
 
 newtype DiscoPlugin = DiscoPlugin DiscoPluginState
 

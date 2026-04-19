@@ -432,7 +432,7 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
           | otherwise = $(logWarn) [i|Error in received non-IQ stanza: #{err}|]
         getAddr name = mapM extractAddr $ getAttr name e
          where
-          extractAddr addr = checkOrFail (toRight $ xmppAddress addr) $ sendErrorOnIq $ jidMalformed [i|stanzaSessionStep: malformed address #{addr}|]
+          extractAddr addr = checkOrFail (toRight $ xmppAddress addr) $ sendErrorOnIq $ jidMalformed [i|malformed address #{addr}|]
         ename = elementName e
         payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e
         tmtype = getAttr "type" e
@@ -445,8 +445,8 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
 
     if ename == jcName "iq"
       then do
-        ttype <- checkOrFail tmtype $ sendError $ badRequest "stanzaSessionStep: iq type is not specified"
-        tid <- checkOrFail tmid $ sendError $ badRequest "stanzaSessionStep: iq id is not specified"
+        ttype <- checkOrFail tmtype $ sendError $ badRequest "iq type is not specified"
+        tid <- checkOrFail tmid $ sendError $ badRequest "iq id is not specified"
         case injFrom ttype of
           Just reqType -> lift $ do
             res <-
@@ -473,16 +473,16 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
                 sessionSend ssSession $ element (jcName "iq") attrs $ map NodeElement cres
           Nothing -> case injFrom ttype of
             Just resType -> do
-              nid <- checkOrFail (UUID.fromText tid) $ sendError $ badRequest "stanzaSessionStep: iq response id is invalid"
+              nid <- checkOrFail (UUID.fromText tid) $ sendError $ badRequest "iq response id is invalid"
               lift $ do
                 mhandler <- atomicModifyIORef' ssRequests $ \requests -> case M.lookup (tfrom, nid) requests of
                   Nothing -> (requests, Nothing)
                   Just handler -> (M.delete (tfrom, nid) requests, Just handler)
                 case (mhandler, resType) of
-                  (Nothing, _) -> sendError $ badRequest "stanzaSessionStep: corresponding request for response is not found"
+                  (Nothing, _) -> sendError $ badRequest "corresponding request for response is not found"
                   (Just handler, IQTypeResult) -> handler $ Right payload
                   (Just handler, IQTypeError) -> handler $ Left $ getStanzaError e
-            Nothing -> lift $ sendError $ badRequest "stanzaSessionStep: iq type is invalid"
+            Nothing -> lift $ sendError $ badRequest "iq type is invalid"
       else do
         let (ttype, children) =
               if tmtype == Just "error"
@@ -493,13 +493,13 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
             | ename == jcName "message" -> do
                 let getType mt = case mt of
                       Nothing -> return MessageNormal
-                      Just t -> checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid message type"
+                      Just t -> checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "invalid message type"
                 InMessage <$> mapM getType ttype
             | ename == jcName "presence" -> do
-                let getType t = checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "stanzaSessionStep: invalid presence type"
+                let getType t = checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "invalid presence type"
                 InPresence <$> mapM (mapM getType) ttype
             | otherwise -> do
-                lift $ sendErrorOnIq $ badRequest "stanzaSessionStep: unknown stanza type"
+                lift $ sendErrorOnIq $ badRequest "unknown stanza type"
                 mzero
 
         res <-
