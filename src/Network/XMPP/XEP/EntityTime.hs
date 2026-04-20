@@ -85,6 +85,5 @@ entityTimePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 entityTimePlugin pluginsRef = do
   let plugin :: EntityTimePlugin m = EntityTimePlugin {entityTimePluginSession = pluginsSession pluginsRef}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM plugin iqHandlers
+  HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef
   addDiscoInfo pluginsRef plugin

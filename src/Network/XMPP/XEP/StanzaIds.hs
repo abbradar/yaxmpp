@@ -9,6 +9,7 @@ module Network.XMPP.XEP.StanzaIds (
   stanzaIdsPlugin,
 ) where
 
+import Control.Applicative ((<|>))
 import Control.Codec (Codec (..))
 import qualified Control.Codec as Codec
 import Control.Monad.IO.Class
@@ -86,12 +87,13 @@ instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsPlugin where
      in return $ msg {imRaw = raw', imExtended = ext'}
 
   codecEncode _ _ msg = do
-    oid <- liftIO $ OriginId . UUID.toText <$> UUID.nextRandom
+    oid@(OriginId oidText) <- liftIO $ OriginId . UUID.toText <$> UUID.nextRandom
     let ext = imExtended msg
         (_, ext') = Reg.pop (Proxy :: Proxy StanzaIds) ext
         raw = imRaw msg
         raw' = originIdElement oid : raw
-     in return $ msg {imRaw = raw', imExtended = ext'}
+        mid = imId msg <|> Just oidText
+     in return $ msg {imId = mid, imRaw = raw', imExtended = ext'}
 
 stanzaIdsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 stanzaIdsPlugin pluginsRef = do

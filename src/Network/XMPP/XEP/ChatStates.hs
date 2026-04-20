@@ -112,8 +112,7 @@ chatStatePlugin pluginsRef = do
   let chatStatePluginSession = pluginsSession pluginsRef
       plugin :: ChatStatePlugin m = ChatStatePlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  inHandlers <- pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin inHandlers
+  HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   imp <- getIMPlugin pluginsRef
   Slot.pushNewOrFailM plugin (imPluginSlot imp)
   addDiscoInfo pluginsRef plugin

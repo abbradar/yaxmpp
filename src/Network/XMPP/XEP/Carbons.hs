@@ -14,12 +14,15 @@ module Network.XMPP.XEP.Carbons (
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
+import Control.MemoAsync (MemoAsync)
+import qualified Control.MemoAsync as MemoAsync
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Maybe
 import Data.Proxy
 import qualified Data.Registry.Mutable as RegRef
 import qualified Data.Set as S
+import Data.String.Interpolate (i)
 import Data.Text (Text)
 import Data.Typeable (Typeable)
 import Text.XML
@@ -49,6 +52,7 @@ type CarbonSlot m = Slot m (CarbonDirection, AddressedIMMessage)
 data CarbonsPlugin m = CarbonsPlugin
   { carbonsPluginSession :: StanzaSession m
   , carbonsPluginIMPlugin :: IMPlugin m
+  , carbonsPluginSupported :: MemoAsync m (Either StanzaError Bool)
   , carbonsPluginSlot :: CarbonSlot m
   }
 
@@ -105,13 +109,17 @@ getCarbonsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (CarbonsP
 getCarbonsPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (CarbonsPlugin m)) $ pluginsHooksSet pluginsRef
 
 carbonsSet :: (MonadStream m) => CarbonsPlugin m -> Text -> (Either StanzaError () -> m ()) -> m ()
-carbonsSet CarbonsPlugin {carbonsPluginSession} localName handler =
-  stanzaRequest
-    carbonsPluginSession
-    (serverRequest IQSet [closedElement (carbonsName localName)])
-    $ \resp -> handler $ case resp of
-      Left e -> Left e
-      Right _ -> Right ()
+carbonsSet CarbonsPlugin {..} localName handler =
+  MemoAsync.get carbonsPluginSupported $ \case
+    Left e -> handler $ Left e
+    Right False -> handler $ Left $ featureNotImplemented [i|#{carbonsNS} not supported by the server|]
+    Right True ->
+      stanzaRequest
+        carbonsPluginSession
+        (serverRequest IQSet [closedElement (carbonsName localName)])
+        $ \resp -> handler $ case resp of
+          Left e -> Left e
+          Right _ -> Right ()
 
 -- | Enable message carbons on this session via IQ-set.
 carbonsEnable :: (MonadStream m) => CarbonsPlugin m -> (Either StanzaError () -> m ()) -> m ()
@@ -128,9 +136,10 @@ carbonsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 carbonsPlugin pluginsRef = do
   carbonsPluginSlot <- Slot.new
   carbonsPluginIMPlugin <- getIMPlugin pluginsRef
+  discoP <- getDiscoPlugin pluginsRef
+  carbonsPluginSupported <- newHomeFeatureCheck discoP carbonsNS
   let carbonsPluginSession = pluginsSession pluginsRef
       plugin :: CarbonsPlugin m = CarbonsPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  inHandlers <- pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin inHandlers
+  HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   addDiscoInfo pluginsRef plugin

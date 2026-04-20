@@ -63,6 +63,5 @@ pingPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 pingPlugin pluginsRef = do
   let plugin :: PingPlugin m = PingPlugin {pingPluginSession = pluginsSession pluginsRef}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM plugin iqHandlers
+  HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef
   addDiscoInfo pluginsRef plugin

@@ -232,14 +232,15 @@ main = runStderrLoggingT $ do
                           msgText = T.decodeUtf8 msg
                           imMsg =
                             IMMessage
-                              { imType = MessageGroupchat
+                              { imId = Nothing
+                              , imType = MessageGroupchat
                               , imSubject = Nothing
                               , imBody = localizedFromText msgText
                               , imThread = Nothing
                               , imRaw = []
                               , imExtended = Reg.empty
                               }
-                      imSend imP (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
+                      void $ imSend imP (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
                   | otherwise -> $(logWarn) [i|Unknown IRC command: #{req}|]
 
         runGeneralTCPServer (serverSettings (ircPort settings) "*") $ \app -> do

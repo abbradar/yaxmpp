@@ -112,7 +112,6 @@ subscriptionPlugin pluginsRef = do
   let subscriptionPluginSession = pluginsSession pluginsRef
       plugin :: SubscriptionPlugin m = SubscriptionPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  inHandlers <- pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin inHandlers
+  HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   rp <- getRosterPlugin pluginsRef
   Slot.pushNewOrFailM plugin (rosterPluginSlot rp)

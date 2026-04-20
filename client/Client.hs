@@ -11,11 +11,14 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Default
 import Data.List (isPrefixOf)
 import qualified Data.Map as M
+import Data.Proxy
+import qualified Data.Registry as Reg
 import qualified Data.Set as S
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import Data.Time.XMPP (zonedTimeToXmpp)
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import Network.Connection
@@ -44,6 +47,7 @@ import Network.XMPP.XEP.Carbons
 import Network.XMPP.XEP.ChatMarkers
 import Network.XMPP.XEP.ChatStates
 import Network.XMPP.XEP.DelayedDelivery
+import Network.XMPP.XEP.DeliveryReceipts
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MUC
@@ -70,10 +74,17 @@ instance (MonadStream m) => SlotSignal m RosterPresenceEvent (ClientPlugin m) wh
   emitSignal (ClientPlugin {..}) event =
     clientWriteMessage [i|Got presence update for roster: #{event}|]
 
+formatIMMessage :: AddressedIMMessage -> String
+formatIMMessage AddressedIMMessage {imFrom, imTo, imMessage} =
+  [i|#{prefix}#{addressToText imFrom} -> #{addressToText imTo}: #{text}|]
+ where
+  text = localizedGet (Just "en") $ imBody imMessage
+  prefix = case Reg.lookup (Proxy :: Proxy DelayInfo) (imExtended imMessage) of
+    Just DelayInfo {delayStamp} -> [i|#{zonedTimeToXmpp delayStamp}, |] :: String
+    Nothing -> ""
+
 instance (MonadStream m) => SlotSignal m AddressedIMMessage (ClientPlugin m) where
-  emitSignal (ClientPlugin {..}) AddressedIMMessage {imFrom, imMessage} = do
-    let text = localizedGet (Just "en") $ imBody imMessage
-    clientWriteMessage [i|#{addressToText imFrom}: #{text}|]
+  emitSignal (ClientPlugin {..}) msg = clientWriteMessage $ formatIMMessage msg
 
 instance (MonadStream m) => SlotSignal m MUCEvent (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
@@ -87,13 +98,12 @@ instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatMarker) 
   emitSignal (ClientPlugin {..}) (addr, _msgType, marker) =
     clientWriteMessage [i|#{addressToText addr} marker: #{marker}|]
 
+instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageId) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (addr, mid) =
+    clientWriteMessage [i|#{addressToText addr} delivered #{mid}|]
+
 instance (MonadStream m) => SlotSignal m (CarbonDirection, AddressedIMMessage) (ClientPlugin m) where
-  emitSignal (ClientPlugin {..}) (dir, AddressedIMMessage {imFrom, imTo, imMessage}) = do
-    let text = localizedGet (Just "en") $ imBody imMessage
-        (arrow :: Text, peer) = case dir of
-          CarbonReceived -> ("<-", imFrom)
-          CarbonSent -> ("->", imTo)
-    clientWriteMessage [i|carbon #{arrow} #{addressToText peer}: #{text}|]
+  emitSignal (ClientPlugin {..}) (_dir, msg) = clientWriteMessage $ formatIMMessage msg
 
 data Settings = Settings
   { server :: Text
@@ -189,6 +199,7 @@ main = do
         chatStatePlugin pluginsRef
         chatMarkersPlugin pluginsRef
         carbonsPlugin pluginsRef
+        deliveryReceiptsPlugin pluginsRef
         versionPlugin pluginsRef defaultVersion
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
@@ -211,6 +222,7 @@ main = do
           csP <- getChatStatePlugin pluginsRef
           cmP <- getChatMarkersPlugin pluginsRef
           cbP <- getCarbonsPlugin pluginsRef
+          drP <- getDeliveryReceiptsPlugin pluginsRef
           discoP <- getDiscoPlugin pluginsRef
           versionP <- getVersionPlugin pluginsRef
           etP <- getEntityTimePlugin pluginsRef
@@ -225,8 +237,13 @@ main = do
           Slot.pushNewOrFailM clientPlugin (chatStatePluginSlot csP)
           Slot.pushNewOrFailM clientPlugin (chatMarkersPluginSlot cmP)
           Slot.pushNewOrFailM clientPlugin (carbonsPluginSlot cbP)
+          Slot.pushNewOrFailM clientPlugin (deliveryReceiptsPluginSlot drP)
 
           myPresenceSend myPresP $ Just defaultPresence
+
+          carbonsEnable cbP $ \case
+            Right () -> writeMessage "Carbons enabled"
+            Left e -> writeMessage [i|Could not enable carbons: #{e}|]
 
           let commands =
                 M.fromListWith
@@ -256,8 +273,9 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
-                              let imsg = plainIMMessage $ T.pack $ unwords msg
-                              runInBase $ imSend imP addr imsg
+                              let imsg = requestReceipt $ plainIMMessage $ T.pack $ unwords msg
+                              mid <- runInBase $ imSend imP addr imsg
+                              HL.outputStrLn [i|Sent #{mid}|]
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -389,7 +407,7 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = (plainIMMessage $ T.pack $ unwords msg) {imType = MessageGroupchat}
-                              runInBase $ imSend imP addr imsg
+                              void $ runInBase $ imSend imP addr imsg
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

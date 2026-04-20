@@ -94,6 +94,5 @@ chatMarkersPlugin pluginsRef = do
   let chatMarkersPluginSession = pluginsSession pluginsRef
       plugin :: ChatMarkersPlugin m = ChatMarkersPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  inHandlers <- pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin inHandlers
+  HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   addDiscoInfo pluginsRef plugin

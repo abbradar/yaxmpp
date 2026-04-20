@@ -198,8 +198,7 @@ presencePlugin pluginsRef = do
   let presencePluginSession = pluginsSession pluginsRef
       plugin :: PresencePlugin m = PresencePlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  inHandlers <- pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin inHandlers
+  HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
 
 data PresenceEvent k
   = Added k Presence

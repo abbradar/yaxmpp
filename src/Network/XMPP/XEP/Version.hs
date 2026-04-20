@@ -153,7 +153,6 @@ versionPlugin pluginsRef settings = do
   versionPluginPresencePlugin <- getPresencePlugin pluginsRef
   let plugin :: VersionPlugin m = VersionPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM plugin iqHandlers
+  HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef
   addDiscoInfo pluginsRef plugin
   Codec.pushNewOrFailM plugin (presencePluginCodecs versionPluginPresencePlugin)

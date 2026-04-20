@@ -302,5 +302,4 @@ rosterPlugin pluginsRef = do
   void $ forkIO $ tryGet `catch` \(e :: SomeException) -> putMVar firstRoster (throw e)
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   registerCacheGetter pluginsRef plugin
-  iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM plugin iqHandlers
+  HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef

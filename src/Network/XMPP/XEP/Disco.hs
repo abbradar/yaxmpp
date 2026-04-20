@@ -23,6 +23,7 @@ module Network.XMPP.XEP.Disco (
   featuresDiscoInfo,
   addDiscoInfo,
   DiscoEntityCacheHandlers,
+  newHomeFeatureCheck,
   discoPlugin,
 )
 where
@@ -199,6 +200,16 @@ getDiscoEntity (DiscoPlugin {..}) addr node handler
   | otherwise = doGetDiscoEntity discoPluginSession discoPluginCacheHandlers addr node handler
  where
   isHomeServer = addressLocal addr == Nothing && addressResource addr == Nothing && addressDomain addr == bareDomain (fullBare discoPluginMyAddress)
+
+{- | Build a memoized check of whether the home server advertises a disco feature.
+The underlying entity fetch is already memoized, but wrapping the boolean result
+means each consumer can cache its own answer instead of re-traversing the feature set.
+-}
+newHomeFeatureCheck :: (MonadStream m) => DiscoPlugin m -> DiscoFeature -> m (MemoAsync m (Either StanzaError Bool))
+newHomeFeatureCheck (DiscoPlugin {discoPluginHome}) feat = MemoAsync.new $ \cb ->
+  MemoAsync.get discoPluginHome $ \case
+    Left e -> cb (Left e)
+    Right ent -> cb (Right $ feat `S.member` discoFeatures ent)
 
 type DiscoNode = Text
 
@@ -424,7 +435,6 @@ discoPlugin pluginsRef = do
   discoPluginHome <- MemoAsync.new $ doGetDiscoEntity discoPluginSession discoPluginCacheHandlers homeAddr Nothing
   let plugin :: DiscoPlugin m = DiscoPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM plugin iqHandlers
+  HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef
   Codec.pushNewOrFailM plugin (presencePluginCodecs discoPluginPresencePlugin)
   addDiscoInfo pluginsRef plugin

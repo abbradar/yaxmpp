@@ -8,8 +8,6 @@ module Network.XMPP.Plugin (
   XMPPPersistentCache (..),
   XMPPPluginsRef (..),
   newXmppPlugins,
-  pluginsInHandlers,
-  pluginsIQHandlers,
   pluginsSessionStep,
   pluginsOldCacheFor,
   registerCacheGetter,
@@ -20,6 +18,8 @@ import Control.HandlerList (HandlerList)
 import qualified Control.HandlerList as HL
 import Control.Monad
 import Control.Monad.Logger
+import Control.Slot (Slot)
+import qualified Control.Slot as Slot
 import qualified Data.Aeson as JSON
 import Data.ClassBox (ClassBox (..), Unconstrained)
 import Data.Map.Strict (Map)
@@ -42,8 +42,11 @@ class XMPPPersistentCache m a | a -> m where
 data XMPPPluginsRef m = XMPPPluginsRef
   { pluginsSession :: StanzaSession m
   , pluginsHooksSet :: RegistryRef Unconstrained
-  , pluginsInHandlers' :: HandlerList m InStanza InResponse
-  , pluginsIQHandlers' :: HandlerList m InRequestIQ RequestIQResponse
+  , pluginsInHandlers :: HandlerList m InStanza InResponse
+  , pluginsIQHandlers :: HandlerList m InRequestIQ RequestIQResponse
+  , -- | Fires for every incoming stanza after the handler chain has run,
+    -- regardless of whether it was handled. Subscribers get the raw 'InStanza'.
+    postInSlot :: Slot m InStanza
   , pluginsOldCache :: Map Text JSON.Value
   , pluginsCacheGetters :: IORef (Map Text (ClassBox (XMPPPersistentCache m)))
   }
@@ -57,23 +60,19 @@ newXmppPlugins pluginsSession oldCache = do
   let pluginsOldCache = case JSON.fromJSON <$> oldCache of
         Just (JSON.Success m) -> m
         _ -> M.empty
-  pluginsInHandlers' <- HL.new
-  pluginsIQHandlers' <- HL.new
+  pluginsInHandlers <- HL.new
+  pluginsIQHandlers <- HL.new
+  postInSlot <- Slot.new
   pluginsHooksSet <- RegRef.new
-  RegRef.insert pluginsInHandlers' pluginsHooksSet
-  RegRef.insert pluginsIQHandlers' pluginsHooksSet
+  RegRef.insert pluginsInHandlers pluginsHooksSet
+  RegRef.insert pluginsIQHandlers pluginsHooksSet
   pluginsCacheGetters <- newIORef M.empty
   return XMPPPluginsRef {..}
 
-pluginsInHandlers :: (MonadStream m) => XMPPPluginsRef m -> m (HandlerList m InStanza InResponse)
-pluginsInHandlers = return . pluginsInHandlers'
-
-pluginsIQHandlers :: (MonadStream m) => XMPPPluginsRef m -> m (HandlerList m InRequestIQ RequestIQResponse)
-pluginsIQHandlers = return . pluginsIQHandlers'
-
 pluginsInHandler :: (MonadStream m) => XMPPPluginsRef m -> InHandler m
 pluginsInHandler (XMPPPluginsRef {..}) msg = do
-  mr <- HL.call pluginsInHandlers' msg
+  mr <- HL.call pluginsInHandlers msg
+  Slot.call postInSlot msg
   case mr of
     Nothing -> do
       $(logWarn) [i|Unhandled stanza: #{msg}|]
@@ -82,7 +81,7 @@ pluginsInHandler (XMPPPluginsRef {..}) msg = do
 
 pluginsIQHandler :: (MonadStream m) => XMPPPluginsRef m -> IQHandler m
 pluginsIQHandler (XMPPPluginsRef {..}) iq = do
-  mr <- HL.call pluginsIQHandlers' iq
+  mr <- HL.call pluginsIQHandlers iq
   case mr of
     Nothing -> return $ IQError $ serviceUnavailable "Unsupported request"
     Just r -> return r

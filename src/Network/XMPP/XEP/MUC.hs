@@ -410,7 +410,6 @@ mucPlugin pluginsRef = do
   let mucPluginSession = pluginsSession pluginsRef
       plugin :: MUCPlugin m = MUCPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  inHandlers <- pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin inHandlers
+  HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin (presencePluginHandlers mucPluginPresence)
   addDiscoInfo pluginsRef plugin
