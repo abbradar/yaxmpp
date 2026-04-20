@@ -5,7 +5,10 @@ https://xmpp.org/extensions/xep-0333.html
 -}
 module Network.XMPP.XEP.ChatMarkers (
   ChatMarker (..),
-  chatMarkerSlot,
+  ChatMarkerSlot,
+  ChatMarkersPlugin,
+  chatMarkersPluginSlot,
+  getChatMarkersPlugin,
   chatMarkerSend,
   chatMarkersPlugin,
 )
@@ -21,6 +24,7 @@ import Data.Proxy
 import qualified Data.Registry.Mutable as RegRef
 import qualified Data.Set as S
 import Data.Text (Text)
+import Data.Typeable (Typeable)
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
@@ -55,8 +59,9 @@ chatMarkerElement (Acknowledged mid) = element (chatMarkerName "acknowledged") [
 
 type ChatMarkerSlot m = Slot m (XMPPAddress, MessageType, ChatMarker)
 
-newtype ChatMarkersPlugin m = ChatMarkersPlugin
-  { chatMarkersPluginSlot :: ChatMarkerSlot m
+data ChatMarkersPlugin m = ChatMarkersPlugin
+  { chatMarkersPluginSession :: StanzaSession m
+  , chatMarkersPluginSlot :: ChatMarkerSlot m
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (ChatMarkersPlugin m) where
@@ -66,30 +71,29 @@ instance (MonadStream m) => Handler m InStanza InResponse (ChatMarkersPlugin m) 
         return $ Just InSilent
   tryHandle _ _ = return Nothing
 
-chatMarkerSlot :: (MonadStream m) => XMPPPluginsRef m -> m (ChatMarkerSlot m)
-chatMarkerSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+getChatMarkersPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (ChatMarkersPlugin m)
+getChatMarkersPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (ChatMarkersPlugin m)) $ pluginsHooksSet pluginsRef
 
-chatMarkerSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> MessageType -> ChatMarker -> m ()
-chatMarkerSend pluginsRef to msgType marker =
+chatMarkerSend :: (MonadStream m) => ChatMarkersPlugin m -> XMPPAddress -> MessageType -> ChatMarker -> m ()
+chatMarkerSend ChatMarkersPlugin {chatMarkersPluginSession} to msgType marker =
   void $
     stanzaSend
-      (pluginsSession pluginsRef)
+      chatMarkersPluginSession
       OutStanza
         { ostTo = Just to
         , ostType = OutMessage msgType
         , ostChildren = [chatMarkerElement marker]
         }
 
-data ChatMarkersDisco = ChatMarkersDisco
-
-instance DiscoInfoProvider ChatMarkersDisco where
+instance (Typeable m) => DiscoInfoProvider (ChatMarkersPlugin m) where
   discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton chatMarkersNS
 
 chatMarkersPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 chatMarkersPlugin pluginsRef = do
   chatMarkersPluginSlot <- Slot.new
-  let plugin :: ChatMarkersPlugin m = ChatMarkersPlugin {..}
-  RegRef.insertNewOrFailM chatMarkersPluginSlot $ pluginsHooksSet pluginsRef
+  let chatMarkersPluginSession = pluginsSession pluginsRef
+      plugin :: ChatMarkersPlugin m = ChatMarkersPlugin {..}
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
-  addDiscoInfo pluginsRef ChatMarkersDisco
+  addDiscoInfo pluginsRef plugin

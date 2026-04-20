@@ -68,8 +68,8 @@ data IRCBridgePlugin m = IRCBridgePlugin
   , ircUserReply :: ByteString -> ByteString -> [ByteString] -> m ()
   }
 
-instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (IRCBridgePlugin m) where
-  emitSignal (IRCBridgePlugin {..}) (addr@(XMPPAddress {..}), IMMessage {..}) =
+instance (MonadStream m) => SlotSignal m AddressedIMMessage (IRCBridgePlugin m) where
+  emitSignal (IRCBridgePlugin {..}) AddressedIMMessage {imFrom = addr@(XMPPAddress {..}), imMessage = IMMessage {..}} =
     if addressDomain == ircConferenceServer
       then do
         let channel = "#" <> T.encodeUtf8 (localText $ fromJust addressLocal)
@@ -164,10 +164,15 @@ main = runStderrLoggingT $ do
           ircServReply cmd args = ircReply $ IRC.Message (Just $ IRC.Server conferenceHost) cmd args
           ircUserReply nick cmd args = ircReply $ IRC.Message (Just $ IRC.NickName nick (Just nick) (Just conferenceHost)) cmd args
 
+      rosterP <- getRosterPlugin pluginsRef
+      myPresP <- getMyPresencePlugin pluginsRef
+      imP <- getIMPlugin pluginsRef
+      mucP <- getMUCPlugin pluginsRef
+
       _ <- forkLinked $ do
-        rst <- getRoster pluginsRef
+        rst <- getRoster rosterP
         $(logInfo) [i|Got initial roster: #{rst}|]
-        myPresenceSend pluginsRef (Just defaultPresence)
+        myPresenceSend myPresP (Just defaultPresence)
 
         let processIrcRequest = do
               $(logInfo) [i|New IRC connection|]
@@ -181,10 +186,8 @@ main = runStderrLoggingT $ do
                       , ircServReply = ircServReply
                       , ircUserReply = ircUserReply
                       }
-              imS <- lift $ imSlot pluginsRef
-              lift $ Slot.pushNewOrFailM bridgePlugin imS
-              mSlot <- lift $ mucSlot pluginsRef
-              lift $ Slot.pushNewOrFailM bridgePlugin mSlot
+              lift $ Slot.pushNewOrFailM bridgePlugin (imPluginSlot imP)
+              lift $ Slot.pushNewOrFailM bridgePlugin (mucPluginSlot mucP)
 
               C.mapM_ $ \req -> do
                 $(logDebug) [i|Got IRC request: #{req}|]
@@ -202,7 +205,7 @@ main = runStderrLoggingT $ do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           joinOpts = defaultMUCJoinSettings {joinHistory = defaultMUCHistorySettings {histMaxStanzas = Just 0}}
-                      handle (\MUCAlreadyJoinedError -> return ()) $ void $ mucJoin pluginsRef (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
+                      handle (\MUCAlreadyJoinedError -> return ()) $ void $ mucJoin mucP (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
                         case event of
                           RoomPresence otherNick' (MUCJoined _) -> do
                             let otherNick = T.encodeUtf8 $ resourceText otherNick'
@@ -236,7 +239,7 @@ main = runStderrLoggingT $ do
                               , imRaw = []
                               , imExtended = Reg.empty
                               }
-                      imSend pluginsRef (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
+                      imSend imP (XMPPAddress (Just room) (conferenceServer settings) Nothing) imMsg
                   | otherwise -> $(logWarn) [i|Unknown IRC command: #{req}|]
 
         runGeneralTCPServer (serverSettings (ircPort settings) "*") $ \app -> do

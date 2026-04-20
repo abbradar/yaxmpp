@@ -19,7 +19,10 @@ module Network.XMPP.XEP.MUC (
   mucJoin,
   MUCAlreadyLeftError (..),
   mucSendPresence,
-  mucSlot,
+  MUCSlot,
+  MUCPlugin,
+  mucPluginSlot,
+  getMUCPlugin,
   mucPlugin,
 ) where
 
@@ -150,17 +153,19 @@ type MUCValue m = (MUC, MUCHandler m)
 
 type MUCSlot m = Slot m MUCEvent
 
-data MUCState m = MUCState
-  { mucRooms :: IORef (Map BareJID (Either (PendingMUC m) (MUCValue m)))
+data MUCPlugin m = MUCPlugin
+  { mucPluginSession :: StanzaSession m
+  , mucPluginDisco :: DiscoPlugin m
+  , mucPluginPresence :: PresencePlugin m
+  , mucPluginSlot :: MUCSlot m
+  , mucPluginRooms :: IORef (Map BareJID (Either (PendingMUC m) (MUCValue m)))
   }
 
 mucNS :: Text
 mucName :: Text -> Name
 (mucNS, mucName) = namePair "http://jabber.org/protocol/muc"
 
-data MUCDisco = MUCDisco
-
-instance DiscoInfoProvider MUCDisco where
+instance (Typeable m) => DiscoInfoProvider (MUCPlugin m) where
   discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton mucNS
 
 mucNickNode :: Text
@@ -216,10 +221,8 @@ defaultMUCJoinSettings =
     , joinPresence = defaultPresence
     }
 
-mucJoin :: forall m. (MonadStream m) => XMPPPluginsRef m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m (m MUCJoinResult)
-mucJoin pluginsRef addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler = do
-  MUCState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (MUCState m)) $ pluginsHooksSet pluginsRef
-  let session = pluginsSession pluginsRef
+mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m (m MUCJoinResult)
+mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler = do
   pmucPending <- newEmptyMVar
   let initialRoom =
         PendingMUC
@@ -230,20 +233,20 @@ mucJoin pluginsRef addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..},
           }
       roomAddr = fullBare addr
       takeRoom = do
-        good <- atomicModifyIORef' mucRooms $ \rooms ->
+        good <- atomicModifyIORef' mucPluginRooms $ \rooms ->
           case M.lookup roomAddr rooms of
             Nothing -> (M.insert roomAddr (Left initialRoom) rooms, True)
             Just _ -> (rooms, False)
         unless good $ throwM MUCAlreadyJoinedError
-      cleanupRoom = atomicModifyIORef' mucRooms $ \rooms -> (M.delete roomAddr rooms, ())
+      cleanupRoom = atomicModifyIORef' mucPluginRooms $ \rooms -> (M.delete roomAddr rooms, ())
       joinRoom =
-        getDiscoEntity pluginsRef (fullJidAddress addr) (Just mucNickNode) $ \nickResp -> do
+        getDiscoEntity mucPluginDisco (fullJidAddress addr) (Just mucNickNode) $ \nickResp -> do
           resource' <- case nickResp of
             Right ent | Just (Just n) <- M.lookup mucNickIdentity $ discoIdentities ent ->
               case resourceFromText $ localizedGet Nothing n of
                 Nothing -> fail "mucJoin: invalid resource name proposed by server"
                 Just r -> do
-                  atomicModifyIORef' mucRooms $ \rooms -> (M.insert roomAddr (Left $ initialRoom {pmucNick = r}) rooms, ())
+                  atomicModifyIORef' mucPluginRooms $ \rooms -> (M.insert roomAddr (Left $ initialRoom {pmucNick = r}) rooms, ())
                   return r
             _ -> return $ fullResource addr
           let historyAttrs =
@@ -259,9 +262,9 @@ mucJoin pluginsRef addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..},
                   []
                   [ NodeElement $ element (mucName "history") historyAttrs []
                   ]
-          presStanza <- presenceStanza pluginsRef $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
+          presStanza <- presenceStanza mucPluginPresence $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
           void $
-            stanzaSend session $
+            stanzaSend mucPluginSession $
               presStanza
                 { ostTo = Just $ fullJidAddress $ addr {fullResource = resource'}
                 }
@@ -273,16 +276,14 @@ data MUCAlreadyLeftError = MUCAlreadyLeftError
 
 instance Exception MUCAlreadyLeftError
 
-mucSendPresence :: forall m. (MonadStream m) => XMPPPluginsRef m -> BareJID -> Maybe Presence -> m ()
-mucSendPresence pluginsRef addr pres = do
-  MUCState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (MUCState m)) $ pluginsHooksSet pluginsRef
-  let session = pluginsSession pluginsRef
-  rooms <- readIORef mucRooms
+mucSendPresence :: forall m. (MonadStream m) => MUCPlugin m -> BareJID -> Maybe Presence -> m ()
+mucSendPresence MUCPlugin {..} addr pres = do
+  rooms <- readIORef mucPluginRooms
   case M.lookup addr rooms of
     Just (Right (room, _)) -> do
-      presStanza <- presenceStanza pluginsRef pres
+      presStanza <- presenceStanza mucPluginPresence pres
       _ <-
-        stanzaSend session $
+        stanzaSend mucPluginSession $
           presStanza
             { ostTo = Just $ fullJidAddress $ FullJID addr (mucNick room)
             }
@@ -307,16 +308,10 @@ _parseMUCPresence status = do
         ResourceUnavailable _ -> defaultPresence
   return (statusSet, MUCPresence {..})
 
-data MUCPlugin m = MUCPlugin
-  { mucPluginSlot :: MUCSlot m
-  , mucPluginState :: MUCState m
-  }
-
 instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
   tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err)}) = do
-    let MUCState {..} = mucPluginState
-        mucEventHandler = mucPluginSlot
-    mpromise <- atomicModifyIORef' mucRooms $ \rooms ->
+    let mucEventHandler = mucPluginSlot
+    mpromise <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup (fullBare addr) rooms of
         Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucPending pending)
         _ -> (rooms, Nothing)
@@ -326,16 +321,15 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
         Slot.call mucEventHandler $ MUCRejected addr err
         putMVar promise (MUCJoinError err)
         return $ Just InSilent
-  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage (Right MessageGroupchat), istChildren}) = do
-    let MUCState {..} = mucPluginState
+  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage (Right MessageGroupchat), istChildren}) =
     case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
       (subjE : _) -> do
-        rooms <- readIORef mucRooms
+        rooms <- readIORef mucPluginRooms
         case M.lookup bare rooms of
           Just (Right (room, handler)) -> do
             let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
                 room' = room {mucSubject = subj}
-            atomicWriteIORef mucRooms $ M.insert bare (Right (room', handler)) rooms
+            atomicWriteIORef mucPluginRooms $ M.insert bare (Right (room', handler)) rooms
             handler room' RoomSubject
             return $ Just InSilent
           _ -> return Nothing
@@ -350,11 +344,10 @@ data MUCHandleResult a
 instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
   tryHandle _ (AllResourcesOffline _ _) = return Nothing -- MUC rooms don't use bare JID presence
   tryHandle (MUCPlugin {..}) (ResourcePresence addr mpres) = do
-    let MUCState {..} = mucPluginState
-        mucEventHandler = mucPluginSlot
+    let mucEventHandler = mucPluginSlot
         bare = fullBare addr
         resource = fullResource addr
-    processed <- atomicModifyIORef' mucRooms $ \rooms ->
+    processed <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup bare rooms of
         Just (Right (MUC {..}, _))
           | ResourceUnavailable _ <- mpres
@@ -405,19 +398,19 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
       MUCHandled -> return (Just ())
       NotMUCEvent -> return Nothing
 
-mucSlot :: (MonadStream m) => XMPPPluginsRef m -> m (MUCSlot m)
-mucSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+getMUCPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (MUCPlugin m)
+getMUCPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (MUCPlugin m)) $ pluginsHooksSet pluginsRef
 
 mucPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mucPlugin pluginsRef = do
-  mucRooms <- newIORef M.empty
-  let mucPluginState = MUCState {..}
+  mucPluginRooms <- newIORef M.empty
   mucPluginSlot <- Slot.new
-  let plugin :: MUCPlugin m = MUCPlugin {..}
-  RegRef.insertNewOrFailM mucPluginState $ pluginsHooksSet pluginsRef
-  RegRef.insertNewOrFailM mucPluginSlot $ pluginsHooksSet pluginsRef
+  mucPluginDisco <- getDiscoPlugin pluginsRef
+  mucPluginPresence <- getPresencePlugin pluginsRef
+  let mucPluginSession = pluginsSession pluginsRef
+      plugin :: MUCPlugin m = MUCPlugin {..}
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
-  pHandlers <- presenceHandlers pluginsRef
-  HL.pushNewOrFailM plugin pHandlers
-  addDiscoInfo pluginsRef MUCDisco
+  HL.pushNewOrFailM plugin (presencePluginHandlers mucPluginPresence)
+  addDiscoInfo pluginsRef plugin

@@ -1,16 +1,20 @@
 {-# LANGUAGE Strict #-}
 
 module Network.XMPP.XEP.EntityTime (
+  EntityTimePlugin,
+  getEntityTimePlugin,
   getEntityTime,
   entityTimePlugin,
 ) where
 
-import Control.Monad
 import Control.Monad.IO.Class
+import Data.Proxy
+import qualified Data.Registry.Mutable as RegRef
 import qualified Data.Set as S
 import Data.Text (Text)
 import Data.Time.Clock
 import Data.Time.LocalTime
+import Data.Typeable (Typeable)
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -29,12 +33,14 @@ timeNS :: Text
 timeName :: Text -> Name
 (timeNS, timeName) = namePair "urn:xmpp:time"
 
-data EntityTimePlugin = EntityTimePlugin
+newtype EntityTimePlugin m = EntityTimePlugin
+  { entityTimePluginSession :: StanzaSession m
+  }
 
-instance DiscoInfoProvider EntityTimePlugin where
+instance (Typeable m) => DiscoInfoProvider (EntityTimePlugin m) where
   discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton timeNS
 
-instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse EntityTimePlugin where
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (EntityTimePlugin m) where
   tryHandle _ (InRequestIQ {iriType = IQGet, iriChildren = [req]})
     | elementName req == timeTag = do
         tz <- liftIO getCurrentTimeZone
@@ -48,11 +54,13 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse EntityTimePl
     timeTag = timeName "time"
   tryHandle _ _ = return Nothing
 
-getEntityTime :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> (Either StanzaError ZonedTime -> m ()) -> m ()
-getEntityTime pluginsRef addr handler = do
-  let sess = pluginsSession pluginsRef
+getEntityTimePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (EntityTimePlugin m)
+getEntityTimePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (EntityTimePlugin m)) $ pluginsHooksSet pluginsRef
+
+getEntityTime :: (MonadStream m) => EntityTimePlugin m -> XMPPAddress -> (Either StanzaError ZonedTime -> m ()) -> m ()
+getEntityTime EntityTimePlugin {entityTimePluginSession} addr handler =
   stanzaRequest
-    sess
+    entityTimePluginSession
     OutRequestIQ
       { oriTo = Just addr
       , oriIqType = IQGet
@@ -73,8 +81,10 @@ getEntityTime pluginsRef addr handler = do
  where
   getEntry r name = fromElement r $/ XC.element (timeName name) &/ content
 
-entityTimePlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
+entityTimePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 entityTimePlugin pluginsRef = do
+  let plugin :: EntityTimePlugin m = EntityTimePlugin {entityTimePluginSession = pluginsSession pluginsRef}
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM EntityTimePlugin iqHandlers
-  addDiscoInfo pluginsRef EntityTimePlugin
+  HL.pushNewOrFailM plugin iqHandlers
+  addDiscoInfo pluginsRef plugin

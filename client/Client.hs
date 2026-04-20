@@ -70,10 +70,10 @@ instance (MonadStream m) => SlotSignal m RosterPresenceEvent (ClientPlugin m) wh
   emitSignal (ClientPlugin {..}) event =
     clientWriteMessage [i|Got presence update for roster: #{event}|]
 
-instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (ClientPlugin m) where
-  emitSignal (ClientPlugin {..}) (addr, msg) = do
-    let text = localizedGet (Just "en") $ imBody msg
-    clientWriteMessage [i|#{addressToText addr}: #{text}|]
+instance (MonadStream m) => SlotSignal m AddressedIMMessage (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) AddressedIMMessage {imFrom, imMessage} = do
+    let text = localizedGet (Just "en") $ imBody imMessage
+    clientWriteMessage [i|#{addressToText imFrom}: #{text}|]
 
 instance (MonadStream m) => SlotSignal m MUCEvent (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
@@ -87,13 +87,13 @@ instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatMarker) 
   emitSignal (ClientPlugin {..}) (addr, _msgType, marker) =
     clientWriteMessage [i|#{addressToText addr} marker: #{marker}|]
 
-instance (MonadStream m) => SlotSignal m (CarbonDirection, XMPPAddress, IMMessage) (ClientPlugin m) where
-  emitSignal (ClientPlugin {..}) (dir, addr, msg) = do
-    let text = localizedGet (Just "en") $ imBody msg
-        arrow :: Text = case dir of
-          CarbonReceived -> "<-"
-          CarbonSent -> "->"
-    clientWriteMessage [i|carbon #{arrow} #{addressToText addr}: #{text}|]
+instance (MonadStream m) => SlotSignal m (CarbonDirection, AddressedIMMessage) (ClientPlugin m) where
+  emitSignal (ClientPlugin {..}) (dir, AddressedIMMessage {imFrom, imTo, imMessage}) = do
+    let text = localizedGet (Just "en") $ imBody imMessage
+        (arrow :: Text, peer) = case dir of
+          CarbonReceived -> ("<-", imFrom)
+          CarbonSent -> ("->", imTo)
+    clientWriteMessage [i|carbon #{arrow} #{addressToText peer}: #{text}|]
 
 data Settings = Settings
   { server :: Text
@@ -202,26 +202,31 @@ main = do
         flip finally saveCache $ do
           let clientPlugin = ClientPlugin writeMessage
 
-          rSlot <- rosterSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin rSlot
-          sSlot <- subscriptionSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin sSlot
-          mpSlot <- myPresenceSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin mpSlot
-          rpSlot <- rpresenceSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin rpSlot
-          imS <- imSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin imS
-          mSlot <- mucSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin mSlot
-          csSlot <- chatStateSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin csSlot
-          cmSlot <- chatMarkerSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin cmSlot
-          cbSlot <- carbonSlot pluginsRef
-          Slot.pushNewOrFailM clientPlugin cbSlot
+          rosterP <- getRosterPlugin pluginsRef
+          subP <- getSubscriptionPlugin pluginsRef
+          myPresP <- getMyPresencePlugin pluginsRef
+          rPresP <- getRosterPresencePlugin pluginsRef
+          imP <- getIMPlugin pluginsRef
+          mucP <- getMUCPlugin pluginsRef
+          csP <- getChatStatePlugin pluginsRef
+          cmP <- getChatMarkersPlugin pluginsRef
+          cbP <- getCarbonsPlugin pluginsRef
+          discoP <- getDiscoPlugin pluginsRef
+          versionP <- getVersionPlugin pluginsRef
+          etP <- getEntityTimePlugin pluginsRef
+          pingP <- getPingPlugin pluginsRef
 
-          myPresenceSend pluginsRef $ Just defaultPresence
+          Slot.pushNewOrFailM clientPlugin (rosterPluginSlot rosterP)
+          Slot.pushNewOrFailM clientPlugin (subscriptionPluginSlot subP)
+          Slot.pushNewOrFailM clientPlugin (myPresencePluginSlot myPresP)
+          Slot.pushNewOrFailM clientPlugin (rpresencePluginSlot rPresP)
+          Slot.pushNewOrFailM clientPlugin (imPluginSlot imP)
+          Slot.pushNewOrFailM clientPlugin (mucPluginSlot mucP)
+          Slot.pushNewOrFailM clientPlugin (chatStatePluginSlot csP)
+          Slot.pushNewOrFailM clientPlugin (chatMarkersPluginSlot cmP)
+          Slot.pushNewOrFailM clientPlugin (carbonsPluginSlot cbP)
+
+          myPresenceSend myPresP $ Just defaultPresence
 
           let commands =
                 M.fromListWith
@@ -231,7 +236,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
-                              runInBase $ updateSubscriptionFrom pluginsRef addr should
+                              runInBase $ updateSubscriptionFrom subP addr should
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -241,7 +246,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr)), (read -> should)] -> do
-                              runInBase $ requestSubscriptionTo pluginsRef addr should
+                              runInBase $ requestSubscriptionTo subP addr should
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -252,7 +257,7 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = plainIMMessage $ T.pack $ unwords msg
-                              runInBase $ imSend pluginsRef addr imsg
+                              runInBase $ imSend imP addr imsg
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -262,7 +267,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [] -> do
-                              roster <- runInBase $ getRoster pluginsRef
+                              roster <- runInBase $ getRoster rosterP
                               HL.outputStrLn $ show roster
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -273,7 +278,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [] -> do
-                              pres <- runInBase $ myPresenceGet pluginsRef
+                              pres <- runInBase $ myPresenceGet myPresP
                               HL.outputStrLn $ show pres
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -284,7 +289,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [] -> do
-                              pres <- runInBase $ getRosterPresence pluginsRef
+                              pres <- runInBase $ getRosterPresence rPresP
                               HL.outputStrLn $ show pres
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -295,7 +300,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(read -> online)] -> do
-                              runInBase $ myPresenceSend pluginsRef $ if online then Just defaultPresence else Nothing
+                              runInBase $ myPresenceSend myPresP $ if online then Just defaultPresence else Nothing
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -305,7 +310,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              runInBase $ insertRoster pluginsRef addr Nothing S.empty
+                              runInBase $ insertRoster rosterP addr Nothing S.empty
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -315,7 +320,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] -> do
-                              runInBase $ deleteRoster pluginsRef addr
+                              runInBase $ deleteRoster rosterP addr
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -325,7 +330,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] ->
-                              runInBase $ getDiscoTopo pluginsRef addr Nothing $ \case
+                              runInBase $ getDiscoTopo discoP addr Nothing $ \case
                                 Left e -> liftIO $ putStrLn [i|Failed to perform discovery: #{e}|]
                                 Right r -> liftIO $ putStrLn $ show r
                             _ -> HL.outputStrLn "Invalid arguments"
@@ -337,7 +342,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] ->
-                              runInBase $ getVersion pluginsRef addr $ \ver ->
+                              runInBase $ getVersion versionP addr $ \ver ->
                                 liftIO $ putStrLn $ show ver
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -348,7 +353,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] ->
-                              runInBase $ getEntityTime pluginsRef addr $ \time ->
+                              runInBase $ getEntityTime etP addr $ \time ->
                                 liftIO $ putStrLn $ show time
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -359,7 +364,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right addr)] ->
-                              runInBase $ sendPing pluginsRef addr $ \result ->
+                              runInBase $ sendPing pingP addr $ \result ->
                                 liftIO $ putStrLn $ case result of
                                   Right () -> "Pong!"
                                   Left e -> "Ping failed: " ++ show e
@@ -372,7 +377,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
-                              void $ runInBase $ mucJoin pluginsRef addr defaultMUCJoinSettings $ \_ event -> do
+                              void $ runInBase $ mucJoin mucP addr defaultMUCJoinSettings $ \_ event -> do
                                 writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
@@ -384,7 +389,7 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = (plainIMMessage $ T.pack $ unwords msg) {imType = MessageGroupchat}
-                              runInBase $ imSend pluginsRef addr imsg
+                              runInBase $ imSend imP addr imsg
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -393,7 +398,7 @@ main = do
                     ( "carbons_enable"
                     , Command
                         { commandHandler = \runInBase args -> case args of
-                            [] -> runInBase $ carbonsEnable pluginsRef $ \case
+                            [] -> runInBase $ carbonsEnable cbP $ \case
                               Right () -> liftIO $ putStrLn "Carbons enabled"
                               Left e -> liftIO $ putStrLn [i|Failed to enable carbons: #{e}|]
                             _ -> HL.outputStrLn "Invalid arguments"
@@ -404,7 +409,7 @@ main = do
                     ( "carbons_disable"
                     , Command
                         { commandHandler = \runInBase args -> case args of
-                            [] -> runInBase $ carbonsDisable pluginsRef $ \case
+                            [] -> runInBase $ carbonsDisable cbP $ \case
                               Right () -> liftIO $ putStrLn "Carbons disabled"
                               Left e -> liftIO $ putStrLn [i|Failed to disable carbons: #{e}|]
                             _ -> HL.outputStrLn "Invalid arguments"
@@ -416,7 +421,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr))] -> do
-                              runInBase $ mucSendPresence pluginsRef addr Nothing
+                              runInBase $ mucSendPresence mucP addr Nothing
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

@@ -73,12 +73,12 @@ extractStanzaIds elems =
       sidsStanzaIds = M.fromList $ mapMaybe parseStanzaId sidElems
    in (StanzaIds {..}, rest2)
 
-data StanzaIdsCodec = StanzaIdsCodec
+data StanzaIdsPlugin = StanzaIdsPlugin
 
 {- | Message codec: on decode, extract origin-id and stanza-ids into extended.
 On encode, generate a fresh origin-id and insert it.
 -}
-instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsCodec where
+instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsPlugin where
   codecDecode _ _ msg =
     let (ids, raw') = extractStanzaIds (imRaw msg)
         ext = imExtended msg
@@ -95,5 +95,5 @@ instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsCodec where
 
 stanzaIdsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 stanzaIdsPlugin pluginsRef = do
-  codecs <- imCodecs pluginsRef
-  Codec.pushNewOrFailM StanzaIdsCodec codecs
+  imp <- getIMPlugin pluginsRef
+  Codec.pushNewOrFailM StanzaIdsPlugin (imPluginCodecs imp)

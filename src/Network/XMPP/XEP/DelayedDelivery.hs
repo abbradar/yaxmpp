@@ -98,7 +98,7 @@ extractDelay elems =
 
 delayedDeliveryPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 delayedDeliveryPlugin pluginsRef = do
-  pCodecs <- presenceCodecs pluginsRef
-  Codec.pushNewOrFailM DelayedDeliveryPlugin pCodecs
-  mCodecs <- imCodecs pluginsRef
-  Codec.pushNewOrFailM DelayedDeliveryPlugin mCodecs
+  pp <- getPresencePlugin pluginsRef
+  Codec.pushNewOrFailM DelayedDeliveryPlugin (presencePluginCodecs pp)
+  imp <- getIMPlugin pluginsRef
+  Codec.pushNewOrFailM DelayedDeliveryPlugin (imPluginCodecs imp)

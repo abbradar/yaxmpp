@@ -38,20 +38,20 @@ localizedFromTexts m
 localizedFromText :: Text -> LocalizedText
 localizedFromText = LocalizedText . M.singleton Nothing
 
-localizedFromElement :: Name -> [Element] -> Maybe (Either StanzaError LocalizedText)
+localizedFromElement :: Name -> [Element] -> Either StanzaError (Maybe LocalizedText)
 localizedFromElement name elems = case fromChildren elems $/ XC.element name &| curElement of
-  [] -> Nothing
-  bodies -> Just $ do
+  [] -> Right Nothing
+  bodies -> do
     texts <- mapM getOneBody bodies
     textsMap <- case mapDisjointFromList texts of
       Nothing -> Left $ badRequest [i|conflicting textual data for language|]
-      Just r -> return r
-    return $ LocalizedText textsMap
+      Just r -> Right r
+    Right $ Just $ LocalizedText textsMap
  where
   getOneBody e = do
     cont <- fmap mconcat $ mapM getBodyContent $ elementNodes e
-    return (xmlLangGet e, cont)
-  getBodyContent (NodeContent t) = return t
+    Right (xmlLangGet e, cont)
+  getBodyContent (NodeContent t) = Right t
   getBodyContent _ = Left $ badRequest [i|#{name} element should contain only textual data|]
 
 xmlLangGet :: Element -> XMLLang

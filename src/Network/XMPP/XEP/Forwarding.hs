@@ -29,14 +29,14 @@ data Forwarded = Forwarded
   deriving (Show)
 
 {- | Parse a @\<forwarded\>@ element, extracting an optional @\<delay\>@ and the inner @\<message\>@.
-Returns @Nothing@ if the element is not @\<forwarded\>@, or @Just (Left err)@ if malformed.
+Returns @Right Nothing@ if the element is not @\<forwarded\>@, or @Left err@ if malformed.
 -}
-parseForwarded :: Element -> Maybe (Either StanzaError Forwarded)
+parseForwarded :: Element -> Either StanzaError (Maybe Forwarded)
 parseForwarded e
   | elementName e == forwardName "forwarded" =
       let cur = fromElement e
           fwdDelay = listToMaybe $ mapMaybe DD.parseDelay $ cur $/ curAnyElement
-       in Just $ case listToMaybe $ cur $/ XC.element (jcName "message") &| curElement of
+       in case listToMaybe $ cur $/ XC.element (jcName "message") &| curElement of
             Nothing -> Left $ badRequest "no <message> in <forwarded>"
-            Just fwdMessage -> Right Forwarded {..}
-  | otherwise = Nothing
+            Just fwdMessage -> Right $ Just Forwarded {..}
+  | otherwise = Right Nothing

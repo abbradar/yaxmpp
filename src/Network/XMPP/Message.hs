@@ -3,9 +3,15 @@
 module Network.XMPP.Message (
   IMThread (..),
   IMMessage (..),
+  AddressedIMMessage (..),
+  IMSlot,
+  IMCodecList,
+  IMPlugin,
+  imPluginSlot,
+  imPluginCodecs,
+  imPluginSelf,
   plainIMMessage,
-  imSlot,
-  imCodecs,
+  getIMPlugin,
   imSend,
   imPlugin,
   parseIMMessage,
@@ -17,9 +23,9 @@ import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Monad
-import Control.Monad.Trans.Except
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
+import Data.Injective (injFrom, injTo)
 import Data.Maybe
 import Data.Proxy
 import Data.Registry (Registry)
@@ -29,6 +35,7 @@ import Data.Text (Text)
 import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Plugin
+import Network.XMPP.Session (sessionAddress)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XML
@@ -52,6 +59,13 @@ data IMMessage = IMMessage
   }
   deriving (Show)
 
+data AddressedIMMessage = AddressedIMMessage
+  { imFrom :: XMPPAddress
+  , imTo :: XMPPAddress
+  , imMessage :: IMMessage
+  }
+  deriving (Show)
+
 plainIMMessage :: Text -> IMMessage
 plainIMMessage txt =
   IMMessage
@@ -63,90 +77,101 @@ plainIMMessage txt =
     , imExtended = Reg.empty
     }
 
-type IMSlot m = Slot m (XMPPAddress, IMMessage)
+type IMSlot m = Slot m AddressedIMMessage
 
 type IMCodecList m = CodecList m XMPPAddress IMMessage
 
 data IMPlugin m = IMPlugin
-  { imPluginSlot :: IMSlot m
+  { imPluginSession :: StanzaSession m
+  , imPluginSelf :: XMPPAddress
+  , imPluginSlot :: IMSlot m
   , imPluginCodecs :: IMCodecList m
   }
 
-{- | Parse a raw IM message from its type and child elements.
-Returns 'Nothing' if there is no body, or @Just (Left err)@ if malformed.
+{- | Parse a @\<message\>@ element structurally (no codec decoding).
+Missing @from@/@to@ default to @self@ per RFC 6120 §8.1.1.1 and §8.1.2.1.
+Returns @Right Nothing@ if there is no body, or @Left err@ if malformed.
 -}
-parseRawIMMessage :: MessageType -> [Element] -> Maybe (Either StanzaError IMMessage)
-parseRawIMMessage imType children =
-  case localizedFromElement (jcName "body") children of
-    Nothing -> Nothing
-    Just _ -> Just $ runExcept $ do
-      let getEither = either throwE return
-          cur = fromChildren children
-      imBody <- case localizedFromElement (jcName "body") children of
-        Nothing -> throwE $ badRequest "message has no <body>"
-        Just bodyRes -> getEither bodyRes
-      imSubject <- mapM getEither $ localizedFromElement (jcName "subject") children
-      let thread = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
-      imThread <- mapM (getEither . getThread) thread
+parseRawIMMessage :: (Monad m) => XMPPAddress -> Element -> m (Either StanzaError (Maybe AddressedIMMessage))
+parseRawIMMessage self el = pure $ do
+  unless (elementName el == jcName "message") $
+    Left $
+      badRequest "not a <message> element"
+  imType <- case getAttr "type" el of
+    Nothing -> Right MessageNormal
+    Just t -> case injFrom t of
+      Just mt -> Right mt
+      Nothing -> Left $ badRequest "invalid message type"
+  imFrom <- parseAddr "from"
+  imTo <- parseAddr "to"
+  let children = mapMaybe nodeElement (elementNodes el)
+  mBody <- localizedFromElement (jcName "body") children
+  case mBody of
+    Nothing -> Right Nothing
+    Just imBody -> do
+      imSubject <- localizedFromElement (jcName "subject") children
+      let cur = fromChildren children
+          mThreadEl = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
+      imThread <- traverse parseThread mThreadEl
       let imRaw = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
           imExtended = Reg.empty
-      return IMMessage {..}
+          imMessage = IMMessage {..}
+      Right $ Just AddressedIMMessage {..}
  where
-  getThread e@(Element {elementNodes = [NodeContent imId]}) =
-    return
-      IMThread
-        { imParent = getAttr "parent" e
-        , ..
-        }
-  getThread _ = Left $ badRequest "invalid <thread> element"
+  parseAddr attr = case getAttr attr el of
+    Nothing -> Right self
+    Just txt -> case xmppAddress txt of
+      Left _ -> Left $ jidMalformed txt
+      Right a -> Right a
+  nodeElement (NodeElement ne) = Just ne
+  nodeElement _ = Nothing
+  parseThread e@(Element {elementNodes = [NodeContent imId]}) =
+    Right IMThread {imParent = getAttr "parent" e, imId}
+  parseThread _ = Left $ badRequest "invalid <thread> element"
 
--- | Parse and decode a message through IM codecs. Returns 'Nothing' if there is no body.
-parseIMMessage :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> MessageType -> [Element] -> m (Maybe (Either StanzaError IMMessage))
-parseIMMessage pluginsRef from msgType children = do
-  codecs <- imCodecs pluginsRef
-  parseIMMessageWith codecs from msgType children
-
-parseIMMessageWith :: (MonadStream m) => IMCodecList m -> XMPPAddress -> MessageType -> [Element] -> m (Maybe (Either StanzaError IMMessage))
-parseIMMessageWith codecs from msgType children =
-  case parseRawIMMessage msgType children of
-    Nothing -> return Nothing
-    Just (Left e) -> return $ Just $ Left e
-    Just (Right msg) -> do
-      msg' <- decodeAll codecs from msg
-      return $ Just $ Right msg'
+-- | Parse and decode a message through IM codecs.
+parseIMMessage :: (MonadStream m) => IMPlugin m -> Element -> m (Either StanzaError (Maybe AddressedIMMessage))
+parseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} el = do
+  raw <- parseRawIMMessage (addressBare imPluginSelf) el
+  case raw of
+    Left err -> return $ Left err
+    Right Nothing -> return $ Right Nothing
+    Right (Just addressed@AddressedIMMessage {imFrom, imMessage = msg}) -> do
+      msg' <- decodeAll imPluginCodecs imFrom msg
+      return $ Right $ Just $ addressed {imMessage = msg'}
 
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
-  tryHandle (IMPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right imType), istChildren})
-    | Just _ <- localizedFromElement (jcName "body") istChildren =
+  tryHandle imp@(IMPlugin {..}) (InStanza {istFrom = Just from, istTo, istType = InMessage (Right imType), istChildren})
+    | any ((== jcName "body") . elementName) istChildren =
         Just <$> do
-          result <- parseIMMessageWith imPluginCodecs from imType istChildren
+          let attrs =
+                ("from", addressToText from)
+                  : [("to", addressToText to) | to <- maybeToList istTo]
+                  ++ [("type", injTo imType)]
+              msgEl = element (jcName "message") attrs (map NodeElement istChildren)
+          result <- parseIMMessage imp msgEl
           case result of
-            Nothing -> return InSilent
-            Just (Left e) -> return $ InError e
-            Just (Right msg) -> do
-              Slot.call imPluginSlot (from, msg)
+            Left e -> return $ InError e
+            Right Nothing -> return InSilent
+            Right (Just addressed) -> do
+              Slot.call imPluginSlot addressed
               return InSilent
   tryHandle _ _ = return Nothing
 
--- | Get the IM message slot from the plugins hook set.
-imSlot :: (MonadStream m) => XMPPPluginsRef m -> m (IMSlot m)
-imSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+-- | Get the IM plugin from the plugins hook set.
+getIMPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (IMPlugin m)
+getIMPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (IMPlugin m)) $ pluginsHooksSet pluginsRef
 
--- | Get the IM codec list from the plugins hook set.
-imCodecs :: (MonadStream m) => XMPPPluginsRef m -> m (IMCodecList m)
-imCodecs = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
-
-imSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> IMMessage -> m ()
-imSend pluginsRef to msg = do
-  codecs <- imCodecs pluginsRef
-  IMMessage {..} <- encodeAll codecs to msg
+imSend :: (MonadStream m) => IMPlugin m -> XMPPAddress -> IMMessage -> m ()
+imSend IMPlugin {imPluginSession, imPluginCodecs} to msg = do
+  IMMessage {..} <- encodeAll imPluginCodecs to msg
   unless (Reg.null imExtended) $ error "imSend: imExtended is not empty after encoding"
   let subjects = maybe [] (localizedElements $ jcName "subject") imSubject
       bodies = localizedElements (jcName "body") imBody
       mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent",) imParent) [NodeContent imId]) imThread
   void $
     stanzaSend
-      (pluginsSession pluginsRef)
+      imPluginSession
       OutStanza
         { ostTo = Just to
         , ostType = OutMessage imType
@@ -157,8 +182,9 @@ imPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 imPlugin pluginsRef = do
   imPluginSlot <- Slot.new
   imPluginCodecs <- Codec.new
-  let plugin :: IMPlugin m = IMPlugin {..}
-  RegRef.insertNewOrFailM imPluginSlot $ pluginsHooksSet pluginsRef
-  RegRef.insertNewOrFailM imPluginCodecs $ pluginsHooksSet pluginsRef
+  let imPluginSession = pluginsSession pluginsRef
+      imPluginSelf = fullJidAddress $ sessionAddress $ ssSession imPluginSession
+      plugin :: IMPlugin m = IMPlugin {..}
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers

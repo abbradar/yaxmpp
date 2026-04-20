@@ -6,7 +6,10 @@ https://xmpp.org/extensions/xep-0085.html
 module Network.XMPP.XEP.ChatStates (
   ChatState (..),
   parseChatState,
-  chatStateSlot,
+  ChatStateSlot,
+  ChatStatePlugin,
+  chatStatePluginSlot,
+  getChatStatePlugin,
   chatStateSend,
   chatStatePlugin,
 )
@@ -23,6 +26,7 @@ import Data.Proxy
 import qualified Data.Registry.Mutable as RegRef
 import qualified Data.Set as S
 import Data.Text (Text)
+import Data.Typeable (Typeable)
 import Network.XMPP.Address
 import Network.XMPP.Message
 import Network.XMPP.Plugin
@@ -62,7 +66,8 @@ parseChatState = listToMaybe . mapMaybe tryParse
 type ChatStateSlot m = Slot m (XMPPAddress, MessageType, ChatState)
 
 data ChatStatePlugin m = ChatStatePlugin
-  { chatStatePluginSlot :: ChatStateSlot m
+  { chatStatePluginSession :: StanzaSession m
+  , chatStatePluginSlot :: ChatStateSlot m
   }
 
 -- Handle bodyless messages with chat state notifications.
@@ -75,41 +80,40 @@ instance (MonadStream m) => Handler m InStanza InResponse (ChatStatePlugin m) wh
   tryHandle _ _ = return Nothing
 
 -- Extract chat states from body-ful messages (XEP-0085 §5.3).
-instance (MonadStream m) => SlotSignal m (XMPPAddress, IMMessage) (ChatStatePlugin m) where
-  emitSignal (ChatStatePlugin {..}) (from, msg) =
-    case parseChatState (imRaw msg) of
-      Just cs -> Slot.call chatStatePluginSlot (from, imType msg, cs)
+instance (MonadStream m) => SlotSignal m AddressedIMMessage (ChatStatePlugin m) where
+  emitSignal (ChatStatePlugin {..}) AddressedIMMessage {imFrom, imMessage} =
+    case parseChatState (imRaw imMessage) of
+      Just cs -> Slot.call chatStatePluginSlot (imFrom, imType imMessage, cs)
       Nothing -> return ()
 
 hasBody :: [Element] -> Bool
 hasBody = any (\e -> elementName e == jcName "body")
 
-chatStateSlot :: (MonadStream m) => XMPPPluginsRef m -> m (ChatStateSlot m)
-chatStateSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+getChatStatePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (ChatStatePlugin m)
+getChatStatePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (ChatStatePlugin m)) $ pluginsHooksSet pluginsRef
 
-chatStateSend :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> MessageType -> ChatState -> m ()
-chatStateSend pluginsRef to msgType cs =
+chatStateSend :: (MonadStream m) => ChatStatePlugin m -> XMPPAddress -> MessageType -> ChatState -> m ()
+chatStateSend ChatStatePlugin {chatStatePluginSession} to msgType cs =
   void $
     stanzaSend
-      (pluginsSession pluginsRef)
+      chatStatePluginSession
       OutStanza
         { ostTo = Just to
         , ostType = OutMessage msgType
         , ostChildren = [closedElement $ chatStateName $ injTo cs]
         }
 
-data ChatStateDisco = ChatStateDisco
-
-instance DiscoInfoProvider ChatStateDisco where
+instance (Typeable m) => DiscoInfoProvider (ChatStatePlugin m) where
   discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton chatStatesNS
 
 chatStatePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 chatStatePlugin pluginsRef = do
   chatStatePluginSlot <- Slot.new
-  let plugin :: ChatStatePlugin m = ChatStatePlugin {..}
-  RegRef.insertNewOrFailM chatStatePluginSlot $ pluginsHooksSet pluginsRef
+  let chatStatePluginSession = pluginsSession pluginsRef
+      plugin :: ChatStatePlugin m = ChatStatePlugin {..}
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   inHandlers <- pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin inHandlers
-  imS <- imSlot pluginsRef
-  Slot.pushNewOrFailM plugin imS
-  addDiscoInfo pluginsRef ChatStateDisco
+  imp <- getIMPlugin pluginsRef
+  Slot.pushNewOrFailM plugin (imPluginSlot imp)
+  addDiscoInfo pluginsRef plugin

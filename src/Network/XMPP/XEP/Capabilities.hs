@@ -123,11 +123,11 @@ caps2InfoToElement (Caps2Info {..}) =
     NodeElement $
       element (hashesName "hash") [("algo", algo)] [NodeContent val]
 
--- * Codec
+-- * Plugin
 
-data CapsCodec = CapsCodec
+data CapsPlugin = CapsPlugin
 
-instance (MonadStream m) => Codec m FullJID Presence CapsCodec where
+instance (MonadStream m) => Codec m FullJID Presence CapsPlugin where
   codecDecode _ _ pres =
     let (mcaps1, mcaps2, raw') = extractCaps (presenceRaw pres)
         ext = presenceExtended pres
@@ -154,9 +154,7 @@ extractCaps elems =
       mcaps2 = listToMaybe $ mapMaybe parseCaps2Info caps2Elems
    in (mcaps1, mcaps2, rest2)
 
--- * Plugin
-
 capsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 capsPlugin pluginsRef = do
-  codecs <- presenceCodecs pluginsRef
-  Codec.pushNewOrFailM CapsCodec codecs
+  pp <- getPresencePlugin pluginsRef
+  Codec.pushNewOrFailM CapsPlugin (presencePluginCodecs pp)

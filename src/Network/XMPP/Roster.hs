@@ -8,11 +8,14 @@ module Network.XMPP.Roster (
   rosterVersion,
   rosterEntries,
   RosterEvent (..),
+  RosterSlot,
+  RosterPlugin,
+  rosterPluginSlot,
+  getRosterPlugin,
   getRoster,
   tryGetRoster,
   insertRoster,
   deleteRoster,
-  rosterSlot,
   rosterPlugin,
 ) where
 
@@ -135,24 +138,24 @@ data RosterEvent
 
 type RosterSlot m = Slot m (RosterEntries, RosterEvent)
 
-data RosterState m = RosterState
-  { rosterRef :: IORef (Either (MVar Roster) Roster)
-  , rosterSession :: StanzaSession m
+data RosterPlugin m = RosterPlugin
+  { rosterPluginSession :: StanzaSession m
+  , rosterPluginSlot :: RosterSlot m
+  , rosterPluginRef :: IORef (Either (MVar Roster) Roster)
   }
 
-instance (MonadStream m) => XMPPPersistentCache m (RosterState m) where
+instance (MonadStream m) => XMPPPersistentCache m (RosterPlugin m) where
   cacheKey _ = "roster"
-  cacheGet RosterState {..} = do
-    r <- readIORef rosterRef
+  cacheGet RosterPlugin {..} = do
+    r <- readIORef rosterPluginRef
     case toRight r of
       Just roster | Just _ <- rosterVersion roster -> return $ toJSON roster
       _ -> return Null
 
-insertRoster :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
-insertRoster pluginsRef jid name groups = do
-  void $ getRoster pluginsRef
-  let session = pluginsSession pluginsRef
-  stanzaRequest session request okHandler
+insertRoster :: (MonadStream m) => RosterPlugin m -> XMPPAddress -> Maybe RosterName -> Set RosterGroup -> m ()
+insertRoster rp jid name groups = do
+  void $ getRoster rp
+  stanzaRequest (rosterPluginSession rp) request okHandler
  where
   request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
   item =
@@ -162,11 +165,10 @@ insertRoster pluginsRef jid name groups = do
       $ map (\g -> NodeElement $ element (rosterName "group") [] [NodeContent g])
       $ S.toList groups
 
-deleteRoster :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> m ()
-deleteRoster pluginsRef jid = do
-  void $ getRoster pluginsRef
-  let session = pluginsSession pluginsRef
-  stanzaRequest session request okHandler
+deleteRoster :: (MonadStream m) => RosterPlugin m -> XMPPAddress -> m ()
+deleteRoster rp jid = do
+  void $ getRoster rp
+  stanzaRequest (rosterPluginSession rp) request okHandler
  where
   request = serverRequest IQSet [element (rosterName "query") [] [NodeElement item]]
   item = element (rosterName "item") [("jid", addressToText jid), ("subscription", "remove")] []
@@ -244,72 +246,61 @@ applyRosterEvent :: RosterEntries -> RosterEvent -> RosterEntries
 applyRosterEvent roster (RosterInsert jid entry) = M.insert jid entry roster
 applyRosterEvent roster (RosterDelete jid) = M.delete jid roster
 
-data RosterPlugin m = RosterPlugin
-  { rosterPluginSlot :: RosterSlot m
-  , rosterPluginState :: RosterState m
-  }
-
 instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (RosterPlugin m) where
   tryHandle (RosterPlugin {..}) (InRequestIQ {iriType = IQSet, iriFrom, iriChildren = [req]})
     | elementName req == rosterName "query" =
-        let RosterState {..} = rosterPluginState
-         in Just <$> do
-              if not (fromServerOrMyself iriFrom rosterSession)
-                then
-                  return $ IQError $ serviceUnavailable "Roster push from arbitrary entity is forbidden"
-                else do
-                  case mapM getRosterEvent $ fromElement req $/ curAnyElement of
-                    Left err -> return $ IQError err
-                    Right events -> do
-                      result <- atomicModifyIORef' rosterRef $ \case
-                        pending@(Left _) -> (pending, Nothing)
-                        Right roster ->
-                          let rosters = drop 1 $ scanl applyRosterEvent (rosterEntries roster) events
-                              finalEntries = foldl (\_ x -> x) (rosterEntries roster) rosters
-                              roster' =
-                                Roster
-                                  { rosterVersion = getAttr "ver" req
-                                  , rosterEntries = finalEntries
-                                  }
-                           in (Right roster', Just $ zip rosters events)
-                      case result of
-                        Nothing -> return $ IQError $ badRequest "Roster has not been received yet"
-                        Just revents -> do
-                          mapM_ (Slot.call rosterPluginSlot) revents
-                          return $ IQResult []
+        Just <$> do
+          if not (fromServerOrMyself iriFrom rosterPluginSession)
+            then
+              return $ IQError $ serviceUnavailable "Roster push from arbitrary entity is forbidden"
+            else do
+              case mapM getRosterEvent $ fromElement req $/ curAnyElement of
+                Left err -> return $ IQError err
+                Right events -> do
+                  result <- atomicModifyIORef' rosterPluginRef $ \case
+                    pending@(Left _) -> (pending, Nothing)
+                    Right roster ->
+                      let rosters = drop 1 $ scanl applyRosterEvent (rosterEntries roster) events
+                          finalEntries = foldl (\_ x -> x) (rosterEntries roster) rosters
+                          roster' =
+                            Roster
+                              { rosterVersion = getAttr "ver" req
+                              , rosterEntries = finalEntries
+                              }
+                       in (Right roster', Just $ zip rosters events)
+                  case result of
+                    Nothing -> return $ IQError $ badRequest "Roster has not been received yet"
+                    Just revents -> do
+                      mapM_ (Slot.call rosterPluginSlot) revents
+                      return $ IQResult []
   tryHandle _ _ = return Nothing
 
-getRoster :: forall m. (MonadStream m) => XMPPPluginsRef m -> m Roster
-getRoster pluginsRef = do
-  RosterState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (RosterState m)) $ pluginsHooksSet pluginsRef
-  r <- readIORef rosterRef
+getRoster :: (MonadStream m) => RosterPlugin m -> m Roster
+getRoster RosterPlugin {rosterPluginRef} = do
+  r <- readIORef rosterPluginRef
   case r of
     Left future -> readMVar future
     Right res -> return res
 
-tryGetRoster :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (Maybe Roster)
-tryGetRoster pluginsRef = do
-  RosterState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (RosterState m)) $ pluginsHooksSet pluginsRef
-  toRight <$> readIORef rosterRef
+tryGetRoster :: (MonadStream m) => RosterPlugin m -> m (Maybe Roster)
+tryGetRoster RosterPlugin {rosterPluginRef} = toRight <$> readIORef rosterPluginRef
 
-rosterSlot :: (MonadStream m) => XMPPPluginsRef m -> m (RosterSlot m)
-rosterSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+getRosterPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (RosterPlugin m)
+getRosterPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (RosterPlugin m)) $ pluginsHooksSet pluginsRef
 
 rosterPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 rosterPlugin pluginsRef = do
-  let old = pluginsOldCacheFor pluginsRef (Proxy :: Proxy (RosterState m)) >>= JSON.parseMaybe parseJSON
+  let old = pluginsOldCacheFor pluginsRef (Proxy :: Proxy (RosterPlugin m)) >>= JSON.parseMaybe parseJSON
   firstRoster <- newEmptyMVar
-  rosterRef <- newIORef (Left firstRoster)
-  let rosterSession = pluginsSession pluginsRef
-      state = RosterState {..}
-      tryGet = sendFirstRequest rosterSession old $ \ret -> do
-        atomicWriteIORef rosterRef (Right ret)
+  rosterPluginRef <- newIORef (Left firstRoster)
+  rosterPluginSlot <- Slot.new
+  let rosterPluginSession = pluginsSession pluginsRef
+      plugin :: RosterPlugin m = RosterPlugin {..}
+      tryGet = sendFirstRequest rosterPluginSession old $ \ret -> do
+        atomicWriteIORef rosterPluginRef (Right ret)
         putMVar firstRoster ret
   void $ forkIO $ tryGet `catch` \(e :: SomeException) -> putMVar firstRoster (throw e)
-  rosterPluginSlot <- Slot.new
-  let plugin :: RosterPlugin m = RosterPlugin {rosterPluginState = state, ..}
-  RegRef.insertNewOrFailM rosterPluginSlot $ pluginsHooksSet pluginsRef
-  RegRef.insertNewOrFailM state $ pluginsHooksSet pluginsRef
-  registerCacheGetter pluginsRef state
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
+  registerCacheGetter pluginsRef plugin
   iqHandlers <- pluginsIQHandlers pluginsRef
   HL.pushNewOrFailM plugin iqHandlers

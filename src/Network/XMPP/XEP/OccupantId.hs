@@ -42,9 +42,9 @@ extractOccupantId elems =
   let (oidElems, rest) = partition ((== occupantIdName "occupant-id") . elementName) elems
    in (listToMaybe $ mapMaybe parseOccupantId oidElems, rest)
 
-data OccupantIdCodec = OccupantIdCodec
+data OccupantIdPlugin = OccupantIdPlugin
 
-instance (MonadStream m) => Codec m XMPPAddress IMMessage OccupantIdCodec where
+instance (MonadStream m) => Codec m XMPPAddress IMMessage OccupantIdPlugin where
   codecDecode _ _ msg =
     let (moid, raw') = extractOccupantId (imRaw msg)
         ext = imExtended msg
@@ -58,7 +58,7 @@ instance (MonadStream m) => Codec m XMPPAddress IMMessage OccupantIdCodec where
         raw' = maybe raw (\o -> occupantIdElement o : raw) moid
      in return $ msg {imRaw = raw', imExtended = ext'}
 
-instance (MonadStream m) => Codec m FullJID Presence OccupantIdCodec where
+instance (MonadStream m) => Codec m FullJID Presence OccupantIdPlugin where
   codecDecode _ _ pres =
     let (moid, raw') = extractOccupantId (presenceRaw pres)
         ext = presenceExtended pres
@@ -74,7 +74,7 @@ instance (MonadStream m) => Codec m FullJID Presence OccupantIdCodec where
 
 occupantIdPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 occupantIdPlugin pluginsRef = do
-  mCodecs <- imCodecs pluginsRef
-  Codec.pushNewOrFailM OccupantIdCodec mCodecs
-  pCodecs <- presenceCodecs pluginsRef
-  Codec.pushNewOrFailM OccupantIdCodec pCodecs
+  imp <- getIMPlugin pluginsRef
+  Codec.pushNewOrFailM OccupantIdPlugin (imPluginCodecs imp)
+  pp <- getPresencePlugin pluginsRef
+  Codec.pushNewOrFailM OccupantIdPlugin (presencePluginCodecs pp)

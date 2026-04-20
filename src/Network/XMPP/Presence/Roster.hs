@@ -3,8 +3,11 @@
 module Network.XMPP.Presence.Roster (
   RosterPresenceMap,
   RosterPresenceEvent (..),
+  RosterPresenceSlot,
+  RosterPresencePlugin,
+  rpresencePluginSlot,
+  getRosterPresencePlugin,
   getRosterPresence,
-  rpresenceSlot,
   rpresencePlugin,
 ) where
 
@@ -37,14 +40,10 @@ data RosterPresenceEvent
 
 type RosterPresenceSlot m = Slot m RosterPresenceEvent
 
-data RosterPresenceState m = RosterPresenceState
-  { rpresenceRef :: IORef RosterPresenceMap
-  , rpresencePluginsRef :: XMPPPluginsRef m
-  }
-
 data RosterPresencePlugin m = RosterPresencePlugin
-  { rpresencePluginSlot :: RosterPresenceSlot m
-  , rpresencePluginState :: RosterPresenceState m
+  { rpresencePluginRoster :: RosterPlugin m
+  , rpresencePluginSlot :: RosterPresenceSlot m
+  , rpresencePluginRef :: IORef RosterPresenceMap
   }
 
 rosterUpdate :: FullJID -> ResourceStatus -> RosterPresenceMap -> Maybe (RosterPresenceMap, RosterPresenceEvent)
@@ -69,25 +68,23 @@ rosterUpdate full@(FullJID {..}) (ResourceUnavailable err) rmap =
 
 instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m) where
   tryHandle (RosterPresencePlugin {..}) (ResourcePresence full presUpd) = do
-    let RosterPresenceState {..} = rpresencePluginState
-    roster <- rosterEntries <$> getRoster rpresencePluginsRef
+    roster <- rosterEntries <$> getRoster rpresencePluginRoster
     if not $ bareJidAddress (fullBare full) `M.member` roster
       then return Nothing
       else do
-        rpres <- readIORef rpresenceRef
+        rpres <- readIORef rpresencePluginRef
         case rosterUpdate full presUpd rpres of
           Nothing -> return Nothing
           Just (pres', event) -> do
-            atomicWriteIORef rpresenceRef pres'
+            atomicWriteIORef rpresencePluginRef pres'
             Slot.call rpresencePluginSlot event
             return $ Just ()
   tryHandle (RosterPresencePlugin {..}) (AllResourcesOffline bare extended) = do
-    let RosterPresenceState {..} = rpresencePluginState
-    roster <- rosterEntries <$> getRoster rpresencePluginsRef
+    roster <- rosterEntries <$> getRoster rpresencePluginRoster
     if not $ bareJidAddress bare `M.member` roster
       then return Nothing
       else do
-        rpres <- readIORef rpresenceRef
+        rpres <- readIORef rpresencePluginRef
         case M.lookup bare rpres of
           Nothing -> return $ Just ()
           Just resources -> do
@@ -95,27 +92,24 @@ instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m)
                   case rosterUpdate (FullJID bare resource) (ResourceUnavailable extended) pres of
                     Nothing -> return pres
                     Just (pres', event) -> do
-                      atomicWriteIORef rpresenceRef pres'
+                      atomicWriteIORef rpresencePluginRef pres'
                       Slot.call rpresencePluginSlot event
                       return pres'
             foldM_ handleOne rpres $ M.keys resources
             return $ Just ()
 
-getRosterPresence :: forall m. (MonadStream m) => XMPPPluginsRef m -> m RosterPresenceMap
-getRosterPresence pluginsRef = do
-  RosterPresenceState {..} <- RegRef.lookupOrFailM (Proxy :: Proxy (RosterPresenceState m)) $ pluginsHooksSet pluginsRef
-  readIORef rpresenceRef
+getRosterPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (RosterPresencePlugin m)
+getRosterPresencePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (RosterPresencePlugin m)) $ pluginsHooksSet pluginsRef
 
-rpresenceSlot :: (MonadStream m) => XMPPPluginsRef m -> m (RosterPresenceSlot m)
-rpresenceSlot = \pluginsRef -> RegRef.lookupOrFailM Proxy $ pluginsHooksSet pluginsRef
+getRosterPresence :: (MonadStream m) => RosterPresencePlugin m -> m RosterPresenceMap
+getRosterPresence RosterPresencePlugin {rpresencePluginRef} = readIORef rpresencePluginRef
 
 rpresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 rpresencePlugin pluginsRef = do
-  rpresenceRef <- newIORef M.empty
-  let rpresencePluginState = RosterPresenceState {rpresencePluginsRef = pluginsRef, ..}
+  rpresencePluginRef <- newIORef M.empty
   rpresencePluginSlot <- Slot.new
+  rpresencePluginRoster <- getRosterPlugin pluginsRef
+  pp <- getPresencePlugin pluginsRef
   let plugin :: RosterPresencePlugin m = RosterPresencePlugin {..}
-  RegRef.insertNewOrFailM rpresencePluginState $ pluginsHooksSet pluginsRef
-  RegRef.insertNewOrFailM rpresencePluginSlot $ pluginsHooksSet pluginsRef
-  pHandlers <- presenceHandlers pluginsRef
-  HL.pushNewOrFailM plugin pHandlers
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
+  HL.pushNewOrFailM plugin (presencePluginHandlers pp)

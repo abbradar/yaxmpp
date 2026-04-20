@@ -1,13 +1,17 @@
 {-# LANGUAGE Strict #-}
 
 module Network.XMPP.XEP.Ping (
+  PingPlugin,
+  getPingPlugin,
   sendPing,
   pingPlugin,
 ) where
 
-import Control.Monad
+import Data.Proxy
+import qualified Data.Registry.Mutable as RegRef
 import qualified Data.Set as S
 import Data.Text (Text)
+import Data.Typeable (Typeable)
 import Text.XML (Name, elementName)
 
 import Control.HandlerList (Handler (..))
@@ -23,25 +27,29 @@ pingNS :: Text
 pingName :: Text -> Name
 (pingNS, pingName) = namePair "urn:xmpp:ping"
 
-data PingPlugin = PingPlugin
+newtype PingPlugin m = PingPlugin
+  { pingPluginSession :: StanzaSession m
+  }
 
-instance DiscoInfoProvider PingPlugin where
+instance (Typeable m) => DiscoInfoProvider (PingPlugin m) where
   discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton pingNS
 
-instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse PingPlugin where
+instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (PingPlugin m) where
   tryHandle _ (InRequestIQ {iriType = IQGet, iriChildren = [req]})
     | elementName req == pingName "ping" =
         return $ Just $ IQResult []
   tryHandle _ _ = return Nothing
 
+getPingPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (PingPlugin m)
+getPingPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (PingPlugin m)) $ pluginsHooksSet pluginsRef
+
 {- | Send a ping to the given address. Calls the handler with 'Right ()' on
 success (result IQ) or 'Left err' on error.
 -}
-sendPing :: (MonadStream m) => XMPPPluginsRef m -> XMPPAddress -> (Either StanzaError () -> m ()) -> m ()
-sendPing pluginsRef addr handler = do
-  let sess = pluginsSession pluginsRef
+sendPing :: (MonadStream m) => PingPlugin m -> XMPPAddress -> (Either StanzaError () -> m ()) -> m ()
+sendPing PingPlugin {pingPluginSession} addr handler =
   stanzaRequest
-    sess
+    pingPluginSession
     OutRequestIQ
       { oriTo = Just addr
       , oriIqType = IQGet
@@ -51,8 +59,10 @@ sendPing pluginsRef addr handler = do
       Left e -> Left e
       Right _ -> Right ()
 
-pingPlugin :: (MonadStream m) => XMPPPluginsRef m -> m ()
+pingPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 pingPlugin pluginsRef = do
+  let plugin :: PingPlugin m = PingPlugin {pingPluginSession = pluginsSession pluginsRef}
+  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   iqHandlers <- pluginsIQHandlers pluginsRef
-  HL.pushNewOrFailM PingPlugin iqHandlers
-  addDiscoInfo pluginsRef PingPlugin
+  HL.pushNewOrFailM plugin iqHandlers
+  addDiscoInfo pluginsRef plugin
