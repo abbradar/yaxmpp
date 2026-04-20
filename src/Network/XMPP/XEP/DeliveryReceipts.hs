@@ -16,6 +16,7 @@ import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Monad
+import Control.Monad.Logger
 import Control.Slot (Slot, SlotSignal (..))
 import qualified Control.Slot as Slot
 import Data.List (partition)
@@ -121,7 +122,9 @@ for @\<request/\>@ children and emits on the slot for @\<received/\>@ children.
 instance (MonadStream m) => SlotSignal m InStanza (DeliveryReceiptsPlugin m) where
   emitSignal plugin@DeliveryReceiptsPlugin {deliveryReceiptsPluginSlot} (InStanza {istFrom = Just from, istId, istType = InMessage (Right msgType), istChildren}) = do
     when (isJust $ fst $ extractRequest istChildren) $
-      mapM_ (sendReceipt plugin from msgType) istId
+      case istId of
+        Just mid -> sendReceipt plugin from msgType mid
+        Nothing -> $(logWarn) "No message ID for receipt request; ignoring"
     case fst (extractReceipt istChildren) of
       Just mid -> Slot.call deliveryReceiptsPluginSlot (from, mid)
       Nothing -> return ()
