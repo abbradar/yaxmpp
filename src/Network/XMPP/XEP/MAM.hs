@@ -1,11 +1,13 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE Strict #-}
 
 -- | XEP-0313: Message Archive Management (version 2, @urn:xmpp:mam:2@).
 module Network.XMPP.XEP.MAM (
-  MAMFeatures (..),
-  checkMAMFeatures,
   MAMFilter (..),
   MAMMessage (..),
+  MAMInput (..),
+  MAMOutput (..),
+  MAMHandler (..),
   MAMPage (..),
   MAMArchiveBound (..),
   MAMMetadata (..),
@@ -21,7 +23,6 @@ import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.MemoAsync (MemoAsync)
 import qualified Control.MemoAsync as MemoAsync
-import Control.Monad.IO.Class
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -32,9 +33,7 @@ import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
-import Data.Time.LocalTime (zonedTimeToUTC)
-import qualified Data.UUID as UUID
-import qualified Data.UUID.V4 as UUID
+import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -147,15 +146,46 @@ checkMAMFeatures required available
 -- | A single archived message delivered within a page.
 data MAMMessage = MAMMessage
   { mamMsgArchiveId :: Text
-  , mamMsgDelay :: Maybe DelayInfo
+  , mamMsgTimestamp :: ZonedTime
+  {- ^ Server-storage timestamp from the mandatory @\<delay/\>@ element
+  (XEP-0313 §5.1.2).
+  -}
   , mamMsgMessage :: AddressedIMMessage
   }
   deriving (Show)
 
--- | One page of MAM results.
+{- | Input to a 'MAMHandler'. 'InMsg' carries a parsed result or a per-result
+parse error; 'InEnd' signals that the page has been fully delivered (or that
+the IQ itself failed) and carries the final 'MAMPage' summary or error. The
+@last@ tag is 'True' on the terminating call and 'False' on every streamed
+result; it links the input shape to the matching 'MAMOutput' shape.
+-}
+data MAMInput (last :: Bool) where
+  InMsg :: Either StanzaError MAMMessage -> MAMInput 'False
+  InEnd :: Either StanzaError MAMPage -> MAMInput 'True
+
+{- | Reply from a 'MAMHandler'. 'OutNext' returns the continuation handler for
+the next input; 'OutDone' acknowledges end-of-stream. The @last@ tag matches
+the 'MAMInput' tag — an 'InMsg' must be answered with 'OutNext', 'InEnd' with
+'OutDone', enforced statically.
+-}
+data MAMOutput (last :: Bool) m where
+  OutNext :: MAMHandler m -> MAMOutput 'False m
+  OutDone :: MAMOutput 'True m
+
+{- | A fold-style handler for one MAM query. Each result is fed as
+@'InMsg' x@, yielding the next handler; the terminating call @'InEnd'@
+yields 'OutDone'.
+-}
+newtype MAMHandler m = MAMHandler
+  { runMAMHandler :: forall (last :: Bool). MAMInput last -> m (MAMOutput last m)
+  }
+
+{- | Summary of a delivered page. Messages are streamed to the 'MAMHandler';
+this carries only the @\<fin\>@ info.
+-}
 data MAMPage = MAMPage
-  { mamPageMessages :: [MAMMessage]
-  , mamPageComplete :: Bool
+  { mamPageComplete :: Bool
   , mamPageSet :: Maybe ResultSet
   }
   deriving (Show)
@@ -178,7 +208,8 @@ data MAMPlugin m = MAMPlugin
   { mamPluginSession :: StanzaSession m
   , mamPluginIMPlugin :: IMPlugin m
   , mamPluginDisco :: MemoAsync m (Maybe MAMFeatures)
-  , mamPluginQueries :: IORef (Map Text (IORef [MAMMessage]))
+  , mamPluginQueries :: IORef (Map Text (IORef (MAMHandler m)))
+  , mamPluginNextQueryId :: IORef Word
   }
 
 mamForm :: MAMFilter -> Element
@@ -232,22 +263,30 @@ extractMAMResult = listToMaybe . mapMaybe tryOne
         return (qid, mid, fwdEl)
     | otherwise = Nothing
 
+parseMAMResult :: (MonadStream m) => MAMPlugin m -> Text -> Element -> m (Either StanzaError MAMMessage)
+parseMAMResult (MAMPlugin {mamPluginIMPlugin}) mid fwdEl = case parseForwarded fwdEl of
+  Left err -> return $ Left err
+  Right Nothing -> return $ Left $ badRequest "expected <forwarded>"
+  Right (Just Forwarded {fwdDelay = Nothing}) ->
+    return $ Left $ badRequest "missing <delay/> (XEP-0313 §5.1.2)"
+  Right (Just Forwarded {fwdDelay = Just delay, fwdMessage}) -> do
+    result <- parseIMMessage mamPluginIMPlugin fwdMessage
+    return $ case result of
+      Left err -> Left err
+      Right Nothing -> Left $ badRequest "expected IM message"
+      Right (Just addressed) -> Right $ MAMMessage mid (delayStamp delay) addressed
+
 instance (MonadStream m) => Handler m InStanza InResponse (MAMPlugin m) where
-  tryHandle (MAMPlugin {..}) (InStanza {istType = InMessage (Right _), istChildren})
+  tryHandle plug@(MAMPlugin {mamPluginQueries}) (InStanza {istType = InMessage (Right _), istChildren})
     | Just (qid, mid, fwdEl) <- extractMAMResult istChildren = do
         queries <- readIORef mamPluginQueries
         case M.lookup qid queries of
           Nothing -> return $ Just InSilent
-          Just bufRef -> do
-            case parseForwarded fwdEl of
-              Left _ -> return ()
-              Right Nothing -> return ()
-              Right (Just Forwarded {fwdDelay, fwdMessage}) -> do
-                result <- parseIMMessage mamPluginIMPlugin fwdMessage
-                case result of
-                  Right (Just addressed) ->
-                    atomicModifyIORef' bufRef $ \ms -> (MAMMessage mid fwdDelay addressed : ms, ())
-                  _ -> return ()
+          Just handlerRef -> do
+            payload <- parseMAMResult plug mid fwdEl
+            MAMHandler handler <- readIORef handlerRef
+            OutNext nextHandler <- handler (InMsg payload)
+            writeIORef handlerRef nextHandler
             return $ Just InSilent
   tryHandle _ _ = return Nothing
 
@@ -266,17 +305,23 @@ requireMam (MAMPlugin {mamPluginDisco}) needed handler =
 
 {- | Execute a MAM query. Verifies disco support (@urn:xmpp:mam:2@, plus
 @#extended@ if the filter uses before-id/after-id) and fails with
-@feature-not-implemented@ otherwise. On success, returns a single 'MAMPage';
-walk further pages by reissuing with an updated 'SetQuery'
-(typically @'After' (rsmLast ...)@ taken from 'mamPageSet').
+@feature-not-implemented@ otherwise. Each archived result is streamed into
+the supplied 'MAMHandler' as @'InMsg' ...@; after the @\<fin\>@ reply (or on
+an IQ error) the handler receives one final @'InEnd' (Either StanzaError
+MAMPage)@ carrying the page summary. Walk further pages by reissuing with an
+updated 'SetQuery' (typically @'After' (rsmLast ...)@ taken from
+'mamPageSet').
 -}
-mamQuery :: (MonadStream m) => MAMPlugin m -> MAMFilter -> SetQuery -> (Either StanzaError MAMPage -> m ()) -> m ()
-mamQuery plug@(MAMPlugin {..}) filt setq handler = requireMam plug (filterFeatures filt) $ \case
-  Left e -> handler $ Left e
+mamQuery :: (MonadStream m) => MAMPlugin m -> MAMFilter -> SetQuery -> MAMHandler m -> m ()
+mamQuery plug@(MAMPlugin {..}) filt setq initialHandler = requireMam plug (filterFeatures filt) $ \case
+  Left e -> do
+    MAMHandler handler <- return initialHandler
+    OutDone <- handler (InEnd (Left e))
+    return ()
   Right () -> do
-    qid <- liftIO $ UUID.toText <$> UUID.nextRandom
-    bufRef <- newIORef []
-    atomicModifyIORef' mamPluginQueries $ \m -> (M.insert qid bufRef m, ())
+    qid <- atomicModifyIORef' mamPluginNextQueryId $ \n -> (n + 1, T.pack (show n))
+    handlerRef <- newIORef initialHandler
+    atomicModifyIORef' mamPluginQueries $ \m -> (M.insert qid handlerRef m, ())
     let queryEl =
           element
             (mamName "query")
@@ -284,14 +329,15 @@ mamQuery plug@(MAMPlugin {..}) filt setq handler = requireMam plug (filterFeatur
             [NodeElement $ mamForm filt, NodeElement $ rsmElement setq]
     stanzaRequest mamPluginSession (serverRequest IQSet [queryEl]) $ \resp -> do
       atomicModifyIORef' mamPluginQueries $ \m -> (M.delete qid m, ())
-      msgs <- reverse <$> readIORef bufRef
-      case resp of
-        Left e -> handler $ Left e
-        Right [finE] ->
-          case parseFin finE of
-            Left e -> handler $ Left e
-            Right (complete, rs) -> handler $ Right $ MAMPage msgs complete rs
-        Right _ -> handler $ Left $ badRequest "invalid MAM response"
+      let finalPayload = case resp of
+            Left e -> Left e
+            Right [finE] -> case parseFin finE of
+              Left e -> Left e
+              Right (complete, rs) -> Right $ MAMPage complete rs
+            Right _ -> Left $ badRequest "invalid MAM response"
+      MAMHandler handler <- readIORef handlerRef
+      OutDone <- handler (InEnd finalPayload)
+      return ()
 
 -- | Archive metadata query (XEP-0313 §5). Requires the @#extended@ feature.
 mamMetadata :: (MonadStream m) => MAMPlugin m -> (Either StanzaError MAMMetadata -> m ()) -> m ()
@@ -329,6 +375,7 @@ mamPlugin pluginsRef = do
                       }
                 else Nothing
   mamPluginQueries <- newIORef M.empty
+  mamPluginNextQueryId <- newIORef 0
   let plugin :: MAMPlugin m = MAMPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef

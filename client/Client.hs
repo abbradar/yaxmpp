@@ -50,9 +50,11 @@ import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.DeliveryReceipts
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.EntityTime
+import Network.XMPP.XEP.MAM
 import Network.XMPP.XEP.MUC
 import Network.XMPP.XEP.OccupantId
 import Network.XMPP.XEP.Ping
+import Network.XMPP.XEP.RSM
 import Network.XMPP.XEP.StanzaIds
 import Network.XMPP.XEP.Version
 
@@ -85,6 +87,27 @@ formatIMMessage AddressedIMMessage {imFrom, imTo, imMessage} =
 
 instance (MonadStream m) => SlotSignal m AddressedIMMessage (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) msg = clientWriteMessage $ formatIMMessage msg
+
+formatMAMMessage :: MAMMessage -> String
+formatMAMMessage MAMMessage {mamMsgArchiveId, mamMsgTimestamp, mamMsgMessage} =
+  [i|[#{mamMsgArchiveId}] #{zonedTimeToXmpp mamMsgTimestamp} #{formatIMMessage mamMsgMessage}|]
+
+clientMAMHandler :: (Monad m) => (String -> m ()) -> MAMHandler m
+clientMAMHandler writeMsg = go
+ where
+  go = MAMHandler $ \case
+    InMsg (Right msg) -> do
+      writeMsg $ formatMAMMessage msg
+      return (OutNext go)
+    InMsg (Left e) -> do
+      writeMsg [i|MAM parse error: #{e}|]
+      return (OutNext go)
+    InEnd (Right page) -> do
+      writeMsg [i|MAM page done: #{show page}|]
+      return OutDone
+    InEnd (Left e) -> do
+      writeMsg [i|MAM query failed: #{e}|]
+      return OutDone
 
 instance (MonadStream m) => SlotSignal m MUCEvent (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
@@ -205,6 +228,7 @@ main = do
         pingPlugin pluginsRef
         stanzaIdsPlugin pluginsRef
         occupantIdPlugin pluginsRef
+        mamPlugin pluginsRef
 
         let saveCache = do
               cache <- getCache pluginsRef
@@ -227,6 +251,7 @@ main = do
           versionP <- getVersionPlugin pluginsRef
           etP <- getEntityTimePlugin pluginsRef
           pingP <- getPingPlugin pluginsRef
+          mamP <- getMAMPlugin pluginsRef
 
           Slot.pushNewOrFailM clientPlugin (rosterPluginSlot rosterP)
           Slot.pushNewOrFailM clientPlugin (subscriptionPluginSlot subP)
@@ -430,6 +455,28 @@ main = do
                             [] -> runInBase $ carbonsDisable cbP $ \case
                               Right () -> liftIO $ putStrLn "Carbons disabled"
                               Left e -> liftIO $ putStrLn [i|Failed to disable carbons: #{e}|]
+                            _ -> HL.outputStrLn "Invalid arguments"
+                        , commandAutocomplete = \_ _ -> return []
+                        }
+                    )
+                  ,
+                    ( "mam_metadata"
+                    , Command
+                        { commandHandler = \runInBase args -> case args of
+                            [] ->
+                              runInBase $ mamMetadata mamP $ \case
+                                Right m -> writeMessage [i|MAM metadata: #{show m}|]
+                                Left e -> writeMessage [i|MAM metadata failed: #{e}|]
+                            _ -> HL.outputStrLn "Invalid arguments"
+                        , commandAutocomplete = \_ _ -> return []
+                        }
+                    )
+                  ,
+                    ( "mam_last"
+                    , Command
+                        { commandHandler = \runInBase args -> case args of
+                            [(read -> n)] ->
+                              runInBase $ mamQuery mamP mempty (SetQuery n (Just (Before Nothing))) (clientMAMHandler writeMessage)
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

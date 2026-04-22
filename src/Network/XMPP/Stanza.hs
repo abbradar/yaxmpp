@@ -47,10 +47,10 @@ import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUID
-import System.Random
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
@@ -297,7 +297,8 @@ type IQResponseHandler m = IQResponse -> m ()
 
 data StanzaSession m = StanzaSession
   { ssSession :: Session m
-  , ssRequests :: IORef (Map (Maybe XMPPAddress, UUID) (IQResponseHandler m))
+  , ssRequests :: IORef (Map (Maybe XMPPAddress, Text) (IQResponseHandler m))
+  , ssNextIqId :: IORef Word
   }
 
 fromServerOrMyself :: Maybe XMPPAddress -> StanzaSession m -> Bool
@@ -335,23 +336,15 @@ stanzaSend' StanzaSession {..} sid OutStanza {..} = do
 
 stanzaRequest :: (MonadStream m) => StanzaSession m -> OutRequestIQ -> IQResponseHandler m -> m ()
 stanzaRequest StanzaSession {..} OutRequestIQ {..} handler = do
-  initialRand <- liftIO newStdGen
-  sid <- atomicModifyIORef' ssRequests $ \reqs ->
-    let findSid rand
-          | (oriTo, sid) `M.member` reqs = findSid nextRand
-          | otherwise = sid
-         where
-          (sid, nextRand) = random rand
-        newSid = findSid initialRand
-     in (M.insert (oriTo, newSid) handler reqs, newSid)
+  sid <- atomicModifyIORef' ssNextIqId $ \n -> (n + 1, T.pack (show n))
+  atomicModifyIORef' ssRequests $ \reqs -> (M.insert (oriTo, sid) handler reqs, ())
   let attrs =
-        [ ("id", UUID.toText sid)
+        [ ("id", sid)
         , ("type", injTo oriIqType)
         ]
           ++ maybeToList (fmap (("to",) . addressToText) oriTo)
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
-      cleanup = atomicModifyIORef' ssRequests $ \reqs -> (M.delete (oriTo, sid) reqs, ())
-  sessionSend ssSession msg `onException` cleanup
+  sessionSend ssSession msg
 
 stanzaSendError :: (MonadStream m) => StanzaSession m -> Element -> StanzaError -> m ()
 stanzaSendError StanzaSession {..} e err@StanzaError {..} = do
@@ -472,16 +465,14 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
                           ]
                 sessionSend ssSession $ element (jcName "iq") attrs $ map NodeElement cres
           Nothing -> case injFrom ttype of
-            Just resType -> do
-              nid <- checkOrFail (UUID.fromText tid) $ sendError $ badRequest "iq response id is invalid"
-              lift $ do
-                mhandler <- atomicModifyIORef' ssRequests $ \requests -> case M.lookup (tfrom, nid) requests of
-                  Nothing -> (requests, Nothing)
-                  Just handler -> (M.delete (tfrom, nid) requests, Just handler)
-                case (mhandler, resType) of
-                  (Nothing, _) -> sendError $ badRequest "corresponding request for response is not found"
-                  (Just handler, IQTypeResult) -> handler $ Right payload
-                  (Just handler, IQTypeError) -> handler $ Left $ getStanzaError e
+            Just resType -> lift $ do
+              mhandler <- atomicModifyIORef' ssRequests $ \requests -> case M.lookup (tfrom, tid) requests of
+                Nothing -> (requests, Nothing)
+                Just handler -> (M.delete (tfrom, tid) requests, Just handler)
+              case (mhandler, resType) of
+                (Nothing, _) -> sendError $ badRequest "corresponding request for response is not found"
+                (Just handler, IQTypeResult) -> handler $ Right payload
+                (Just handler, IQTypeError) -> handler $ Left $ getStanzaError e
             Nothing -> lift $ sendError $ badRequest "iq type is invalid"
       else do
         let (ttype, children) =
@@ -519,4 +510,5 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
 stanzaSessionCreate :: (MonadStream m) => Session m -> m (StanzaSession m)
 stanzaSessionCreate ssSession = do
   ssRequests <- newIORef M.empty
+  ssNextIqId <- newIORef 0
   return StanzaSession {..}
