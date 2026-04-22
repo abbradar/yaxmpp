@@ -44,9 +44,10 @@ data XMPPPluginsRef m = XMPPPluginsRef
   , pluginsHooksSet :: RegistryRef Unconstrained
   , pluginsInHandlers :: HandlerList m InStanza InResponse
   , pluginsIQHandlers :: HandlerList m InRequestIQ RequestIQResponse
-  , -- | Fires for every incoming stanza after the handler chain has run,
-    -- regardless of whether it was handled. Subscribers get the raw 'InStanza'.
-    postInSlot :: Slot m InStanza
+  , postInSlot :: Slot m InStanza
+  {- ^ Fires for every incoming stanza after the handler chain has run,
+  regardless of whether it was handled. Subscribers get the raw 'InStanza'.
+  -}
   , pluginsOldCache :: Map Text JSON.Value
   , pluginsCacheGetters :: IORef (Map Text (ClassBox (XMPPPersistentCache m)))
   }

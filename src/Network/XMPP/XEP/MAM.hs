@@ -2,9 +2,9 @@
 
 -- | XEP-0313: Message Archive Management (version 2, @urn:xmpp:mam:2@).
 module Network.XMPP.XEP.MAM (
-  MamFeatures (..),
+  MAMFeatures (..),
+  checkMAMFeatures,
   MAMFilter (..),
-  emptyMAMFilter,
   MAMMessage (..),
   MAMPage (..),
   MAMArchiveBound (..),
@@ -16,6 +16,7 @@ module Network.XMPP.XEP.MAM (
   mamPlugin,
 ) where
 
+import Control.Applicative ((<|>))
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.MemoAsync (MemoAsync)
@@ -48,6 +49,7 @@ import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.Forms
 import Network.XMPP.XEP.Forwarding
 import Network.XMPP.XEP.RSM
 import Network.XMPP.XML
@@ -56,8 +58,9 @@ mamNS :: Text
 mamName :: Text -> Name
 (mamNS, mamName) = namePair "urn:xmpp:mam:2"
 
--- | Feature string for the @#extended@ subset (XEP-0313 §4.1.5, §5): before-id /
--- after-id filters, flipped pages, and archive metadata.
+{- | Feature string for the @#extended@ subset (XEP-0313 §4.1.5, §5): before-id /
+after-id filters, flipped pages, and archive metadata.
+-}
 mamExtendedNS :: Text
 mamExtendedNS = mamNS <> "#extended"
 
@@ -65,48 +68,81 @@ mamExtendedNS = mamNS <> "#extended"
 mamGroupchatFieldNS :: Text
 mamGroupchatFieldNS = mamNS <> "#groupchat-field"
 
-dataFormName :: Text -> Name
-(_, dataFormName) = namePair "jabber:x:data"
-
--- | Filter parameters for a MAM query.
+{- | Filter parameters for a MAM query. The 'Semigroup' instance is left-biased
+(first 'Just' on each field wins); 'mempty' is an all-'Nothing' filter.
+-}
 data MAMFilter = MAMFilter
   { mamFilterWith :: Maybe XMPPAddress
   , mamFilterStart :: Maybe UTCTime
   , mamFilterEnd :: Maybe UTCTime
-  , -- | Archive id. Requires the @#extended@ feature.
-    mamFilterBeforeId :: Maybe Text
-  , -- | Archive id. Requires the @#extended@ feature.
-    mamFilterAfterId :: Maybe Text
-  , -- | Whether to include group chat messages in the results (XEP-0313 §4.4.6).
-    -- 'Nothing' omits the field and leaves the server default in place.
-    mamFilterIncludeGroupchat :: Maybe Bool
+  , mamFilterBeforeId :: Maybe Text
+  -- ^ Archive id. Requires the @#extended@ feature.
+  , mamFilterAfterId :: Maybe Text
+  -- ^ Archive id. Requires the @#extended@ feature.
+  , mamFilterIncludeGroupchat :: Maybe Bool
+  {- ^ Whether to include group chat messages in the results (XEP-0313 §4.4.6).
+  'Nothing' omits the field and leaves the server default in place.
+  -}
   }
   deriving (Show, Eq)
 
-emptyMAMFilter :: MAMFilter
-emptyMAMFilter =
-  MAMFilter
-    { mamFilterWith = Nothing
-    , mamFilterStart = Nothing
-    , mamFilterEnd = Nothing
-    , mamFilterBeforeId = Nothing
-    , mamFilterAfterId = Nothing
-    , mamFilterIncludeGroupchat = Nothing
+instance Semigroup MAMFilter where
+  a <> b =
+    MAMFilter
+      { mamFilterWith = mamFilterWith a <|> mamFilterWith b
+      , mamFilterStart = mamFilterStart a <|> mamFilterStart b
+      , mamFilterEnd = mamFilterEnd a <|> mamFilterEnd b
+      , mamFilterBeforeId = mamFilterBeforeId a <|> mamFilterBeforeId b
+      , mamFilterAfterId = mamFilterAfterId a <|> mamFilterAfterId b
+      , mamFilterIncludeGroupchat = mamFilterIncludeGroupchat a <|> mamFilterIncludeGroupchat b
+      }
+
+instance Monoid MAMFilter where
+  mempty = MAMFilter Nothing Nothing Nothing Nothing Nothing Nothing
+
+-- | Features a filter needs from the archive to run.
+filterFeatures :: MAMFilter -> MAMFeatures
+filterFeatures MAMFilter {..} =
+  mempty
+    { mamFeaturesExtended = isJust mamFilterBeforeId || isJust mamFilterAfterId
+    , mamFeaturesGroupchatField = isJust mamFilterIncludeGroupchat
     }
 
--- | Whether a filter uses any @#extended@-only fields.
-filterNeedsExtended :: MAMFilter -> Bool
-filterNeedsExtended MAMFilter {mamFilterBeforeId, mamFilterAfterId} =
-  isJust mamFilterBeforeId || isJust mamFilterAfterId
-
--- | Feature flags detected for the archive on the bare-JID.
-data MamFeatures = MamFeatures
-  { -- | @#extended@ subset: before-id/after-id, flipped pages, metadata query.
-    mamFeaturesExtended :: Bool
-  , -- | @#groupchat-field@: @include-groupchat@ form field support.
-    mamFeaturesGroupchatField :: Bool
+{- | Feature flags detected for the archive on the bare-JID. 'Semigroup' ORs
+each field; 'mempty' is all-'False'. When used to express /required/ features,
+combining with '<>' yields the union of all requirements.
+-}
+data MAMFeatures = MAMFeatures
+  { mamFeaturesExtended :: Bool
+  -- ^ @#extended@ subset: before-id/after-id, flipped pages, metadata query.
+  , mamFeaturesGroupchatField :: Bool
+  -- ^ @#groupchat-field@: @include-groupchat@ form field support.
   }
   deriving (Show, Eq)
+
+instance Semigroup MAMFeatures where
+  a <> b =
+    MAMFeatures
+      { mamFeaturesExtended = mamFeaturesExtended a || mamFeaturesExtended b
+      , mamFeaturesGroupchatField = mamFeaturesGroupchatField a || mamFeaturesGroupchatField b
+      }
+
+instance Monoid MAMFeatures where
+  mempty = MAMFeatures False False
+
+{- | Check that every feature required by the first argument is advertised by
+the second. Returns the first missing feature as a @feature-not-implemented@
+error.
+-}
+checkMAMFeatures :: MAMFeatures -> MAMFeatures -> Either StanzaError ()
+checkMAMFeatures required available
+  | mamFeaturesExtended required && not (mamFeaturesExtended available) =
+      missing mamExtendedNS
+  | mamFeaturesGroupchatField required && not (mamFeaturesGroupchatField available) =
+      missing mamGroupchatFieldNS
+  | otherwise = Right ()
+ where
+  missing ns = Left $ featureNotImplemented [i|#{ns} not supported by the archive|]
 
 -- | A single archived message delivered within a page.
 data MAMMessage = MAMMessage
@@ -141,30 +177,22 @@ data MAMMetadata = MAMMetadata
 data MAMPlugin m = MAMPlugin
   { mamPluginSession :: StanzaSession m
   , mamPluginIMPlugin :: IMPlugin m
-  , mamPluginDisco :: MemoAsync m (Maybe MamFeatures)
+  , mamPluginDisco :: MemoAsync m (Maybe MAMFeatures)
   , mamPluginQueries :: IORef (Map Text (IORef [MAMMessage]))
   }
 
-formField :: Text -> Maybe Text -> Text -> Element
-formField var ft val =
-  element
-    (dataFormName "field")
-    (("var", var) : maybeToList (fmap ("type",) ft))
-    [NodeElement $ element (dataFormName "value") [] [NodeContent val]]
-
 mamForm :: MAMFilter -> Element
 mamForm MAMFilter {..} =
-  element (dataFormName "x") [("type", "submit")] $
-    map NodeElement $
-      formField "FORM_TYPE" (Just "hidden") mamNS
-        : catMaybes
-          [ fmap (\a -> formField "with" Nothing (addressToText a)) mamFilterWith
-          , fmap (\t -> formField "start" Nothing (utcTimeToXmpp t)) mamFilterStart
-          , fmap (\t -> formField "end" Nothing (utcTimeToXmpp t)) mamFilterEnd
-          , fmap (formField "before-id" Nothing) mamFilterBeforeId
-          , fmap (formField "after-id" Nothing) mamFilterAfterId
-          , fmap (\b -> formField "include-groupchat" (Just "boolean") (if b then "true" else "false")) mamFilterIncludeGroupchat
-          ]
+  submitForm $
+    formTypeField mamNS
+      : catMaybes
+        [ fmap (\a -> formField "with" Nothing (addressToText a)) mamFilterWith
+        , fmap (\t -> formField "start" Nothing (utcTimeToXmpp t)) mamFilterStart
+        , fmap (\t -> formField "end" Nothing (utcTimeToXmpp t)) mamFilterEnd
+        , fmap (formField "before-id" Nothing) mamFilterBeforeId
+        , fmap (formField "after-id" Nothing) mamFilterAfterId
+        , fmap (\b -> formField "include-groupchat" (Just "boolean") (if b then "true" else "false")) mamFilterIncludeGroupchat
+        ]
 
 parseFin :: Element -> Either StanzaError (Bool, Maybe ResultSet)
 parseFin e
@@ -226,16 +254,15 @@ instance (MonadStream m) => Handler m InStanza InResponse (MAMPlugin m) where
 getMAMPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (MAMPlugin m)
 getMAMPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (MAMPlugin m)) $ pluginsHooksSet pluginsRef
 
--- | Run the continuation with the resolved 'MamFeatures'. Fails with
--- @feature-not-implemented@ if MAM itself is unsupported, or if any of the
--- feature-gated checks returned by @extraCheck@ fail.
-requireMam :: (MonadStream m) => MAMPlugin m -> (MamFeatures -> Maybe Text) -> (Either StanzaError a -> m ()) -> (MamFeatures -> m ()) -> m ()
-requireMam (MAMPlugin {mamPluginDisco}) extraCheck handler onOk =
+{- | Resolve MAM support. Calls the handler with @Left@ if MAM itself is
+unsupported or any feature required by @needed@ is missing, and @Right ()@
+once support is confirmed.
+-}
+requireMam :: (MonadStream m) => MAMPlugin m -> MAMFeatures -> (Either StanzaError () -> m ()) -> m ()
+requireMam (MAMPlugin {mamPluginDisco}) needed handler =
   MemoAsync.get mamPluginDisco $ \case
     Nothing -> handler $ Left $ featureNotImplemented [i|#{mamNS} not supported by the archive|]
-    Just feats -> case extraCheck feats of
-      Nothing -> onOk feats
-      Just missing -> handler $ Left $ featureNotImplemented [i|#{missing} not supported by the archive|]
+    Just feats -> handler $ checkMAMFeatures needed feats
 
 {- | Execute a MAM query. Verifies disco support (@urn:xmpp:mam:2@, plus
 @#extended@ if the filter uses before-id/after-id) and fails with
@@ -244,45 +271,42 @@ walk further pages by reissuing with an updated 'SetQuery'
 (typically @'After' (rsmLast ...)@ taken from 'mamPageSet').
 -}
 mamQuery :: (MonadStream m) => MAMPlugin m -> MAMFilter -> SetQuery -> (Either StanzaError MAMPage -> m ()) -> m ()
-mamQuery plug@(MAMPlugin {..}) filt setq handler = requireMam plug featureCheck handler $ \_ -> do
-  qid <- liftIO $ UUID.toText <$> UUID.nextRandom
-  bufRef <- newIORef []
-  atomicModifyIORef' mamPluginQueries $ \m -> (M.insert qid bufRef m, ())
-  let queryEl =
-        element
-          (mamName "query")
-          [("queryid", qid)]
-          [NodeElement $ mamForm filt, NodeElement $ rsmElement setq]
-  stanzaRequest mamPluginSession (serverRequest IQSet [queryEl]) $ \resp -> do
-    atomicModifyIORef' mamPluginQueries $ \m -> (M.delete qid m, ())
-    msgs <- reverse <$> readIORef bufRef
-    case resp of
-      Left e -> handler $ Left e
-      Right [finE] ->
-        case parseFin finE of
-          Left e -> handler $ Left e
-          Right (complete, rs) -> handler $ Right $ MAMPage msgs complete rs
-      Right _ -> handler $ Left $ badRequest "invalid MAM response"
- where
-  featureCheck feats
-    | filterNeedsExtended filt && not (mamFeaturesExtended feats) = Just mamExtendedNS
-    | isJust (mamFilterIncludeGroupchat filt) && not (mamFeaturesGroupchatField feats) = Just mamGroupchatFieldNS
-    | otherwise = Nothing
+mamQuery plug@(MAMPlugin {..}) filt setq handler = requireMam plug (filterFeatures filt) $ \case
+  Left e -> handler $ Left e
+  Right () -> do
+    qid <- liftIO $ UUID.toText <$> UUID.nextRandom
+    bufRef <- newIORef []
+    atomicModifyIORef' mamPluginQueries $ \m -> (M.insert qid bufRef m, ())
+    let queryEl =
+          element
+            (mamName "query")
+            [("queryid", qid)]
+            [NodeElement $ mamForm filt, NodeElement $ rsmElement setq]
+    stanzaRequest mamPluginSession (serverRequest IQSet [queryEl]) $ \resp -> do
+      atomicModifyIORef' mamPluginQueries $ \m -> (M.delete qid m, ())
+      msgs <- reverse <$> readIORef bufRef
+      case resp of
+        Left e -> handler $ Left e
+        Right [finE] ->
+          case parseFin finE of
+            Left e -> handler $ Left e
+            Right (complete, rs) -> handler $ Right $ MAMPage msgs complete rs
+        Right _ -> handler $ Left $ badRequest "invalid MAM response"
 
 -- | Archive metadata query (XEP-0313 §5). Requires the @#extended@ feature.
 mamMetadata :: (MonadStream m) => MAMPlugin m -> (Either StanzaError MAMMetadata -> m ()) -> m ()
-mamMetadata plug@(MAMPlugin {mamPluginSession}) handler = requireMam plug featureCheck handler $ \_ ->
-  stanzaRequest mamPluginSession (serverRequest IQGet [closedElement (mamName "metadata")]) $ \case
-    Left e -> handler $ Left e
-    Right [metaE] ->
-      case parseMetadata metaE of
-        Left e -> handler $ Left e
-        Right m -> handler $ Right m
-    Right _ -> handler $ Left $ badRequest "invalid MAM metadata response"
+mamMetadata plug@(MAMPlugin {mamPluginSession}) handler = requireMam plug needed $ \case
+  Left e -> handler $ Left e
+  Right () ->
+    stanzaRequest mamPluginSession (serverRequest IQGet [closedElement (mamName "metadata")]) $ \case
+      Left e -> handler $ Left e
+      Right [metaE] ->
+        case parseMetadata metaE of
+          Left e -> handler $ Left e
+          Right m -> handler $ Right m
+      Right _ -> handler $ Left $ badRequest "invalid MAM metadata response"
  where
-  featureCheck feats
-    | not (mamFeaturesExtended feats) = Just mamExtendedNS
-    | otherwise = Nothing
+  needed = mempty {mamFeaturesExtended = True}
 
 mamPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mamPlugin pluginsRef = do
@@ -299,7 +323,7 @@ mamPlugin pluginsRef = do
               if mamNS `S.member` feats
                 then
                   Just
-                    MamFeatures
+                    MAMFeatures
                       { mamFeaturesExtended = mamExtendedNS `S.member` feats
                       , mamFeaturesGroupchatField = mamGroupchatFieldNS `S.member` feats
                       }
