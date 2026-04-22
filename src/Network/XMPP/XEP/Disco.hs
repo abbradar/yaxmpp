@@ -204,12 +204,13 @@ getDiscoEntity (DiscoPlugin {..}) addr node handler
 {- | Build a memoized check of whether the home server advertises a disco feature.
 The underlying entity fetch is already memoized, but wrapping the boolean result
 means each consumer can cache its own answer instead of re-traversing the feature set.
+Disco errors collapse to 'False' (treat the feature as unsupported).
 -}
-newHomeFeatureCheck :: (MonadStream m) => DiscoPlugin m -> DiscoFeature -> m (MemoAsync m (Either StanzaError Bool))
+newHomeFeatureCheck :: (MonadStream m) => DiscoPlugin m -> DiscoFeature -> m (MemoAsync m Bool)
 newHomeFeatureCheck (DiscoPlugin {discoPluginHome}) feat = MemoAsync.new $ \cb ->
   MemoAsync.get discoPluginHome $ \case
-    Left e -> cb (Left e)
-    Right ent -> cb (Right $ feat `S.member` discoFeatures ent)
+    Left _ -> cb False
+    Right ent -> cb (feat `S.member` discoFeatures ent)
 
 type DiscoNode = Text
 

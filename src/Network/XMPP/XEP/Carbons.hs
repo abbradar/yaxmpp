@@ -52,7 +52,7 @@ type CarbonSlot m = Slot m (CarbonDirection, AddressedIMMessage)
 data CarbonsPlugin m = CarbonsPlugin
   { carbonsPluginSession :: StanzaSession m
   , carbonsPluginIMPlugin :: IMPlugin m
-  , carbonsPluginSupported :: MemoAsync m (Either StanzaError Bool)
+  , carbonsPluginSupported :: MemoAsync m Bool
   , carbonsPluginSlot :: CarbonSlot m
   }
 
@@ -111,9 +111,8 @@ getCarbonsPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (CarbonsPlugi
 carbonsSet :: (MonadStream m) => CarbonsPlugin m -> Text -> (Either StanzaError () -> m ()) -> m ()
 carbonsSet CarbonsPlugin {..} localName handler =
   MemoAsync.get carbonsPluginSupported $ \case
-    Left e -> handler $ Left e
-    Right False -> handler $ Left $ featureNotImplemented [i|#{carbonsNS} not supported by the server|]
-    Right True ->
+    False -> handler $ Left $ featureNotImplemented [i|#{carbonsNS} not supported by the server|]
+    True ->
       stanzaRequest
         carbonsPluginSession
         (serverRequest IQSet [closedElement (carbonsName localName)])
