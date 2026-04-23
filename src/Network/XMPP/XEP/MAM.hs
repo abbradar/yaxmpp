@@ -150,7 +150,7 @@ data MAMMessage = MAMMessage
   -}
   , mamMsgStanza :: InStanza
   {- ^ The archived @\<message\>@ stanza parsed into an 'InStanza'.
-  Consumers typically pass it to 'parseIMMessage' to reach 'AddressedIMMessage'.
+  Consumers typically pass it to 'tryParseIMMessage' to reach 'AddressedIMMessage'.
   -}
   }
   deriving (Show)
@@ -229,7 +229,7 @@ parseFin :: Element -> Either StanzaError (Bool, Maybe ResultSet)
 parseFin e
   | elementName e == mamName "fin" = do
       let complete = getAttr "complete" e == Just "true"
-      rs <- case parseRSM e of
+      rs <- case tryParseRSM e of
         Left err -> Left $ badRequest $ T.pack err
         Right r -> Right r
       Right (complete, rs)
@@ -268,7 +268,7 @@ mandatory @\<delay/\>@ timestamp and parses the inner @\<message\>@ into an
 'InStanza', leaving IM-level decoding to the consumer.
 -}
 parseMAMResult :: Text -> Element -> Either StanzaError MAMMessage
-parseMAMResult mid fwdEl = case parseForwarded fwdEl of
+parseMAMResult mid fwdEl = case tryParseForwarded fwdEl of
   Left err -> Left err
   Right Nothing -> Left $ badRequest "expected <forwarded>"
   Right (Just Forwarded {fwdDelay = Nothing}) ->
@@ -278,7 +278,8 @@ parseMAMResult mid fwdEl = case parseForwarded fwdEl of
     Right $ MAMMessage mid (delayStamp delay) st
 
 instance (MonadStream m) => Handler m InStanza InResponse (MAMPlugin m) where
-  tryHandle (MAMPlugin {mamPluginQueries}) (InStanza {istType = InMessage (Right _), istChildren})
+  -- XEP-0313 §4.2: archive result messages carry no 'type' attribute (normal).
+  tryHandle (MAMPlugin {mamPluginQueries}) (InStanza {istType = InMessage MessageNormal, istChildren})
     | Just (qid, mid, fwdEl) <- extractMAMResult istChildren = do
         queries <- readIORef mamPluginQueries
         case M.lookup qid queries of

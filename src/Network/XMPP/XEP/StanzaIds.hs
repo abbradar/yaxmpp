@@ -50,13 +50,13 @@ data StanzaIds = StanzaIds
   }
   deriving (Show, Eq)
 
-parseOriginId :: Element -> Maybe OriginId
-parseOriginId e
+tryParseOriginId :: Element -> Maybe OriginId
+tryParseOriginId e
   | elementName e == sidName "origin-id" = OriginId <$> getAttr "id" e
   | otherwise = Nothing
 
-parseStanzaId :: Element -> Maybe (StanzaIdBy, StanzaIdValue)
-parseStanzaId e
+tryParseStanzaId :: Element -> Maybe (StanzaIdBy, StanzaIdValue)
+tryParseStanzaId e
   | elementName e == sidName "stanza-id" = do
       sid <- getAttr "id" e
       by <- getAttr "by" e
@@ -70,8 +70,8 @@ extractStanzaIds :: [Element] -> (StanzaIds, [Element])
 extractStanzaIds elems =
   let (oidElems, rest1) = partition ((== sidName "origin-id") . elementName) elems
       (sidElems, rest2) = partition ((== sidName "stanza-id") . elementName) rest1
-      sidsOriginId = listToMaybe $ mapMaybe parseOriginId oidElems
-      sidsStanzaIds = M.fromList $ mapMaybe parseStanzaId sidElems
+      sidsOriginId = listToMaybe $ mapMaybe tryParseOriginId oidElems
+      sidsStanzaIds = M.fromList $ mapMaybe tryParseStanzaId sidElems
    in (StanzaIds {..}, rest2)
 
 data StanzaIdsPlugin = StanzaIdsPlugin

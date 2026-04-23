@@ -56,8 +56,8 @@ data CarbonsPlugin m = CarbonsPlugin
   , carbonsPluginSlot :: CarbonSlot m
   }
 
-parseCarbonDirection :: Name -> Maybe CarbonDirection
-parseCarbonDirection n
+tryParseCarbonDirection :: Name -> Maybe CarbonDirection
+tryParseCarbonDirection n
   | n == carbonsName "received" = Just CarbonReceived
   | n == carbonsName "sent" = Just CarbonSent
   | otherwise = Nothing
@@ -71,9 +71,9 @@ extractCarbon elems = case mapMaybe tryOne elems of
   (res : _) -> res
  where
   tryOne e = do
-    direction <- parseCarbonDirection (elementName e)
+    direction <- tryParseCarbonDirection (elementName e)
     let fwdElems = mapMaybe nodeElement (elementNodes e)
-    Just $ case mapMaybe (toMaybeForwarded . parseForwarded) fwdElems of
+    Just $ case mapMaybe (toMaybeForwarded . tryParseForwarded) fwdElems of
       [] -> Left $ badRequest "no <forwarded> in carbon wrapper"
       (Left err : _) -> Left err
       (Right fwd : _) -> Right $ Just (direction, fwd)
@@ -86,8 +86,11 @@ extractCarbon elems = case mapMaybe tryOne elems of
   nodeElement _ = Nothing
 
 instance (MonadStream m) => Handler m InStanza InResponse (CarbonsPlugin m) where
-  tryHandle (CarbonsPlugin {..}) (InStanza {istFrom, istType = InMessage (Right _), istChildren})
-    | Right (Just res) <- extracted =
+  -- XEP-0280 §5: the outer wrapper is a <message/> of type 'chat' or no type
+  -- (normal). Other types would not be spec-conformant carbon wrappers.
+  tryHandle (CarbonsPlugin {..}) (InStanza {istFrom, istType = InMessage msgType, istChildren})
+    | msgType == MessageChat || msgType == MessageNormal
+    , Right (Just res) <- extracted =
         Just <$> do
           if not (fromServerOrMyself istFrom carbonsPluginSession)
             then return $ InError $ badRequest "untrusted carbon sender"
@@ -95,8 +98,9 @@ instance (MonadStream m) => Handler m InStanza InResponse (CarbonsPlugin m) wher
               let (direction, Forwarded {fwdMessage}) = res
               case parseInStanza fwdMessage of
                 Left err -> return $ InError err
-                Right st@(InStanza {istType = InMessage (Right _)}) -> do
-                  mMsg <- parseIMMessage carbonsPluginIMPlugin st
+                -- XEP-0280 §6 / §13: type='error' MUST NOT be carbonated.
+                Right st@(InStanza {istType = InMessage innerType}) | innerType /= MessageError -> do
+                  mMsg <- tryParseIMMessage carbonsPluginIMPlugin st
                   case mMsg of
                     Left err -> return $ InError err
                     Right Nothing -> return InSilent
@@ -104,7 +108,8 @@ instance (MonadStream m) => Handler m InStanza InResponse (CarbonsPlugin m) wher
                       Slot.call carbonsPluginSlot (direction, addressed)
                       return InSilent
                 Right _ -> return InSilent
-    | Left err <- extracted = return $ Just $ InError err
+    | msgType == MessageChat || msgType == MessageNormal
+    , Left err <- extracted = return $ Just $ InError err
    where
     extracted = extractCarbon istChildren
   tryHandle _ _ = return Nothing

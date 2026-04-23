@@ -110,8 +110,12 @@ instance (MonadStream m) => Codec m XMPPAddress IMMessage DeliveryReceiptRequest
 Side effects happen in the post-in slot subscriber below.
 -}
 instance (MonadStream m) => Handler m InStanza InResponse (DeliveryReceiptsPlugin m) where
-  tryHandle _ (InStanza {istType = InMessage (Right _), istChildren})
-    | not (hasBody istChildren)
+  -- XEP-0184 §5.4: request/received MUST NOT be used with type='error' or
+  -- type='groupchat'.
+  tryHandle _ (InStanza {istType = InMessage msgType, istChildren})
+    | msgType /= MessageError
+    , msgType /= MessageGroupchat
+    , not (hasBody istChildren)
     , isJust (fst (extractRequest istChildren)) || isJust (fst (extractReceipt istChildren)) =
         return $ Just InSilent
   tryHandle _ _ = return Nothing
@@ -120,14 +124,17 @@ instance (MonadStream m) => Handler m InStanza InResponse (DeliveryReceiptsPlugi
 for @\<request/\>@ children and emits on the slot for @\<received/\>@ children.
 -}
 instance (MonadStream m) => SlotSignal m InStanza (DeliveryReceiptsPlugin m) where
-  emitSignal plugin@DeliveryReceiptsPlugin {deliveryReceiptsPluginSlot} (InStanza {istFrom = Just from, istId, istType = InMessage (Right msgType), istChildren}) = do
-    when (isJust $ fst $ extractRequest istChildren) $
-      case istId of
-        Just mid -> sendReceipt plugin from msgType mid
-        Nothing -> $(logWarn) "No message ID for receipt request; ignoring"
-    case fst (extractReceipt istChildren) of
-      Just mid -> Slot.call deliveryReceiptsPluginSlot (from, mid)
-      Nothing -> return ()
+  emitSignal plugin@DeliveryReceiptsPlugin {deliveryReceiptsPluginSlot} (InStanza {istFrom = Just from, istId, istType = InMessage msgType, istChildren})
+    -- XEP-0184 §5.4: request/received MUST NOT be used with type='error' or
+    -- type='groupchat'.
+    | msgType /= MessageError, msgType /= MessageGroupchat = do
+        when (isJust $ fst $ extractRequest istChildren) $
+          case istId of
+            Just mid -> sendReceipt plugin from msgType mid
+            Nothing -> $(logWarn) "No message ID for receipt request; ignoring"
+        case fst (extractReceipt istChildren) of
+          Just mid -> Slot.call deliveryReceiptsPluginSlot (from, mid)
+          Nothing -> return ()
   emitSignal _ _ = return ()
 
 instance (Typeable m) => DiscoInfoProvider (DeliveryReceiptsPlugin m) where

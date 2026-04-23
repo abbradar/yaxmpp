@@ -279,16 +279,16 @@ estreamName = nsName "urn:ietf:params:xml:ns:xmpp-streams"
 data StartTLSFeature = StartTLSFeature {tlsMandatory :: Bool}
   deriving (Show, Eq)
 
-parseStartTLS :: Element -> Maybe StartTLSFeature
-parseStartTLS e
+tryParseStartTLS :: Element -> Maybe StartTLSFeature
+tryParseStartTLS e
   | elementName e == startTLSName "starttls" = Just $ StartTLSFeature $ not $ null $ fromElement e $/ XC.element (startTLSName "required")
   | otherwise = Nothing
 
 data SASLFeature = SASLFeature {saslMechanisms :: [ByteString]}
   deriving (Show, Eq)
 
-parseSASL :: Element -> Maybe SASLFeature
-parseSASL e
+tryParseSASL :: Element -> Maybe SASLFeature
+tryParseSASL e
   | elementName e == saslName "mechanisms" = Just $ SASLFeature $ map T.encodeUtf8 $ fromElement e $/ XC.element (saslName "mechanism") &/ content
   | otherwise = Nothing
 
@@ -350,8 +350,8 @@ parseStanza streamcfgR = handleC (throwM . InternalStreamException . xmlError) $
       return e
     Left unres -> throwM $ InternalStreamException $ unresolvedEntity unres
 
-getStreamError :: Element -> Maybe StreamError
-getStreamError e
+tryParseStreamError :: Element -> Maybe StreamError
+tryParseStreamError e
   | elementName e == estreamName "error" =
       Just StreamError {..}
   | otherwise = Nothing
@@ -369,7 +369,7 @@ getStreamError e
 createStreamSource :: (MonadStream m) => Connection -> m (StreamSettings, SealedConduitT () Element m ())
 createStreamSource conn = do
   streamcfgR <- newIORef Nothing
-  let checkError = CL.mapM $ \e -> case getStreamError e of
+  let checkError = CL.mapM $ \e -> case tryParseStreamError e of
         Nothing -> return e
         Just err -> throwM $ InStreamError err
       source =
@@ -478,13 +478,13 @@ data FeaturesResult
 
 initFeatures :: (MonadStream m) => ConnectionSettings -> Stream m -> [Element] -> m FeaturesResult
 initFeatures (ConnectionSettings {..}) s features
-  | StartTLSFeature {} : _ <- mapMaybe parseStartTLS features = do
+  | StartTLSFeature {} : _ <- mapMaybe tryParseStartTLS features = do
       $(logInfo) "Negotiating TLS"
       streamSend s $ closedElement $ startTLSName "starttls"
       eanswer <- streamRecv s
       unless (elementName eanswer == startTLSName "proceed") $ streamThrow s $ unexpectedStanza (elementName eanswer) [startTLSName "proceed"]
       return FeaturesTLS
-  | SASLFeature methods : _ <- mapMaybe parseSASL features = do
+  | SASLFeature methods : _ <- mapMaybe tryParseSASL features = do
       $(logInfo) "Authenticating"
       r <- saslAuth s $ concatMap (\m -> filter (\a -> saslMechanism a == m) connectionAuth) methods
       return $ if isJust r then FeaturesRestart else FeaturesUnauthorized

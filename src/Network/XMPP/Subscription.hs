@@ -46,7 +46,7 @@ data SubscriptionPlugin m = SubscriptionPlugin
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (SubscriptionPlugin m) where
-  tryHandle (SubscriptionPlugin {..}) (InStanza {istType = InPresence (Right (Just typ)), istFrom = Just (bareJidGet -> Just addr)}) =
+  tryHandle (SubscriptionPlugin {..}) (InStanza {istType = InPresence (Just typ), istFrom = Just (bareJidGet -> Just addr), istChildren}) =
     case typ of
       PresenceSubscribed -> do
         Slot.call subscriptionPluginSlot (addr, WeSubscribed)
@@ -60,15 +60,16 @@ instance (MonadStream m) => Handler m InStanza InResponse (SubscriptionPlugin m)
       PresenceUnsubscribe -> do
         Slot.call subscriptionPluginSlot (addr, TheyUnsubscribed)
         return $ Just InSilent
+      PresenceError -> do
+        let err = either id id $ parseStanzaError istChildren
+        found <- atomicModifyIORef' subscriptionPluginPending $ \pending ->
+          if addr `S.member` pending then (S.delete addr pending, True) else (pending, False)
+        if found
+          then do
+            Slot.call subscriptionPluginSlot (addr, TheyUnavailable err)
+            return $ Just InSilent
+          else return Nothing
       _ -> return Nothing
-  tryHandle (SubscriptionPlugin {..}) (InStanza {istType = InPresence (Left err), istFrom = Just (bareJidGet -> Just addr)}) = do
-    found <- atomicModifyIORef' subscriptionPluginPending $ \pending ->
-      if addr `S.member` pending then (S.delete addr pending, True) else (pending, False)
-    if found
-      then do
-        Slot.call subscriptionPluginSlot (addr, TheyUnavailable err)
-        return $ Just InSilent
-      else return Nothing
   tryHandle _ _ = return Nothing
 
 instance (MonadStream m) => SlotSignal m (RosterEntries, RosterEvent) (SubscriptionPlugin m) where

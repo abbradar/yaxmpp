@@ -219,8 +219,8 @@ sendFirstRequest session mold handler = do
                 }
       _ -> fail "handleFirstRequest: invalid roster response"
 
-getRosterEvent :: Element -> Either StanzaError RosterEvent
-getRosterEvent e = do
+parseRosterEvent :: Element -> Either StanzaError RosterEvent
+parseRosterEvent e = do
   unless (elementName e == rosterName "item") $ Left $ badRequest [i|invalid roster item #{e}|]
   jid <- case getAttr "jid" e >>= (toRight . xmppAddress) of
     Nothing -> Left $ jidMalformed "invalid jid in roster push"
@@ -254,7 +254,7 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (RosterPlugi
             then
               return $ IQError $ serviceUnavailable "Roster push from arbitrary entity is forbidden"
             else do
-              case mapM getRosterEvent $ fromElement req $/ curAnyElement of
+              case mapM parseRosterEvent $ fromElement req $/ curAnyElement of
                 Left err -> return $ IQError err
                 Right events -> do
                   result <- atomicModifyIORef' rosterPluginRef $ \case

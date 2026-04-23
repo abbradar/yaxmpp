@@ -29,8 +29,8 @@ occupantIdName :: Text -> Name
 newtype OccupantId = OccupantId {occupantId :: Text}
   deriving (Show, Eq)
 
-parseOccupantId :: Element -> Maybe OccupantId
-parseOccupantId e
+tryParseOccupantId :: Element -> Maybe OccupantId
+tryParseOccupantId e
   | elementName e == occupantIdName "occupant-id" = OccupantId <$> getAttr "id" e
   | otherwise = Nothing
 
@@ -40,7 +40,7 @@ occupantIdElement (OccupantId oid) = element (occupantIdName "occupant-id") [("i
 extractOccupantId :: [Element] -> (Maybe OccupantId, [Element])
 extractOccupantId elems =
   let (oidElems, rest) = partition ((== occupantIdName "occupant-id") . elementName) elems
-   in (listToMaybe $ mapMaybe parseOccupantId oidElems, rest)
+   in (listToMaybe $ mapMaybe tryParseOccupantId oidElems, rest)
 
 data OccupantIdPlugin = OccupantIdPlugin
 

@@ -5,7 +5,7 @@ https://xmpp.org/extensions/xep-0085.html
 -}
 module Network.XMPP.XEP.ChatStates (
   ChatState (..),
-  parseChatState,
+  tryParseChatState,
   ChatStateSlot,
   ChatStatePlugin,
   chatStatePluginSlot,
@@ -56,8 +56,8 @@ chatStatesNS :: Text
 chatStateName :: Text -> Name
 (chatStatesNS, chatStateName) = namePair "http://jabber.org/protocol/chatstates"
 
-parseChatState :: [Element] -> Maybe ChatState
-parseChatState = listToMaybe . mapMaybe tryParse
+tryParseChatState :: [Element] -> Maybe ChatState
+tryParseChatState = listToMaybe . mapMaybe tryParse
  where
   tryParse e
     | nameNamespace (elementName e) == Just chatStatesNS = injFrom $ nameLocalName $ elementName e
@@ -72,9 +72,11 @@ data ChatStatePlugin m = ChatStatePlugin
 
 -- Handle bodyless messages with chat state notifications.
 instance (MonadStream m) => Handler m InStanza InResponse (ChatStatePlugin m) where
-  tryHandle (ChatStatePlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right msgType), istChildren})
-    | not (hasBody istChildren)
-    , Just cs <- parseChatState istChildren = do
+  -- XEP-0085 §4: chat state notifications MUST NOT be generated for type='error'.
+  tryHandle (ChatStatePlugin {..}) (InStanza {istFrom = Just from, istType = InMessage msgType, istChildren})
+    | msgType /= MessageError
+    , not (hasBody istChildren)
+    , Just cs <- tryParseChatState istChildren = do
         Slot.call chatStatePluginSlot (from, msgType, cs)
         return $ Just InSilent
   tryHandle _ _ = return Nothing
@@ -82,7 +84,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (ChatStatePlugin m) wh
 -- Extract chat states from body-ful messages (XEP-0085 §5.3).
 instance (MonadStream m) => SlotSignal m AddressedIMMessage (ChatStatePlugin m) where
   emitSignal (ChatStatePlugin {..}) AddressedIMMessage {imFrom, imMessage} =
-    case parseChatState (imRaw imMessage) of
+    case tryParseChatState (imRaw imMessage) of
       Just cs -> Slot.call chatStatePluginSlot (imFrom, imType imMessage, cs)
       Nothing -> return ()
 

@@ -61,8 +61,8 @@ newtype CapsInfo = CapsInfo
   }
   deriving (Show, Eq)
 
-parseCapsInstance :: Element -> Maybe CapsInstance
-parseCapsInstance e = do
+tryParseCapsInstance :: Element -> Maybe CapsInstance
+tryParseCapsInstance e = do
   guard $ elementName e == capsName "c"
   capsHash <- getAttr "hash" e
   capsNode <- getAttr "node" e
@@ -101,8 +101,8 @@ newtype Caps2Info = Caps2Info
   }
   deriving (Show, Eq)
 
-parseCaps2Info :: Element -> Maybe Caps2Info
-parseCaps2Info e
+tryParseCaps2Info :: Element -> Maybe Caps2Info
+tryParseCaps2Info e
   | elementName e == caps2Name "c" =
       let cur = fromElement e
           hashes = M.fromList $ mapMaybe parseHash $ cur $/ XC.element (hashesName "hash") &| curElement
@@ -148,10 +148,10 @@ extractCaps :: [Element] -> (Maybe CapsInfo, Maybe Caps2Info, [Element])
 extractCaps elems =
   let (caps1Elems, rest1) = partition (\e -> elementName e == capsName "c") elems
       (caps2Elems, rest2) = partition (\e -> elementName e == caps2Name "c") rest1
-      mcaps1 = case mapMaybe parseCapsInstance caps1Elems of
+      mcaps1 = case mapMaybe tryParseCapsInstance caps1Elems of
         [] -> Nothing
         xs -> Just $ CapsInfo xs
-      mcaps2 = listToMaybe $ mapMaybe parseCaps2Info caps2Elems
+      mcaps2 = listToMaybe $ mapMaybe tryParseCaps2Info caps2Elems
    in (mcaps1, mcaps2, rest2)
 
 capsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()

@@ -29,6 +29,7 @@ module Network.XMPP.Stanza (
   stanzaSend',
   stanzaRequest,
   parseInStanza,
+  parseStanzaError,
   InResponse (..),
   InHandler,
   RequestIQResponse (..),
@@ -192,7 +193,8 @@ data MessageType
   | MessageGroupchat
   | MessageHeadline
   | MessageNormal
-  deriving (Show, Eq, Enum, Bounded)
+  | MessageError
+  deriving (Show, Eq, Ord, Enum, Bounded)
 
 instance Injective MessageType Text where
   injTo x = case x of
@@ -200,6 +202,7 @@ instance Injective MessageType Text where
     MessageGroupchat -> "groupchat"
     MessageHeadline -> "headline"
     MessageNormal -> "normal"
+    MessageError -> "error"
 
 data PresenceType
   = PresenceProbe
@@ -208,7 +211,8 @@ data PresenceType
   | PresenceUnavailable
   | PresenceUnsubscribe
   | PresenceUnsubscribed
-  deriving (Show, Eq, Enum, Bounded)
+  | PresenceError
+  deriving (Show, Eq, Ord, Enum, Bounded)
 
 instance Injective PresenceType Text where
   injTo x = case x of
@@ -218,6 +222,7 @@ instance Injective PresenceType Text where
     PresenceUnavailable -> "unavailable"
     PresenceUnsubscribe -> "unsubscribe"
     PresenceUnsubscribed -> "unsubscribed"
+    PresenceError -> "error"
 
 data OutStanzaType
   = OutMessage MessageType
@@ -232,8 +237,8 @@ data OutStanza = OutStanza
   deriving (Show, Eq)
 
 data InStanzaType
-  = InMessage (Either StanzaError MessageType)
-  | InPresence (Either StanzaError (Maybe PresenceType))
+  = InMessage MessageType
+  | InPresence (Maybe PresenceType)
   deriving (Show, Eq)
 
 data InStanza = InStanza
@@ -380,56 +385,58 @@ data RequestIQResponse
 
 type IQHandler m = InRequestIQ -> m RequestIQResponse
 
-getStanzaError :: Element -> StanzaError
-getStanzaError e = StanzaError {..}
- where
-  topCur = fromElement e
-  errorE = case topCur $/ XC.element (jcName "error") &| curElement of
-    (err : _) -> err
-    _ -> closedElement "error"
-  cur = fromElement errorE
-
-  szeType = fromMaybe SzCancel $ getAttr "type" errorE >>= injFrom
-
-  szeCondition = fromMaybe ScUndefinedCondition $ do
-    en <- listToMaybe $ cur $/ curAnyElement
-    injFrom $ nameLocalName $ elementName en
-
-  szeText = listToMaybe $ cur $/ XC.element (stanzaName "text") &/ content
-
-  szeChildren = cur $/ checkName (\n -> n /= stanzaName (injTo szeCondition) && n /= stanzaName "text") &| curElement
+{- | Parse a 'StanzaError' out of a stanza's children. Fails with a
+@'Left' StanzaError@ describing the parse failure if the @\<error/\>@
+child is missing, if its @type@ attribute is missing/invalid, or if no
+recognised condition element is present.
+-}
+parseStanzaError :: [Element] -> Either StanzaError StanzaError
+parseStanzaError children = do
+  errorE <- case filter ((== jcName "error") . elementName) children of
+    (err : _) -> Right err
+    _ -> Left $ badRequest "missing <error/> child"
+  szeType <- case getAttr "type" errorE of
+    Nothing -> Left $ badRequest "missing error type attribute"
+    Just t -> case injFrom t of
+      Just et -> Right et
+      Nothing -> Left $ badRequest [i|invalid error type #{t}|]
+  let cur = fromElement errorE
+  szeCondition <- case listToMaybe (cur $/ curAnyElement) of
+    Nothing -> Left $ badRequest "missing error condition element"
+    Just en -> case injFrom (nameLocalName (elementName en)) of
+      Just c -> Right c
+      Nothing -> Left $ badRequest [i|unknown error condition #{nameLocalName (elementName en)}|]
+  let szeText = listToMaybe $ cur $/ XC.element (stanzaName "text") &/ content
+      szeChildren = cur $/ checkName (\n -> n /= stanzaName (injTo szeCondition) && n /= stanzaName "text") &| curElement
+  return StanzaError {..}
 
 checkOrFail :: (Monad m) => Maybe a -> m () -> MaybeT m a
 checkOrFail Nothing finalize = MaybeT $ finalize >> return Nothing
 checkOrFail (Just a) _ = MaybeT $ return $ Just a
 
 {- | Parse a top-level @\<message\>@ or @\<presence\>@ 'Element' into an
-'InStanza'. Fails for @\<iq\>@ and unknown top-level names.
+'InStanza'. Fails for @\<iq\>@ and unknown top-level names. Error-typed
+stanzas are parsed successfully — call 'getStanzaError' on 'istChildren' at
+the destination to extract the 'StanzaError' when it matters.
 -}
 parseInStanza :: Element -> Either StanzaError InStanza
 parseInStanza e = do
   istFrom <- parseAddr "from"
   istTo <- parseAddr "to"
-  let (ttype, children) =
-        if tmtype == Just "error"
-          then (Left $ getStanzaError e, [])
-          else (Right tmtype, payload)
   istType <-
     if
-      | ename == jcName "message" -> do
-          let getType = \case
-                Nothing -> Right MessageNormal
-                Just t -> case injFrom t of
-                  Just mt -> Right mt
-                  Nothing -> Left $ badRequest "invalid message type"
-          InMessage <$> traverse getType ttype
-      | ename == jcName "presence" -> do
-          let getType t = case injFrom t of
-                Just pt -> Right pt
-                Nothing -> Left $ badRequest "invalid presence type"
-          InPresence <$> traverse (traverse getType) ttype
+      | ename == jcName "message" -> case tmtype of
+          Nothing -> Right $ InMessage MessageNormal
+          Just t -> case injFrom t of
+            Just mt -> Right $ InMessage mt
+            Nothing -> Left $ badRequest "invalid message type"
+      | ename == jcName "presence" -> case tmtype of
+          Nothing -> Right $ InPresence Nothing
+          Just t -> case injFrom t of
+            Just pt -> Right $ InPresence (Just pt)
+            Nothing -> Left $ badRequest "invalid presence type"
       | otherwise -> Left $ badRequest "unknown stanza type"
-  return InStanza {istFrom, istTo, istId = tmid, istType, istChildren = children}
+  return InStanza {istFrom, istTo, istId = tmid, istType, istChildren = payload}
  where
   ename = elementName e
   payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e
@@ -510,7 +517,7 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
               case (mhandler, resType) of
                 (Nothing, _) -> sendError $ badRequest "corresponding request for response is not found"
                 (Just handler, IQTypeResult) -> handler $ Right payload
-                (Just handler, IQTypeError) -> handler $ Left $ getStanzaError e
+                (Just handler, IQTypeError) -> handler $ Left $ either id id $ parseStanzaError payload
             Nothing -> lift $ sendError $ badRequest "iq type is invalid"
       else do
         st0 <- case parseInStanza e of

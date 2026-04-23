@@ -14,7 +14,7 @@ module Network.XMPP.Message (
   getIMPlugin,
   imSend,
   imPlugin,
-  parseIMMessage,
+  tryParseIMMessage,
 )
 where
 
@@ -96,11 +96,11 @@ decoding). Missing @from@/@to@ default to @self@ per RFC 6120 §8.1.1.1 and
 message (presence, error-type, or missing body); @Left err@ on structural
 parse failures (e.g. malformed @\<thread/\>@).
 -}
-parseRawIMMessage :: XMPPAddress -> InStanza -> Either StanzaError (Maybe AddressedIMMessage)
-parseRawIMMessage self InStanza {istFrom, istTo, istId, istType, istChildren} = case istType of
+tryParseRawIMMessage :: XMPPAddress -> InStanza -> Either StanzaError (Maybe AddressedIMMessage)
+tryParseRawIMMessage self InStanza {istFrom, istTo, istId, istType, istChildren} = case istType of
   InPresence _ -> Left $ badRequest "expected <message>, got <presence>"
-  InMessage (Left err) -> Left err
-  InMessage (Right imType) -> do
+  InMessage MessageError -> Right Nothing
+  InMessage imType -> do
     mBody <- localizedFromElement (jcName "body") istChildren
     case mBody of
       Nothing -> Right Nothing
@@ -122,8 +122,8 @@ parseRawIMMessage self InStanza {istFrom, istTo, istId, istType, istChildren} = 
   parseThread _ = Left $ badRequest "invalid <thread> element"
 
 -- | Parse and decode a message through IM codecs.
-parseIMMessage :: (MonadStream m) => IMPlugin m -> InStanza -> m (Either StanzaError (Maybe AddressedIMMessage))
-parseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} st = case parseRawIMMessage (addressBare imPluginSelf) st of
+tryParseIMMessage :: (MonadStream m) => IMPlugin m -> InStanza -> m (Either StanzaError (Maybe AddressedIMMessage))
+tryParseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} st = case tryParseRawIMMessage (addressBare imPluginSelf) st of
   Left err -> return $ Left err
   Right Nothing -> return $ Right Nothing
   Right (Just addressed@AddressedIMMessage {imFrom, imMessage = msg}) -> do
@@ -131,10 +131,10 @@ parseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} st = case parseRawIMMessa
     return $ Right $ Just $ addressed {imMessage = msg'}
 
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
-  tryHandle imp st@(InStanza {istFrom = Just _, istType = InMessage (Right _), istChildren})
+  tryHandle imp st@(InStanza {istFrom = Just _, istType = InMessage _, istChildren})
     | any ((== jcName "body") . elementName) istChildren =
         Just <$> do
-          result <- parseIMMessage imp st
+          result <- tryParseIMMessage imp st
           case result of
             Left e -> return $ InError e
             Right Nothing -> return InSilent

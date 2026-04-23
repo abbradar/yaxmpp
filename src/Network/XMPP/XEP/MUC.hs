@@ -309,8 +309,9 @@ _parseMUCPresence status = do
   return (statusSet, MUCPresence {..})
 
 instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
-  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Left err)}) = do
+  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Just PresenceError), istChildren}) = do
     let mucEventHandler = mucPluginSlot
+        err = either id id $ parseStanzaError istChildren
     mpromise <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup (fullBare addr) rooms of
         Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucPending pending)
@@ -321,7 +322,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
         Slot.call mucEventHandler $ MUCRejected addr err
         putMVar promise (MUCJoinError err)
         return $ Just InSilent
-  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage (Right MessageGroupchat), istChildren}) =
+  tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage MessageGroupchat, istChildren}) =
     case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
       (subjE : _) -> do
         rooms <- readIORef mucPluginRooms

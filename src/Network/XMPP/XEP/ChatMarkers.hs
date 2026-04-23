@@ -43,8 +43,8 @@ data ChatMarker
   | Acknowledged MessageId
   deriving (Show, Eq)
 
-parseChatMarker :: [Element] -> Maybe ChatMarker
-parseChatMarker = listToMaybe . mapMaybe tryParse
+tryParseChatMarker :: [Element] -> Maybe ChatMarker
+tryParseChatMarker = listToMaybe . mapMaybe tryParse
  where
   tryParse e
     | elementName e == chatMarkerName "received" = Received <$> getAttr "id" e
@@ -65,8 +65,12 @@ data ChatMarkersPlugin m = ChatMarkersPlugin
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (ChatMarkersPlugin m) where
-  tryHandle (ChatMarkersPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage (Right msgType), istChildren})
-    | Just marker <- parseChatMarker istChildren = do
+  -- XEP-0333 §4: chat markers target chat/groupchat/normal messages;
+  -- error and headline stanzas are out of scope.
+  tryHandle (ChatMarkersPlugin {..}) (InStanza {istFrom = Just from, istType = InMessage msgType, istChildren})
+    | msgType /= MessageError
+    , msgType /= MessageHeadline
+    , Just marker <- tryParseChatMarker istChildren = do
         Slot.call chatMarkersPluginSlot (from, msgType, marker)
         return $ Just InSilent
   tryHandle _ _ = return Nothing

@@ -4,7 +4,7 @@
 module Network.XMPP.XEP.Forwarding (
   forwardNS,
   Forwarded (..),
-  parseForwarded,
+  tryParseForwarded,
 ) where
 
 import Data.Maybe
@@ -31,11 +31,11 @@ data Forwarded = Forwarded
 {- | Parse a @\<forwarded\>@ element, extracting an optional @\<delay\>@ and the inner @\<message\>@.
 Returns @Right Nothing@ if the element is not @\<forwarded\>@, or @Left err@ if malformed.
 -}
-parseForwarded :: Element -> Either StanzaError (Maybe Forwarded)
-parseForwarded e
+tryParseForwarded :: Element -> Either StanzaError (Maybe Forwarded)
+tryParseForwarded e
   | elementName e == forwardName "forwarded" =
       let cur = fromElement e
-          fwdDelay = listToMaybe $ mapMaybe DD.parseDelay $ cur $/ curAnyElement
+          fwdDelay = listToMaybe $ mapMaybe DD.tryParseDelay $ cur $/ curAnyElement
        in case listToMaybe $ cur $/ XC.element (jcName "message") &| curElement of
             Nothing -> Left $ badRequest "no <message> in <forwarded>"
             Just fwdMessage -> Right $ Just Forwarded {..}

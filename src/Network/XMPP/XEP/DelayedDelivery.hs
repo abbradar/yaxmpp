@@ -3,7 +3,7 @@
 -- | XEP-0203: Delayed Delivery
 module Network.XMPP.XEP.DelayedDelivery (
   DelayInfo (..),
-  parseDelay,
+  tryParseDelay,
   delayedDeliveryPlugin,
 ) where
 
@@ -38,8 +38,8 @@ data DelayInfo = DelayInfo
   }
   deriving (Show)
 
-parseDelay :: Element -> Maybe DelayInfo
-parseDelay e
+tryParseDelay :: Element -> Maybe DelayInfo
+tryParseDelay e
   | elementName e == delayName "delay" = do
       stampText <- getAttr "stamp" e
       case xmppZonedTime stampText of
@@ -94,7 +94,7 @@ instance (MonadStream m) => Codec m XMPPAddress IMMessage DelayedDeliveryPlugin 
 extractDelay :: [Element] -> (Maybe DelayInfo, [Element])
 extractDelay elems =
   let (delayElems, rest) = partition (\e -> elementName e == delayName "delay") elems
-   in (listToMaybe $ mapMaybe parseDelay delayElems, rest)
+   in (listToMaybe $ mapMaybe tryParseDelay delayElems, rest)
 
 delayedDeliveryPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 delayedDeliveryPlugin pluginsRef = do

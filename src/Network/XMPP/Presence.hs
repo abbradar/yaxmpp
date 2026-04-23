@@ -158,7 +158,7 @@ data PresencePlugin m = PresencePlugin
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) where
-  tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Right (presenceOp -> Just op)), istFrom = Just (fullJidGet -> Just faddr), istChildren}) =
+  tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (presenceOp -> Just op), istFrom = Just (fullJidGet -> Just faddr), istChildren}) =
     Just <$> do
       case op of
         PresenceSet -> case parsePresence istChildren of
@@ -174,7 +174,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
           emitPresence presencePluginHandlers $ ResourcePresence faddr $ ResourceUnavailable extended
           return InSilent
   -- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
-  tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Right (Just PresenceUnavailable)), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
+  tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Just PresenceUnavailable), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
     Just <$> do
       let extended = parseExtended istChildren
       atomicModifyIORef' presencePluginPresences . ((,()) .) $ M.filterWithKey (\k _ -> fullBare k /= bare)

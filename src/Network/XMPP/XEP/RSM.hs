@@ -6,7 +6,7 @@ module Network.XMPP.XEP.RSM (
   ResultSetRange (..),
   ResultSet (..),
   rsmElement,
-  parseRSM,
+  tryParseRSM,
 ) where
 
 import Control.Monad
@@ -62,8 +62,8 @@ rsmElement (SetQuery {..}) = element (rsmName "set") [] (maxElement : filterElem
   resultPageElement (After ent) = element (rsmName "after") [] [NodeContent ent]
   resultPageElement (Index idx) = element (rsmName "index") [] [NodeContent $ showt idx]
 
-parseRSM :: Element -> Either String (Maybe ResultSet)
-parseRSM el =
+tryParseRSM :: Element -> Either String (Maybe ResultSet)
+tryParseRSM el =
   case fromElement el $/ XC.element (rsmName "set") &| curElement of
     [] -> Right Nothing
     setE : _ -> do
