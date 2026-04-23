@@ -25,7 +25,6 @@ import qualified Control.HandlerList as HL
 import Control.Monad
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
-import Data.Injective (injFrom, injTo)
 import Data.Maybe
 import Data.Proxy
 import Data.Registry (Registry)
@@ -91,75 +90,56 @@ data IMPlugin m = IMPlugin
   , imPluginCodecs :: IMCodecList m
   }
 
-{- | Parse a @\<message\>@ element structurally (no codec decoding).
-Missing @from@/@to@ default to @self@ per RFC 6120 §8.1.1.1 and §8.1.2.1.
-Returns @Right Nothing@ if there is no body, or @Left err@ if malformed.
+{- | Parse an 'InStanza' into an 'AddressedIMMessage' structurally (no codec
+decoding). Missing @from@/@to@ default to @self@ per RFC 6120 §8.1.1.1 and
+§8.1.2.1. Returns @Right Nothing@ if the stanza isn't a well-formed IM
+message (presence, error-type, or missing body); @Left err@ on structural
+parse failures (e.g. malformed @\<thread/\>@).
 -}
-parseRawIMMessage :: (Monad m) => XMPPAddress -> Element -> m (Either StanzaError (Maybe AddressedIMMessage))
-parseRawIMMessage self el = pure $ do
-  unless (elementName el == jcName "message") $
-    Left $
-      badRequest "not a <message> element"
-  imType <- case getAttr "type" el of
-    Nothing -> Right MessageNormal
-    Just t -> case injFrom t of
-      Just mt -> Right mt
-      Nothing -> Left $ badRequest "invalid message type"
-  let imId = getAttr "id" el
-  imFrom <- parseAddr "from"
-  imTo <- parseAddr "to"
-  let children = mapMaybe nodeElement (elementNodes el)
-  mBody <- localizedFromElement (jcName "body") children
-  case mBody of
-    Nothing -> Right Nothing
-    Just imBody -> do
-      imSubject <- localizedFromElement (jcName "subject") children
-      let cur = fromChildren children
-          mThreadEl = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
-      imThread <- traverse parseThread mThreadEl
-      let imRaw = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
-          imExtended = Reg.empty
-          imMessage = IMMessage {..}
-      Right $ Just AddressedIMMessage {imFrom, imTo, imMessage}
+parseRawIMMessage :: XMPPAddress -> InStanza -> Either StanzaError (Maybe AddressedIMMessage)
+parseRawIMMessage self InStanza {istFrom, istTo, istId, istType, istChildren} = case istType of
+  InPresence _ -> Left $ badRequest "expected <message>, got <presence>"
+  InMessage (Left err) -> Left err
+  InMessage (Right imType) -> do
+    mBody <- localizedFromElement (jcName "body") istChildren
+    case mBody of
+      Nothing -> Right Nothing
+      Just imBody -> do
+        imSubject <- localizedFromElement (jcName "subject") istChildren
+        let cur = fromChildren istChildren
+            mThreadEl = listToMaybe $ cur $/ XC.element (jcName "thread") &| curElement
+        imThread <- traverse parseThread mThreadEl
+        let imId = istId
+            imFrom = fromMaybe self istFrom
+            imTo = fromMaybe self istTo
+            imRaw = cur $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
+            imExtended = Reg.empty
+            imMessage = IMMessage {imId, imType, imSubject, imBody, imThread, imRaw, imExtended}
+        Right $ Just AddressedIMMessage {imFrom, imTo, imMessage}
  where
-  parseAddr attr = case getAttr attr el of
-    Nothing -> Right self
-    Just txt -> case xmppAddress txt of
-      Left _ -> Left $ jidMalformed txt
-      Right a -> Right a
-  nodeElement (NodeElement ne) = Just ne
-  nodeElement _ = Nothing
   parseThread e@(Element {elementNodes = [NodeContent tid]}) =
     Right IMThread {imParent = getAttr "parent" e, imThreadId = tid}
   parseThread _ = Left $ badRequest "invalid <thread> element"
 
 -- | Parse and decode a message through IM codecs.
-parseIMMessage :: (MonadStream m) => IMPlugin m -> Element -> m (Either StanzaError (Maybe AddressedIMMessage))
-parseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} el = do
-  raw <- parseRawIMMessage (addressBare imPluginSelf) el
-  case raw of
-    Left err -> return $ Left err
-    Right Nothing -> return $ Right Nothing
-    Right (Just addressed@AddressedIMMessage {imFrom, imMessage = msg}) -> do
-      msg' <- decodeAll imPluginCodecs imFrom msg
-      return $ Right $ Just $ addressed {imMessage = msg'}
+parseIMMessage :: (MonadStream m) => IMPlugin m -> InStanza -> m (Either StanzaError (Maybe AddressedIMMessage))
+parseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} st = case parseRawIMMessage (addressBare imPluginSelf) st of
+  Left err -> return $ Left err
+  Right Nothing -> return $ Right Nothing
+  Right (Just addressed@AddressedIMMessage {imFrom, imMessage = msg}) -> do
+    msg' <- decodeAll imPluginCodecs imFrom msg
+    return $ Right $ Just $ addressed {imMessage = msg'}
 
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
-  tryHandle imp@(IMPlugin {..}) (InStanza {istFrom = Just from, istTo, istId, istType = InMessage (Right imType), istChildren})
+  tryHandle imp st@(InStanza {istFrom = Just _, istType = InMessage (Right _), istChildren})
     | any ((== jcName "body") . elementName) istChildren =
         Just <$> do
-          let attrs =
-                ("from", addressToText from)
-                  : [("to", addressToText to) | to <- maybeToList istTo]
-                  ++ [("id", mid) | mid <- maybeToList istId]
-                  ++ [("type", injTo imType)]
-              msgEl = element (jcName "message") attrs (map NodeElement istChildren)
-          result <- parseIMMessage imp msgEl
+          result <- parseIMMessage imp st
           case result of
             Left e -> return $ InError e
             Right Nothing -> return InSilent
             Right (Just addressed) -> do
-              Slot.call imPluginSlot addressed
+              Slot.call (imPluginSlot imp) addressed
               return InSilent
   tryHandle _ _ = return Nothing
 

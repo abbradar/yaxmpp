@@ -148,9 +148,10 @@ data MAMMessage = MAMMessage
   {- ^ Server-storage timestamp from the mandatory @\<delay/\>@ element
   (XEP-0313 §5.1.2).
   -}
-  , mamMsgElement :: Element
-  -- ^ The archived @\<message\>@ stanza verbatim. Consumers decide how to
-  -- interpret it (e.g. pass to 'parseIMMessage').
+  , mamMsgStanza :: InStanza
+  {- ^ The archived @\<message\>@ stanza parsed into an 'InStanza'.
+  Consumers typically pass it to 'parseIMMessage' to reach 'AddressedIMMessage'.
+  -}
   }
   deriving (Show)
 
@@ -263,8 +264,8 @@ extractMAMResult = listToMaybe . mapMaybe tryOne
     | otherwise = Nothing
 
 {- | Parse an archived @\<forwarded\>@ result into a 'MAMMessage'. Extracts the
-mandatory @\<delay/\>@ timestamp and hands the inner @\<message\>@ stanza to
-the caller verbatim, leaving IM-level parsing to the consumer.
+mandatory @\<delay/\>@ timestamp and parses the inner @\<message\>@ into an
+'InStanza', leaving IM-level decoding to the consumer.
 -}
 parseMAMResult :: Text -> Element -> Either StanzaError MAMMessage
 parseMAMResult mid fwdEl = case parseForwarded fwdEl of
@@ -272,8 +273,9 @@ parseMAMResult mid fwdEl = case parseForwarded fwdEl of
   Right Nothing -> Left $ badRequest "expected <forwarded>"
   Right (Just Forwarded {fwdDelay = Nothing}) ->
     Left $ badRequest "missing <delay/> (XEP-0313 §5.1.2)"
-  Right (Just Forwarded {fwdDelay = Just delay, fwdMessage}) ->
-    Right $ MAMMessage mid (delayStamp delay) fwdMessage
+  Right (Just Forwarded {fwdDelay = Just delay, fwdMessage}) -> do
+    st <- parseInStanza fwdMessage
+    Right $ MAMMessage mid (delayStamp delay) st
 
 instance (MonadStream m) => Handler m InStanza InResponse (MAMPlugin m) where
   tryHandle (MAMPlugin {mamPluginQueries}) (InStanza {istType = InMessage (Right _), istChildren})

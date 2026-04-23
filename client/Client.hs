@@ -97,7 +97,7 @@ clientMAMHandler imP writeMsg = go
  where
   go = MAMHandler $ \case
     InMsg (Right mamMsg) -> do
-      result <- parseIMMessage imP (mamMsgElement mamMsg)
+      result <- parseIMMessage imP (mamMsgStanza mamMsg)
       case result of
         Right (Just addressed) -> writeMsg (formatMAMMessage mamMsg addressed)
         _ -> return ()

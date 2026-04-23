@@ -93,13 +93,17 @@ instance (MonadStream m) => Handler m InStanza InResponse (CarbonsPlugin m) wher
             then return $ InError $ badRequest "untrusted carbon sender"
             else do
               let (direction, Forwarded {fwdMessage}) = res
-              mMsg <- parseIMMessage carbonsPluginIMPlugin fwdMessage
-              case mMsg of
+              case parseInStanza fwdMessage of
                 Left err -> return $ InError err
-                Right Nothing -> return InSilent
-                Right (Just addressed) -> do
-                  Slot.call carbonsPluginSlot (direction, addressed)
-                  return InSilent
+                Right st@(InStanza {istType = InMessage (Right _)}) -> do
+                  mMsg <- parseIMMessage carbonsPluginIMPlugin st
+                  case mMsg of
+                    Left err -> return $ InError err
+                    Right Nothing -> return InSilent
+                    Right (Just addressed) -> do
+                      Slot.call carbonsPluginSlot (direction, addressed)
+                      return InSilent
+                Right _ -> return InSilent
     | Left err <- extracted = return $ Just $ InError err
    where
     extracted = extractCarbon istChildren

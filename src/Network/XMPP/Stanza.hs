@@ -28,6 +28,7 @@ module Network.XMPP.Stanza (
   stanzaSend,
   stanzaSend',
   stanzaRequest,
+  parseInStanza,
   InResponse (..),
   InHandler,
   RequestIQResponse (..),
@@ -402,6 +403,44 @@ checkOrFail :: (Monad m) => Maybe a -> m () -> MaybeT m a
 checkOrFail Nothing finalize = MaybeT $ finalize >> return Nothing
 checkOrFail (Just a) _ = MaybeT $ return $ Just a
 
+{- | Parse a top-level @\<message\>@ or @\<presence\>@ 'Element' into an
+'InStanza'. Fails for @\<iq\>@ and unknown top-level names.
+-}
+parseInStanza :: Element -> Either StanzaError InStanza
+parseInStanza e = do
+  istFrom <- parseAddr "from"
+  istTo <- parseAddr "to"
+  let (ttype, children) =
+        if tmtype == Just "error"
+          then (Left $ getStanzaError e, [])
+          else (Right tmtype, payload)
+  istType <-
+    if
+      | ename == jcName "message" -> do
+          let getType = \case
+                Nothing -> Right MessageNormal
+                Just t -> case injFrom t of
+                  Just mt -> Right mt
+                  Nothing -> Left $ badRequest "invalid message type"
+          InMessage <$> traverse getType ttype
+      | ename == jcName "presence" -> do
+          let getType t = case injFrom t of
+                Just pt -> Right pt
+                Nothing -> Left $ badRequest "invalid presence type"
+          InPresence <$> traverse (traverse getType) ttype
+      | otherwise -> Left $ badRequest "unknown stanza type"
+  return InStanza {istFrom, istTo, istId = tmid, istType, istChildren = children}
+ where
+  ename = elementName e
+  payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e
+  tmtype = getAttr "type" e
+  tmid = getAttr "id" e
+  parseAddr name = case getAttr name e of
+    Nothing -> Right Nothing
+    Just addr -> case xmppAddress addr of
+      Left _ -> Left $ jidMalformed [i|malformed address #{addr}|]
+      Right a -> Right (Just a)
+
 data SessionHooks m = SessionHooks
   { hookInHandler :: InHandler m
   , hookIQHandler :: IQHandler m
@@ -474,34 +513,14 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
                 (Just handler, IQTypeError) -> handler $ Left $ getStanzaError e
             Nothing -> lift $ sendError $ badRequest "iq type is invalid"
       else do
-        let (ttype, children) =
-              if tmtype == Just "error"
-                then (Left $ getStanzaError e, [])
-                else (Right tmtype, payload)
-        mtype <-
-          if
-            | ename == jcName "message" -> do
-                let getType mt = case mt of
-                      Nothing -> return MessageNormal
-                      Just t -> checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "invalid message type"
-                InMessage <$> mapM getType ttype
-            | ename == jcName "presence" -> do
-                let getType t = checkOrFail (injFrom t) $ sendErrorOnIq $ badRequest "invalid presence type"
-                InPresence <$> mapM (mapM getType) ttype
-            | otherwise -> do
-                lift $ sendErrorOnIq $ badRequest "unknown stanza type"
-                mzero
-
-        res <-
-          lift $
-            inHandler $
-              InStanza
-                { istFrom = tfrom
-                , istTo = tto
-                , istId = tmid
-                , istType = mtype
-                , istChildren = children
-                }
+        st0 <- case parseInStanza e of
+          Left err -> do
+            lift $ sendErrorOnIq err
+            mzero
+          Right s -> return s
+        -- Apply the bare-JID-from workaround to the parsed stanza.
+        let st = st0 {istFrom = istFrom st0 >>= \f -> if f == bare then Nothing else Just f}
+        res <- lift $ inHandler st
         case res of
           InSilent -> return ()
           InError err -> lift $ sendError err

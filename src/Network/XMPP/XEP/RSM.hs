@@ -39,15 +39,15 @@ data SetQuery = SetQuery
 
 data ResultSetRange = ResultSetRange
   { rsmFirst :: Text
-  , -- | XEP-0059: SHOULD be included when feasible, but MAY be omitted.
-    rsmFirstIndex :: Maybe Integer
+  , rsmFirstIndex :: Maybe Integer
+  -- ^ XEP-0059: SHOULD be included when feasible, but MAY be omitted.
   , rsmLast :: Text
   }
   deriving (Show, Eq)
 
 data ResultSet = ResultSet
-  { -- | XEP-0059: OPTIONAL — servers may omit if count is expensive.
-    rsmCount :: Maybe Integer
+  { rsmCount :: Maybe Integer
+  -- ^ XEP-0059: OPTIONAL — servers may omit if count is expensive.
   , rsmRange :: Maybe ResultSetRange
   }
   deriving (Show, Eq)
