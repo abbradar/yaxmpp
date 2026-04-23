@@ -54,7 +54,6 @@ import qualified Data.UUID.V4 as UUID
 import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
-import UnliftIO.Exception
 import UnliftIO.IORef
 
 import Data.Injective

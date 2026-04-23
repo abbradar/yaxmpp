@@ -39,13 +39,15 @@ data SetQuery = SetQuery
 
 data ResultSetRange = ResultSetRange
   { rsmFirst :: Text
-  , rsmFirstIndex :: Integer
+  , -- | XEP-0059: SHOULD be included when feasible, but MAY be omitted.
+    rsmFirstIndex :: Maybe Integer
   , rsmLast :: Text
   }
   deriving (Show, Eq)
 
 data ResultSet = ResultSet
-  { rsmCount :: Integer
+  { -- | XEP-0059: OPTIONAL — servers may omit if count is expensive.
+    rsmCount :: Maybe Integer
   , rsmRange :: Maybe ResultSetRange
   }
   deriving (Show, Eq)
@@ -66,17 +68,23 @@ parseRSM el =
     [] -> Right Nothing
     setE : _ -> do
       let cursor = fromElement setE
-      countText <- maybeToEither "No count" $ listToMaybe $ cursor $/ XC.element (rsmName "count") &/ content
-      rsmCount <- maybeToEither "Invalid count" $ readMaybe $ T.unpack countText
-      when (rsmCount < 0) $ Left "Invalid count"
+      rsmCount <- case listToMaybe $ cursor $/ XC.element (rsmName "count") &/ content of
+        Nothing -> Right Nothing
+        Just countText -> do
+          c <- maybeToEither "Invalid count" $ readMaybe $ T.unpack countText
+          when (c < 0) $ Left "Invalid count"
+          Right (Just c)
       let firstEs = cursor $/ XC.element (rsmName "first") &| curElement
       let lastEs = cursor $/ XC.element (rsmName "last") &| curElement
       case (firstEs, lastEs) of
         ([], []) -> return $ Just ResultSet {rsmCount, rsmRange = Nothing}
         (firstE : _, lastE : _) -> do
           rsmFirst <- maybeToEither "No first item" $ listToMaybe $ fromElement firstE $/ content
-          rsmFirstIndex <- maybeToEither "Invalid index" $ readAttr (rsmName "index") firstE
-          when (rsmFirstIndex < 0) $ Left "Invalid count"
+          rsmFirstIndex <- case readAttr (rsmName "index") firstE of
+            Nothing -> Right Nothing
+            Just idx
+              | idx < 0 -> Left "Invalid index"
+              | otherwise -> Right (Just idx)
           rsmLast <- maybeToEither "No last item" $ listToMaybe $ fromElement lastE $/ content
           return $ Just ResultSet {rsmCount, rsmRange = Just $ ResultSetRange {..}}
         _ -> Left "Invalid first/last items"

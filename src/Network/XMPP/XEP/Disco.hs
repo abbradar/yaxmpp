@@ -24,6 +24,7 @@ module Network.XMPP.XEP.Disco (
   addDiscoInfo,
   DiscoEntityCacheHandlers,
   newHomeFeatureCheck,
+  getSelfDiscoEntity,
   discoPlugin,
 )
 where
@@ -200,6 +201,21 @@ getDiscoEntity (DiscoPlugin {..}) addr node handler
   | otherwise = doGetDiscoEntity discoPluginSession discoPluginCacheHandlers addr node handler
  where
   isHomeServer = addressLocal addr == Nothing && addressResource addr == Nothing && addressDomain addr == bareDomain (fullBare discoPluginMyAddress)
+
+{- | Request disco#info for the local account by sending an IQ with no @to@
+attribute (RFC 6120 §10.3.3: handled by the server on behalf of the account).
+Used where the target is the session's own bare JID — e.g. XEP-0313 requires
+MAM support to be advertised at the account's own bare JID, not at the server
+domain. Does not consult the cache-handler chain.
+-}
+getSelfDiscoEntity :: (MonadStream m) => DiscoPlugin m -> (Either StanzaError DiscoEntity -> m ()) -> m ()
+getSelfDiscoEntity (DiscoPlugin {discoPluginSession}) handler =
+  stanzaRequest discoPluginSession req $ \ret -> handler $ case ret of
+    Left e -> Left e
+    Right [r] | elementName r == discoInfoName "query" -> parseDiscoEntity r
+    _ -> Left $ badRequest "invalid disco#info response"
+ where
+  req = serverRequest IQGet [closedElement (discoInfoName "query")]
 
 {- | Build a memoized check of whether the home server advertises a disco feature.
 The underlying entity fetch is already memoized, but wrapping the boolean result

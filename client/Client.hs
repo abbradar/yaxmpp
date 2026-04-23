@@ -88,16 +88,19 @@ formatIMMessage AddressedIMMessage {imFrom, imTo, imMessage} =
 instance (MonadStream m) => SlotSignal m AddressedIMMessage (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) msg = clientWriteMessage $ formatIMMessage msg
 
-formatMAMMessage :: MAMMessage -> String
-formatMAMMessage MAMMessage {mamMsgArchiveId, mamMsgTimestamp, mamMsgMessage} =
-  [i|[#{mamMsgArchiveId}] #{zonedTimeToXmpp mamMsgTimestamp} #{formatIMMessage mamMsgMessage}|]
+formatMAMMessage :: MAMMessage -> AddressedIMMessage -> String
+formatMAMMessage MAMMessage {mamMsgArchiveId, mamMsgTimestamp} addressed =
+  [i|[#{mamMsgArchiveId}] #{zonedTimeToXmpp mamMsgTimestamp} #{formatIMMessage addressed}|]
 
-clientMAMHandler :: (Monad m) => (String -> m ()) -> MAMHandler m
-clientMAMHandler writeMsg = go
+clientMAMHandler :: (MonadStream m) => IMPlugin m -> (String -> m ()) -> MAMHandler m
+clientMAMHandler imP writeMsg = go
  where
   go = MAMHandler $ \case
-    InMsg (Right msg) -> do
-      writeMsg $ formatMAMMessage msg
+    InMsg (Right mamMsg) -> do
+      result <- parseIMMessage imP (mamMsgElement mamMsg)
+      case result of
+        Right (Just addressed) -> writeMsg (formatMAMMessage mamMsg addressed)
+        _ -> return ()
       return (OutNext go)
     InMsg (Left e) -> do
       writeMsg [i|MAM parse error: #{e}|]
@@ -476,7 +479,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(read -> n)] ->
-                              runInBase $ mamQuery mamP mempty (SetQuery n (Just (Before Nothing))) (clientMAMHandler writeMessage)
+                              runInBase $ mamQuery mamP mempty (SetQuery n (Just (Before Nothing))) (clientMAMHandler imP writeMessage)
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

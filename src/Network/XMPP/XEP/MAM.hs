@@ -41,9 +41,7 @@ import UnliftIO.IORef
 
 import Data.Time.XMPP
 import Network.XMPP.Address
-import Network.XMPP.Message
 import Network.XMPP.Plugin
-import Network.XMPP.Session (sessionAddress)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.DelayedDelivery
@@ -143,14 +141,16 @@ checkMAMFeatures required available
  where
   missing ns = Left $ featureNotImplemented [i|#{ns} not supported by the archive|]
 
--- | A single archived message delivered within a page.
+-- | A single archived entry delivered within a page.
 data MAMMessage = MAMMessage
   { mamMsgArchiveId :: Text
   , mamMsgTimestamp :: ZonedTime
   {- ^ Server-storage timestamp from the mandatory @\<delay/\>@ element
   (XEP-0313 §5.1.2).
   -}
-  , mamMsgMessage :: AddressedIMMessage
+  , mamMsgElement :: Element
+  -- ^ The archived @\<message\>@ stanza verbatim. Consumers decide how to
+  -- interpret it (e.g. pass to 'parseIMMessage').
   }
   deriving (Show)
 
@@ -206,7 +206,6 @@ data MAMMetadata = MAMMetadata
 
 data MAMPlugin m = MAMPlugin
   { mamPluginSession :: StanzaSession m
-  , mamPluginIMPlugin :: IMPlugin m
   , mamPluginDisco :: MemoAsync m (Maybe MAMFeatures)
   , mamPluginQueries :: IORef (Map Text (IORef (MAMHandler m)))
   , mamPluginNextQueryId :: IORef Word
@@ -263,29 +262,28 @@ extractMAMResult = listToMaybe . mapMaybe tryOne
         return (qid, mid, fwdEl)
     | otherwise = Nothing
 
-parseMAMResult :: (MonadStream m) => MAMPlugin m -> Text -> Element -> m (Either StanzaError MAMMessage)
-parseMAMResult (MAMPlugin {mamPluginIMPlugin}) mid fwdEl = case parseForwarded fwdEl of
-  Left err -> return $ Left err
-  Right Nothing -> return $ Left $ badRequest "expected <forwarded>"
+{- | Parse an archived @\<forwarded\>@ result into a 'MAMMessage'. Extracts the
+mandatory @\<delay/\>@ timestamp and hands the inner @\<message\>@ stanza to
+the caller verbatim, leaving IM-level parsing to the consumer.
+-}
+parseMAMResult :: Text -> Element -> Either StanzaError MAMMessage
+parseMAMResult mid fwdEl = case parseForwarded fwdEl of
+  Left err -> Left err
+  Right Nothing -> Left $ badRequest "expected <forwarded>"
   Right (Just Forwarded {fwdDelay = Nothing}) ->
-    return $ Left $ badRequest "missing <delay/> (XEP-0313 §5.1.2)"
-  Right (Just Forwarded {fwdDelay = Just delay, fwdMessage}) -> do
-    result <- parseIMMessage mamPluginIMPlugin fwdMessage
-    return $ case result of
-      Left err -> Left err
-      Right Nothing -> Left $ badRequest "expected IM message"
-      Right (Just addressed) -> Right $ MAMMessage mid (delayStamp delay) addressed
+    Left $ badRequest "missing <delay/> (XEP-0313 §5.1.2)"
+  Right (Just Forwarded {fwdDelay = Just delay, fwdMessage}) ->
+    Right $ MAMMessage mid (delayStamp delay) fwdMessage
 
 instance (MonadStream m) => Handler m InStanza InResponse (MAMPlugin m) where
-  tryHandle plug@(MAMPlugin {mamPluginQueries}) (InStanza {istType = InMessage (Right _), istChildren})
+  tryHandle (MAMPlugin {mamPluginQueries}) (InStanza {istType = InMessage (Right _), istChildren})
     | Just (qid, mid, fwdEl) <- extractMAMResult istChildren = do
         queries <- readIORef mamPluginQueries
         case M.lookup qid queries of
           Nothing -> return $ Just InSilent
           Just handlerRef -> do
-            payload <- parseMAMResult plug mid fwdEl
             MAMHandler handler <- readIORef handlerRef
-            OutNext nextHandler <- handler (InMsg payload)
+            OutNext nextHandler <- handler (InMsg (parseMAMResult mid fwdEl))
             writeIORef handlerRef nextHandler
             return $ Just InSilent
   tryHandle _ _ = return Nothing
@@ -357,11 +355,9 @@ mamMetadata plug@(MAMPlugin {mamPluginSession}) handler = requireMam plug needed
 mamPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mamPlugin pluginsRef = do
   let mamPluginSession = pluginsSession pluginsRef
-      myBare = bareJidAddress $ fullBare $ sessionAddress $ ssSession mamPluginSession
-  mamPluginIMPlugin <- getIMPlugin pluginsRef
   dp <- getDiscoPlugin pluginsRef
   mamPluginDisco <- MemoAsync.new $ \cb ->
-    getDiscoEntity dp myBare Nothing $ \case
+    getSelfDiscoEntity dp $ \case
       Left _ -> cb Nothing
       Right ent ->
         let feats = discoFeatures ent
