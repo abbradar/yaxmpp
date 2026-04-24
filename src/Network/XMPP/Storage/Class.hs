@@ -11,9 +11,7 @@ query history with combinations of timestamp and id bounds.
 module Network.XMPP.Storage.Class (
   StoredInStanza (..),
   storedFromInStanza,
-  StanzaKind (..),
-  StanzaKey (..),
-  stanzaKeyOf,
+  storedKey,
   Inclusivity (..),
   HistoryLimit (..),
   HistoryQuery (..),
@@ -44,28 +42,11 @@ storedFromInStanza ts st = do
   sid <- istId st
   Just StoredInStanza {storedStanza = st, storedId = sid, storedTimestamp = ts}
 
-{- | Coarse classification of a stanza. Part of the dedup key so ids
-colliding across kinds (e.g. a chat reply and a presence subscription
-using the same id) don't overwrite each other.
+{- | Deduplication key: ('istType', 'storedId'). Disambiguating on stanza
+type means colliding ids across stanza kinds don't overwrite each other.
 -}
-data StanzaKind
-  = KindMessage MessageType
-  | KindPresence (Maybe PresenceType)
-  deriving (Show, Eq, Ord)
-
-data StanzaKey = StanzaKey
-  { stanzaKeyKind :: StanzaKind
-  , stanzaKeyId :: Text
-  }
-  deriving (Show, Eq, Ord)
-
-stanzaKeyOf :: StoredInStanza -> StanzaKey
-stanzaKeyOf StoredInStanza {storedStanza = InStanza {istType}, storedId} =
-  StanzaKey {stanzaKeyKind = kind, stanzaKeyId = storedId}
- where
-  kind = case istType of
-    InMessage t -> KindMessage t
-    InPresence t -> KindPresence t
+storedKey :: StoredInStanza -> (InStanzaType, Text)
+storedKey StoredInStanza {storedStanza = InStanza {istType}, storedId} = (istType, storedId)
 
 data Inclusivity = Inclusive | Exclusive
   deriving (Show, Eq, Ord)
@@ -79,6 +60,10 @@ data HistoryLimit
 select the same total order: entries are sorted by timestamp, ties broken
 by insertion order. An id bound @>= X@ means "all entries at or after
 X in the stream"; if the referenced id is not stored, no entries match.
+
+Per-field right-biased 'Semigroup': @a <> b@ takes each field from @b@ if
+set, otherwise from @a@. Useful for layering partial queries on top of a
+base, e.g. @base \<\> emptyHistoryQuery { hqLimit = Just (LastN 50) }@.
 -}
 data HistoryQuery = HistoryQuery
   { hqTimeLower :: Maybe (Inclusivity, UTCTime)
@@ -88,6 +73,22 @@ data HistoryQuery = HistoryQuery
   , hqLimit :: Maybe HistoryLimit
   }
   deriving (Show, Eq)
+
+instance Semigroup HistoryQuery where
+  a <> b =
+    HistoryQuery
+      { hqTimeLower = pick (hqTimeLower a) (hqTimeLower b)
+      , hqTimeUpper = pick (hqTimeUpper a) (hqTimeUpper b)
+      , hqIdLower = pick (hqIdLower a) (hqIdLower b)
+      , hqIdUpper = pick (hqIdUpper a) (hqIdUpper b)
+      , hqLimit = pick (hqLimit a) (hqLimit b)
+      }
+   where
+    pick x Nothing = x
+    pick _ y = y
+
+instance Monoid HistoryQuery where
+  mempty = emptyHistoryQuery
 
 emptyHistoryQuery :: HistoryQuery
 emptyHistoryQuery =

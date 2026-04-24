@@ -16,6 +16,7 @@ import Data.Time (UTCTime)
 import UnliftIO.IORef
 
 import Network.XMPP.Address
+import Network.XMPP.Stanza
 import Network.XMPP.Storage.Class
 
 -- | Position of an entry in a room's total order: (timestamp, insertion seq).
@@ -24,7 +25,7 @@ import Network.XMPP.Storage.Class
 type Position = (UTCTime, Word)
 
 data MemRoomState = MemRoomState
-  { mrsByKey :: Map StanzaKey Position
+  { mrsByKey :: Map (InStanzaType, Text) Position
   -- ^ Dedup + id→position resolver.
   , mrsByOrder :: Map Position StoredInStanza
   -- ^ Primary timestamp-ordered store.
@@ -62,7 +63,7 @@ instance (MonadIO m) => MessageStorage MemoryStorage m where
 
 instance (MonadIO m) => RoomStorage MemoryRoom m where
   insertStanza (MemoryRoom ref) s = liftIO $ atomicModifyIORef' ref $ \st ->
-    let key = stanzaKeyOf s
+    let key = storedKey s
      in if M.member key (mrsByKey st)
           then (st, ())
           else
@@ -108,7 +109,7 @@ runQuery MemRoomState {mrsByKey, mrsByOrder} HistoryQuery {..} =
   resolveId :: Text -> Maybe Position
   resolveId iid =
     listToMaybe
-      [pos | (StanzaKey _ keyId, pos) <- M.toAscList mrsByKey, keyId == iid]
+      [pos | ((_, keyId), pos) <- M.toAscList mrsByKey, keyId == iid]
 
 checkLower :: (Ord a) => Maybe (Inclusivity, a) -> a -> Bool
 checkLower Nothing _ = True

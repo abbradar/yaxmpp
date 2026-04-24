@@ -239,7 +239,7 @@ data OutStanza = OutStanza
 data InStanzaType
   = InMessage MessageType
   | InPresence (Maybe PresenceType)
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 data InStanza = InStanza
   { istFrom :: Maybe XMPPAddress
