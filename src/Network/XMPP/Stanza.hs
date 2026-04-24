@@ -9,7 +9,7 @@ module Network.XMPP.Stanza (
   featureNotImplemented,
   serviceUnavailable,
   itemNotFound,
-  MessageId,
+  StanzaId,
   MessageType (..),
   PresenceType (..),
   OutStanzaType (..),
@@ -186,7 +186,7 @@ itemNotFound desc =
     }
 
 -- | A stanza @id@ attribute value.
-type MessageId = Text
+type StanzaId = Text
 
 data MessageType
   = MessageChat
@@ -244,7 +244,7 @@ data InStanzaType
 data InStanza = InStanza
   { istFrom :: Maybe XMPPAddress
   , istTo :: Maybe XMPPAddress
-  , istId :: Maybe MessageId
+  , istId :: Maybe StanzaId
   , istType :: InStanzaType
   , istChildren :: [Element]
   }
@@ -263,7 +263,7 @@ instance Injective IQRequestType Text where
 data InRequestIQ = InRequestIQ
   { iriFrom :: Maybe XMPPAddress
   , iriTo :: Maybe XMPPAddress
-  , iriId :: Text
+  , iriId :: StanzaId
   , iriType :: IQRequestType
   , iriChildren :: [Element]
   }
@@ -302,7 +302,7 @@ type IQResponseHandler m = IQResponse -> m ()
 
 data StanzaSession m = StanzaSession
   { ssSession :: Session m
-  , ssRequests :: IORef (Map (Maybe XMPPAddress, Text) (IQResponseHandler m))
+  , ssRequests :: IORef (Map (Maybe XMPPAddress, StanzaId) (IQResponseHandler m))
   , ssNextIqId :: IORef Word
   }
 
@@ -326,7 +326,7 @@ stanzaSend sess stanza = do
   stanzaSend' sess (UUID.toText sid) stanza
   return sid
 
-stanzaSend' :: (MonadStream m) => StanzaSession m -> Text -> OutStanza -> m ()
+stanzaSend' :: (MonadStream m) => StanzaSession m -> StanzaId -> OutStanza -> m ()
 stanzaSend' StanzaSession {..} sid OutStanza {..} = do
   let (mname, mtype) = case ostType of
         OutMessage t -> ("message", Just $ injTo t)

@@ -38,9 +38,9 @@ chatMarkerName :: Text -> Name
 (chatMarkersNS, chatMarkerName) = namePair "urn:xmpp:chat-markers:0"
 
 data ChatMarker
-  = Received MessageId
-  | Displayed MessageId
-  | Acknowledged MessageId
+  = Received StanzaId
+  | Displayed StanzaId
+  | Acknowledged StanzaId
   deriving (Show, Eq)
 
 tryParseChatMarker :: [Element] -> Maybe ChatMarker

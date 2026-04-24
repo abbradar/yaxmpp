@@ -49,7 +49,7 @@ data DeliveryReceiptRequest = DeliveryReceiptRequest
   deriving (Show, Eq)
 
 -- | Slot payload: @(sender, id of the acknowledged message)@.
-type DeliveryReceiptSlot m = Slot m (XMPPAddress, MessageId)
+type DeliveryReceiptSlot m = Slot m (XMPPAddress, StanzaId)
 
 data DeliveryReceiptsPlugin m = DeliveryReceiptsPlugin
   { deliveryReceiptsPluginSession :: StanzaSession m
@@ -59,7 +59,7 @@ data DeliveryReceiptsPlugin m = DeliveryReceiptsPlugin
 requestElement :: Element
 requestElement = closedElement (receiptsName "request")
 
-receivedElement :: MessageId -> Element
+receivedElement :: StanzaId -> Element
 receivedElement mid = element (receiptsName "received") [("id", mid)] []
 
 -- | Attach a 'DeliveryReceiptRequest' marker to an 'IMMessage' so the codec emits @\<request/\>@.
@@ -71,7 +71,7 @@ extractRequest elems =
   let (reqElems, rest) = partition ((== receiptsName "request") . elementName) elems
    in (DeliveryReceiptRequest <$ listToMaybe reqElems, rest)
 
-extractReceipt :: [Element] -> (Maybe MessageId, [Element])
+extractReceipt :: [Element] -> (Maybe StanzaId, [Element])
 extractReceipt elems =
   let (recElems, rest) = partition ((== receiptsName "received") . elementName) elems
    in (listToMaybe (mapMaybe (getAttr "id") recElems), rest)
@@ -79,7 +79,7 @@ extractReceipt elems =
 hasBody :: [Element] -> Bool
 hasBody = any (\e -> elementName e == jcName "body")
 
-sendReceipt :: (MonadStream m) => DeliveryReceiptsPlugin m -> XMPPAddress -> MessageType -> MessageId -> m ()
+sendReceipt :: (MonadStream m) => DeliveryReceiptsPlugin m -> XMPPAddress -> MessageType -> StanzaId -> m ()
 sendReceipt DeliveryReceiptsPlugin {deliveryReceiptsPluginSession} to msgType mid =
   void $
     stanzaSend
@@ -127,7 +127,8 @@ instance (MonadStream m) => SlotSignal m InStanza (DeliveryReceiptsPlugin m) whe
   emitSignal plugin@DeliveryReceiptsPlugin {deliveryReceiptsPluginSlot} (InStanza {istFrom = Just from, istId, istType = InMessage msgType, istChildren})
     -- XEP-0184 §5.4: request/received MUST NOT be used with type='error' or
     -- type='groupchat'.
-    | msgType /= MessageError, msgType /= MessageGroupchat = do
+    | msgType /= MessageError
+    , msgType /= MessageGroupchat = do
         when (isJust $ fst $ extractRequest istChildren) $
           case istId of
             Just mid -> sendReceipt plugin from msgType mid

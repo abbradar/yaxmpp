@@ -50,7 +50,7 @@ data IMThread = IMThread
   deriving (Show, Eq)
 
 data IMMessage = IMMessage
-  { imId :: Maybe MessageId
+  { imId :: Maybe StanzaId
   , imType :: MessageType
   , imSubject :: Maybe LocalizedText
   , imBody :: LocalizedText
@@ -147,7 +147,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
 getIMPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (IMPlugin m)
 getIMPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (IMPlugin m)) $ pluginsHooksSet pluginsRef
 
-imSend :: (MonadStream m) => IMPlugin m -> XMPPAddress -> IMMessage -> m MessageId
+imSend :: (MonadStream m) => IMPlugin m -> XMPPAddress -> IMMessage -> m StanzaId
 imSend IMPlugin {imPluginSession, imPluginCodecs} to msg = do
   IMMessage {..} <- encodeAll imPluginCodecs to msg
   unless (Reg.null imExtended) $ error "imSend: imExtended is not empty after encoding"

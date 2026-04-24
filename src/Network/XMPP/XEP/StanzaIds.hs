@@ -2,9 +2,7 @@
 
 -- | XEP-0359: Unique and Stable Stanza IDs
 module Network.XMPP.XEP.StanzaIds (
-  OriginId (..),
   StanzaIdBy,
-  StanzaIdValue,
   StanzaIds (..),
   stanzaIdsPlugin,
 ) where
@@ -13,12 +11,14 @@ import Control.Applicative ((<|>))
 import Control.Codec (Codec (..))
 import qualified Control.Codec as Codec
 import Control.Monad.IO.Class
+import Control.Monad.Logger
 import Data.List (partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Proxy
 import qualified Data.Registry as Reg
+import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V4 as UUID
@@ -27,52 +27,49 @@ import Text.XML
 import Network.XMPP.Address
 import Network.XMPP.Message
 import Network.XMPP.Plugin
+import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XML
 
 sidName :: Text -> Name
 (_, sidName) = namePair "urn:xmpp:sid:0"
 
--- | Origin ID set by the originating entity.
-newtype OriginId = OriginId {originId :: Text}
-  deriving (Show, Eq)
-
 -- | The @by@ attribute of a stanza-id (typically a server or MUC JID).
 type StanzaIdBy = Text
 
--- | The @id@ attribute of a stanza-id.
-type StanzaIdValue = Text
-
 -- | Parsed XEP-0359 IDs from a stanza.
 data StanzaIds = StanzaIds
-  { sidsOriginId :: Maybe OriginId
-  , sidsStanzaIds :: Map StanzaIdBy StanzaIdValue
+  { sidsOriginId :: Maybe StanzaId
+  , sidsStanzaIds :: Map StanzaIdBy StanzaId
   }
   deriving (Show, Eq)
 
-tryParseOriginId :: Element -> Maybe OriginId
+tryParseOriginId :: Element -> Either StanzaError (Maybe StanzaId)
 tryParseOriginId e
-  | elementName e == sidName "origin-id" = OriginId <$> getAttr "id" e
-  | otherwise = Nothing
+  | elementName e == sidName "origin-id" = case getAttr "id" e of
+      Nothing -> Left $ badRequest "missing id attribute in <origin-id/>"
+      Just oid -> Right (Just oid)
+  | otherwise = Right Nothing
 
-tryParseStanzaId :: Element -> Maybe (StanzaIdBy, StanzaIdValue)
+tryParseStanzaId :: Element -> Either StanzaError (Maybe (StanzaIdBy, StanzaId))
 tryParseStanzaId e
-  | elementName e == sidName "stanza-id" = do
-      sid <- getAttr "id" e
-      by <- getAttr "by" e
-      return (by, sid)
-  | otherwise = Nothing
+  | elementName e == sidName "stanza-id" = case (getAttr "id" e, getAttr "by" e) of
+      (Just sid, Just by) -> Right (Just (by, sid))
+      _ -> Left $ badRequest "missing id/by attribute in <stanza-id/>"
+  | otherwise = Right Nothing
 
-originIdElement :: OriginId -> Element
-originIdElement (OriginId oid) = element (sidName "origin-id") [("id", oid)] []
+originIdElement :: StanzaId -> Element
+originIdElement oid = element (sidName "origin-id") [("id", oid)] []
 
-extractStanzaIds :: [Element] -> (StanzaIds, [Element])
-extractStanzaIds elems =
+extractStanzaIds :: [Element] -> Either StanzaError (StanzaIds, [Element])
+extractStanzaIds elems = do
   let (oidElems, rest1) = partition ((== sidName "origin-id") . elementName) elems
       (sidElems, rest2) = partition ((== sidName "stanza-id") . elementName) rest1
-      sidsOriginId = listToMaybe $ mapMaybe tryParseOriginId oidElems
-      sidsStanzaIds = M.fromList $ mapMaybe tryParseStanzaId sidElems
-   in (StanzaIds {..}, rest2)
+  oids <- traverse tryParseOriginId oidElems
+  sids <- traverse tryParseStanzaId sidElems
+  let sidsOriginId = listToMaybe (catMaybes oids)
+      sidsStanzaIds = M.fromList (catMaybes sids)
+  return (StanzaIds {..}, rest2)
 
 data StanzaIdsPlugin = StanzaIdsPlugin
 
@@ -80,19 +77,21 @@ data StanzaIdsPlugin = StanzaIdsPlugin
 On encode, generate a fresh origin-id and insert it.
 -}
 instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsPlugin where
-  codecDecode _ _ msg =
-    let (ids, raw') = extractStanzaIds (imRaw msg)
-        ext = imExtended msg
-        ext' = Reg.insert ids ext
-     in return $ msg {imRaw = raw', imExtended = ext'}
+  codecDecode _ _ msg = case extractStanzaIds (imRaw msg) of
+    Left err -> do
+      $(logWarn) [i|Failed to parse XEP-0359 stanza IDs: #{err}|]
+      return msg
+    Right (ids, raw') ->
+      let ext' = Reg.insert ids (imExtended msg)
+       in return $ msg {imRaw = raw', imExtended = ext'}
 
   codecEncode _ _ msg = do
-    oid@(OriginId oidText) <- liftIO $ OriginId . UUID.toText <$> UUID.nextRandom
+    oid <- liftIO $ UUID.toText <$> UUID.nextRandom
     let ext = imExtended msg
         (_, ext') = Reg.pop (Proxy :: Proxy StanzaIds) ext
         raw = imRaw msg
         raw' = originIdElement oid : raw
-        mid = imId msg <|> Just oidText
+        mid = imId msg <|> Just oid
      in return $ msg {imId = mid, imRaw = raw', imExtended = ext'}
 
 stanzaIdsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()

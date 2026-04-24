@@ -124,7 +124,7 @@ instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatMarker) 
   emitSignal (ClientPlugin {..}) (addr, _msgType, marker) =
     clientWriteMessage [i|#{addressToText addr} marker: #{marker}|]
 
-instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageId) (ClientPlugin m) where
+instance (MonadStream m) => SlotSignal m (XMPPAddress, StanzaId) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) (addr, mid) =
     clientWriteMessage [i|#{addressToText addr} delivered #{mid}|]
 

@@ -19,9 +19,10 @@ import Network.XMPP.Address
 import Network.XMPP.Stanza
 import Network.XMPP.Storage.Class
 
--- | Position of an entry in a room's total order: (timestamp, insertion seq).
--- Using the insertion sequence as a tiebreaker gives a stable order even when
--- multiple stanzas share a timestamp.
+{- | Position of an entry in a room's total order: (timestamp, insertion seq).
+Using the insertion sequence as a tiebreaker gives a stable order even when
+multiple stanzas share a timestamp.
+-}
 type Position = (UTCTime, Word)
 
 data MemRoomState = MemRoomState

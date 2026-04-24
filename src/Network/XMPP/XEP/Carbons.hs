@@ -109,7 +109,8 @@ instance (MonadStream m) => Handler m InStanza InResponse (CarbonsPlugin m) wher
                       return InSilent
                 Right _ -> return InSilent
     | msgType == MessageChat || msgType == MessageNormal
-    , Left err <- extracted = return $ Just $ InError err
+    , Left err <- extracted =
+        return $ Just $ InError err
    where
     extracted = extractCarbon istChildren
   tryHandle _ _ = return Nothing
