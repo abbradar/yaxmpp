@@ -10,8 +10,6 @@ query history with combinations of timestamp and id bounds.
 -}
 module Network.XMPP.Storage.Class (
   StoredInStanza (..),
-  storedFromInStanza,
-  storedKey,
   Inclusivity (..),
   HistoryLimit (..),
   HistoryQuery (..),
@@ -25,27 +23,31 @@ import Data.Time (UTCTime)
 import Network.XMPP.Address
 import Network.XMPP.Stanza
 
+data StorageId
+  = NoStorageId
+  | OurStoredId StanzaId
+  | MAMStoredId StanzaId
+  deriving (Show, Eq)
+
 {- | A stanza paired with an id and a server-authoritative timestamp. Only
 stanzas with an @id@ attribute can be stored — the id is the stream key.
 -}
 data StoredInStanza = StoredInStanza
   { storedStanza :: InStanza
-  , storedId :: StanzaId
-  , storedTimestamp :: UTCTime
+  , -- We index on (`storedFrom`, `storedStanzaId`, `storedInitialTimestamp`) to allow related stanzas correlation.
+    -- such as Last Message Correction.
+    storedFrom :: XMPPAddress
+  , storedStanzaId :: StanzaId
+  , -- This timestamp is used as a tie-breaker in indexes and is the first timestamp we see;
+    -- for the received messages without <delay> and for the sent messages it's the locally
+    -- generated timestamp. We also order by it for
+    storedInitialTimestamp :: UTCTime
+  , -- We index on (`storedStorageId`, `storedInitialTimestamp`) to allow deduplication.
+    storedStorageId :: StorageId
+  , -- We order by `storedTimestamp`; it may be updated when we sync with the archive.
+    storedTimestamp :: UTCTime
   }
   deriving (Show, Eq)
-
--- | Wrap an 'InStanza' with a timestamp, provided the stanza carries an id.
-storedFromInStanza :: UTCTime -> InStanza -> Maybe StoredInStanza
-storedFromInStanza ts st = do
-  sid <- istId st
-  Just StoredInStanza {storedStanza = st, storedId = sid, storedTimestamp = ts}
-
-{- | Deduplication key: ('istType', 'storedId'). Disambiguating on stanza
-type means colliding ids across stanza kinds don't overwrite each other.
--}
-storedKey :: StoredInStanza -> (InStanzaType, StanzaId)
-storedKey StoredInStanza {storedStanza = InStanza {istType}, storedId} = (istType, storedId)
 
 data Inclusivity = Inclusive | Exclusive
   deriving (Show, Eq, Ord)
