@@ -22,7 +22,7 @@ import Network.XMPP.Presence
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
-import Network.XMPP.XEP.Disco.Cache.NodeCache
+import Network.XMPP.XEP.Disco.NodeCache
 
 -- | Lazy disco entity node cache stored in each presence's extended registry.
 newtype LazyDiscoEntity m = LazyDiscoEntity (DiscoNodeCache m)

@@ -17,7 +17,7 @@ import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
-import Network.XMPP.XEP.Disco.Cache.NodeCache
+import Network.XMPP.XEP.Disco.NodeCache
 
 data HomeCacheHandler m = HomeCacheHandler
   { hchDisco :: DiscoPlugin m

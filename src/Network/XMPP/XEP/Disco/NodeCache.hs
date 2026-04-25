@@ -1,7 +1,7 @@
 {-# LANGUAGE Strict #-}
 
 -- | Per-address disco entity cache keyed by 'DiscoNode'.
-module Network.XMPP.XEP.Disco.Cache.NodeCache (
+module Network.XMPP.XEP.Disco.NodeCache (
   DiscoNodeCache,
   newDiscoNodeCache,
   getDiscoNodeCache,
