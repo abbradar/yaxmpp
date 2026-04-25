@@ -35,8 +35,8 @@ import qualified Control.Codec as Codec
 import Control.Concurrent.Linked
 import Control.HandlerList (Handler (..), HandlerList)
 import qualified Control.HandlerList as HL
-import Control.MemoAsync (MemoAsync)
-import qualified Control.MemoAsync as MemoAsync
+import Control.AsyncMemo (AsyncMemo)
+import qualified Control.AsyncMemo as AsyncMemo
 import Control.Monad
 import Control.Monad.Logger
 import Data.ClassBox (ClassBox (..))
@@ -138,7 +138,7 @@ parseDiscoEntity re = do
   getFeature = requiredAttr "var"
 
 -- | Lazy disco entity cache stored in each presence's extended registry.
-newtype LazyDiscoEntity m = LazyDiscoEntity (MemoAsync m (Either StanzaError DiscoEntity))
+newtype LazyDiscoEntity m = LazyDiscoEntity (AsyncMemo m (Either StanzaError DiscoEntity))
 
 instance Show (LazyDiscoEntity m) where
   show _ = "LazyDiscoEntity"
@@ -154,7 +154,7 @@ type DiscoEntityCacheHandlers m = HandlerList m (XMPPAddress, Maybe DiscoNode, E
 instance (MonadStream m) => Codec m FullJID Presence (DiscoPlugin m) where
   codecDecode (DiscoPlugin {..}) faddr pres = do
     let addr = fullJidAddress faddr
-    lazy <- MemoAsync.new $ doGetDiscoEntity discoPluginSession discoPluginCacheHandlers addr Nothing
+    lazy <- AsyncMemo.new $ doGetDiscoEntity discoPluginSession discoPluginCacheHandlers addr Nothing
     let lde = LazyDiscoEntity lazy :: LazyDiscoEntity m
     return $ pres {presenceExtended = Reg.insert lde (presenceExtended pres)}
   codecEncode _ _ pres =
@@ -182,21 +182,21 @@ doGetDiscoEntity sess cacheHandlers addr node handler = do
               _ -> Left $ badRequest "invalid disco#info response"
         handler result
 
-{- | Get disco entity info, using cached MemoAsync values for JIDs with
+{- | Get disco entity info, using cached AsyncMemo values for JIDs with
 active presences and for the homeserver.
 -}
 getDiscoEntity :: (MonadStream m) => DiscoPlugin m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
 getDiscoEntity (DiscoPlugin {..}) addr node handler
   | isHomeServer
   , Nothing <- node =
-      MemoAsync.get discoPluginHome handler
+      AsyncMemo.get discoPluginHome handler
   | Just full <- fullJidGet addr
   , Nothing <- node = do
       presences <- getAllPresences discoPluginPresencePlugin
       case M.lookup full presences of
         Just pres
           | Just (LazyDiscoEntity lazy) <- Reg.lookup (Proxy :: Proxy (LazyDiscoEntity m)) (presenceExtended pres) ->
-              MemoAsync.get lazy handler
+              AsyncMemo.get lazy handler
         _ -> doGetDiscoEntity discoPluginSession discoPluginCacheHandlers addr node handler
   | otherwise = doGetDiscoEntity discoPluginSession discoPluginCacheHandlers addr node handler
  where
@@ -222,9 +222,9 @@ The underlying entity fetch is already memoized, but wrapping the boolean result
 means each consumer can cache its own answer instead of re-traversing the feature set.
 Disco errors collapse to 'False' (treat the feature as unsupported).
 -}
-newHomeFeatureCheck :: (MonadStream m) => DiscoPlugin m -> DiscoFeature -> m (MemoAsync m Bool)
-newHomeFeatureCheck (DiscoPlugin {discoPluginHome}) feat = MemoAsync.new $ \cb ->
-  MemoAsync.get discoPluginHome $ \case
+newHomeFeatureCheck :: (MonadStream m) => DiscoPlugin m -> DiscoFeature -> m (AsyncMemo m Bool)
+newHomeFeatureCheck (DiscoPlugin {discoPluginHome}) feat = AsyncMemo.new $ \cb ->
+  AsyncMemo.get discoPluginHome $ \case
     Left _ -> cb False
     Right ent -> cb (feat `S.member` discoFeatures ent)
 
@@ -371,7 +371,7 @@ data DiscoPlugin m = DiscoPlugin
   , discoPluginProviders :: RegistryRef DiscoInfoProvider
   , discoPluginMerged :: IORef DiscoInfo
   , discoPluginCacheHandlers :: DiscoEntityCacheHandlers m
-  , discoPluginHome :: MemoAsync m (Either StanzaError DiscoEntity)
+  , discoPluginHome :: AsyncMemo m (Either StanzaError DiscoEntity)
   }
 
 -- | Add disco#items feature to a node info if it has items.
@@ -449,7 +449,7 @@ discoPlugin pluginsRef = do
   let discoPluginSession = pluginsSession pluginsRef
       discoPluginMyAddress = sessionAddress $ ssSession discoPluginSession
       homeAddr = XMPPAddress Nothing (bareDomain $ fullBare discoPluginMyAddress) Nothing
-  discoPluginHome <- MemoAsync.new $ doGetDiscoEntity discoPluginSession discoPluginCacheHandlers homeAddr Nothing
+  discoPluginHome <- AsyncMemo.new $ doGetDiscoEntity discoPluginSession discoPluginCacheHandlers homeAddr Nothing
   let plugin :: DiscoPlugin m = DiscoPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef

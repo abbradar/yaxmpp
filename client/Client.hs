@@ -423,8 +423,17 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
-                              void $ runInBase $ mucJoin mucP addr defaultMUCJoinSettings $ \_ event -> do
-                                writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
+                              runInBase $
+                                mucJoin
+                                  mucP
+                                  addr
+                                  defaultMUCJoinSettings
+                                  ( \_ event ->
+                                      writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
+                                  )
+                                  ( \result ->
+                                      writeMessage [i|#{bareJidToText $ fullBare addr} join result: #{result}|]
+                                  )
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

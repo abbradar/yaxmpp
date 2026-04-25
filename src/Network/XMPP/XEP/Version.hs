@@ -11,8 +11,8 @@ module Network.XMPP.XEP.Version (
 
 import Control.Codec (Codec (..))
 import qualified Control.Codec as Codec
-import Control.MemoAsync (MemoAsync)
-import qualified Control.MemoAsync as MemoAsync
+import Control.AsyncMemo (AsyncMemo)
+import qualified Control.AsyncMemo as AsyncMemo
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Proxy
@@ -60,7 +60,7 @@ defaultVersion =
     }
 
 -- | Lazy version cache stored in each presence's extended registry.
-newtype LazyVersion m = LazyVersion (MemoAsync m (Either StanzaError VersionInfo))
+newtype LazyVersion m = LazyVersion (AsyncMemo m (Either StanzaError VersionInfo))
 
 instance Show (LazyVersion m) where
   show _ = "LazyVersion"
@@ -69,7 +69,7 @@ data VersionPlugin m = VersionPlugin
   { versionPluginSession :: StanzaSession m
   , versionPluginInfo :: VersionInfo
   , versionPluginPresencePlugin :: PresencePlugin m
-  , versionPluginHome :: MemoAsync m (Either StanzaError VersionInfo)
+  , versionPluginHome :: AsyncMemo m (Either StanzaError VersionInfo)
   , versionPluginMyAddress :: FullJID
   }
 
@@ -79,7 +79,7 @@ data VersionPlugin m = VersionPlugin
 instance (MonadStream m) => Codec m FullJID Presence (VersionPlugin m) where
   codecDecode (VersionPlugin {versionPluginSession}) faddr pres = do
     let addr = fullJidAddress faddr
-    lazy <- MemoAsync.new $ doGetVersion versionPluginSession addr
+    lazy <- AsyncMemo.new $ doGetVersion versionPluginSession addr
     let lv = LazyVersion lazy :: LazyVersion m
     return $ pres {presenceExtended = Reg.insert lv (presenceExtended pres)}
   codecEncode _ _ pres =
@@ -123,18 +123,18 @@ doGetVersion sess addr handler =
 getVersionPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (VersionPlugin m)
 getVersionPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (VersionPlugin m)) $ pluginsHooksSet pluginsRef
 
-{- | Get version info, using cached MemoAsync values for JIDs with
+{- | Get version info, using cached AsyncMemo values for JIDs with
 active presences and for the homeserver.
 -}
 getVersion :: (MonadStream m) => VersionPlugin m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
 getVersion (VersionPlugin {versionPluginHome, versionPluginPresencePlugin, versionPluginMyAddress, versionPluginSession}) addr handler
-  | isHomeServer = MemoAsync.get versionPluginHome handler
+  | isHomeServer = AsyncMemo.get versionPluginHome handler
   | Just full <- fullJidGet addr = do
       presences <- getAllPresences versionPluginPresencePlugin
       case M.lookup full presences of
         Just pres
           | Just (LazyVersion lazy) <- Reg.lookup (Proxy :: Proxy (LazyVersion m)) (presenceExtended pres) ->
-              MemoAsync.get lazy handler
+              AsyncMemo.get lazy handler
         _ -> doGetVersion versionPluginSession addr handler
   | otherwise = doGetVersion versionPluginSession addr handler
  where
@@ -149,7 +149,7 @@ versionPlugin pluginsRef settings = do
       versionPluginMyAddress = sessionAddress $ ssSession versionPluginSession
       versionPluginInfo = settings
       homeAddr = XMPPAddress Nothing (bareDomain $ fullBare versionPluginMyAddress) Nothing
-  versionPluginHome <- MemoAsync.new $ doGetVersion versionPluginSession homeAddr
+  versionPluginHome <- AsyncMemo.new $ doGetVersion versionPluginSession homeAddr
   versionPluginPresencePlugin <- getPresencePlugin pluginsRef
   let plugin :: VersionPlugin m = VersionPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef

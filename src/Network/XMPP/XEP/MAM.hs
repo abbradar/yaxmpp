@@ -21,8 +21,8 @@ module Network.XMPP.XEP.MAM (
 import Control.Applicative ((<|>))
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import Control.MemoAsync (MemoAsync)
-import qualified Control.MemoAsync as MemoAsync
+import Control.AsyncMemo (AsyncMemo)
+import qualified Control.AsyncMemo as AsyncMemo
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -207,7 +207,7 @@ data MAMMetadata = MAMMetadata
 
 data MAMPlugin m = MAMPlugin
   { mamPluginSession :: StanzaSession m
-  , mamPluginDisco :: MemoAsync m (Maybe MAMFeatures)
+  , mamPluginDisco :: AsyncMemo m (Maybe MAMFeatures)
   , mamPluginQueries :: IORef (Map Text (IORef (MAMHandler m)))
   , mamPluginNextQueryId :: IORef Word
   }
@@ -300,7 +300,7 @@ once support is confirmed.
 -}
 requireMam :: (MonadStream m) => MAMPlugin m -> MAMFeatures -> (Either StanzaError () -> m ()) -> m ()
 requireMam (MAMPlugin {mamPluginDisco}) needed handler =
-  MemoAsync.get mamPluginDisco $ \case
+  AsyncMemo.get mamPluginDisco $ \case
     Nothing -> handler $ Left $ featureNotImplemented [i|#{mamNS} not supported by the archive|]
     Just feats -> handler $ checkMAMFeatures needed feats
 
@@ -359,7 +359,7 @@ mamPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mamPlugin pluginsRef = do
   let mamPluginSession = pluginsSession pluginsRef
   dp <- getDiscoPlugin pluginsRef
-  mamPluginDisco <- MemoAsync.new $ \cb ->
+  mamPluginDisco <- AsyncMemo.new $ \cb ->
     getSelfDiscoEntity dp $ \case
       Left _ -> cb Nothing
       Right ent ->

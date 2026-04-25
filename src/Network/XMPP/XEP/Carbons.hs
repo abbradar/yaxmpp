@@ -14,8 +14,8 @@ module Network.XMPP.XEP.Carbons (
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import Control.MemoAsync (MemoAsync)
-import qualified Control.MemoAsync as MemoAsync
+import Control.AsyncMemo (AsyncMemo)
+import qualified Control.AsyncMemo as AsyncMemo
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Maybe
@@ -52,7 +52,7 @@ type CarbonSlot m = Slot m (CarbonDirection, AddressedIMMessage)
 data CarbonsPlugin m = CarbonsPlugin
   { carbonsPluginSession :: StanzaSession m
   , carbonsPluginIMPlugin :: IMPlugin m
-  , carbonsPluginSupported :: MemoAsync m Bool
+  , carbonsPluginSupported :: AsyncMemo m Bool
   , carbonsPluginSlot :: CarbonSlot m
   }
 
@@ -120,7 +120,7 @@ getCarbonsPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (CarbonsPlugi
 
 carbonsSet :: (MonadStream m) => CarbonsPlugin m -> Text -> (Either StanzaError () -> m ()) -> m ()
 carbonsSet CarbonsPlugin {..} localName handler =
-  MemoAsync.get carbonsPluginSupported $ \case
+  AsyncMemo.get carbonsPluginSupported $ \case
     False -> handler $ Left $ featureNotImplemented [i|#{carbonsNS} not supported by the server|]
     True ->
       stanzaRequest

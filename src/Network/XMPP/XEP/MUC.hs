@@ -46,7 +46,6 @@ import qualified Text.XML.Cursor as XC
 import TextShow (showt)
 import UnliftIO.Exception (bracketOnError)
 import UnliftIO.IORef
-import UnliftIO.MVar
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
@@ -146,7 +145,7 @@ data PendingMUC m = PendingMUC
   { pmucMembers :: Map XMPPResource MUCPresence
   , pmucNick :: XMPPResource
   , pmucHandler :: MUCHandler m
-  , pmucPending :: MVar MUCJoinResult
+  , pmucOnJoined :: MUCJoinResult -> m ()
   }
 
 type MUCValue m = (MUC, MUCHandler m)
@@ -221,9 +220,8 @@ defaultMUCJoinSettings =
     , joinPresence = defaultPresence
     }
 
-mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> m (m MUCJoinResult)
-mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler = do
-  pmucPending <- newEmptyMVar
+mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> (MUCJoinResult -> m ()) -> m ()
+mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler pmucOnJoined = do
   let initialRoom =
         PendingMUC
           { pmucNick = fullResource addr
@@ -269,7 +267,6 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
                 { ostTo = Just $ fullJidAddress $ addr {fullResource = resource'}
                 }
   bracketOnError takeRoom (const cleanupRoom) (const joinRoom)
-  return $ readMVar pmucPending
 
 data MUCAlreadyLeftError = MUCAlreadyLeftError
   deriving (Show, Typeable)
@@ -314,13 +311,13 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
         err = either id id $ parseStanzaError istChildren
     mpromise <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup (fullBare addr) rooms of
-        Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucPending pending)
+        Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucOnJoined pending)
         _ -> (rooms, Nothing)
     case mpromise of
       Nothing -> return Nothing
       Just promise -> do
         Slot.call mucEventHandler $ MUCRejected addr err
-        putMVar promise (MUCJoinError err)
+        promise (MUCJoinError err)
         return $ Just InSilent
   tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage MessageGroupchat, istChildren}) =
     case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
@@ -382,7 +379,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
                       }
                   joinRoom = do
                     Slot.call mucEventHandler $ MUCJoinedRoom addr room'
-                    putMVar (pmucPending pending) (MUCJoinFinished room')
+                    pmucOnJoined pending (MUCJoinFinished room')
                in if resource == pmucNick pending
                     then (M.insert bare (Right (room', pmucHandler pending)) rooms, MUCRun joinRoom)
                     else (M.insert bare (Left pending') rooms, MUCHandled)
@@ -390,7 +387,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
               | resource == pmucNick pending ->
                   let leaveRoom = do
                         Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft
-                        putMVar (pmucPending pending) (MUCJoinStopped err)
+                        pmucOnJoined pending (MUCJoinStopped err)
                    in (M.delete bare rooms, MUCRun leaveRoom)
             _ -> (rooms, MUCHandled)
         Nothing -> (rooms, NotMUCEvent)

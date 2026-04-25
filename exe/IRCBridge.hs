@@ -205,20 +205,27 @@ main = runStderrLoggingT $ do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           joinOpts = defaultMUCJoinSettings {joinHistory = defaultMUCHistorySettings {histMaxStanzas = Just 0}}
-                      handle (\MUCAlreadyJoinedError -> return ()) $ void $ mucJoin mucP (FullJID (BareJID room $ conferenceServer settings) nick0) joinOpts $ \(MUC {..}) event ->
-                        case event of
-                          RoomPresence otherNick' (MUCJoined _) -> do
-                            let otherNick = T.encodeUtf8 $ resourceText otherNick'
-                            ircUserReply otherNick "JOIN" [channel]
-                          RoomPresence otherNick' (MUCRemoved _) -> do
-                            let otherNick = T.encodeUtf8 $ resourceText otherNick'
-                            ircUserReply otherNick "PART" [channel]
-                          RoomSubject -> do
-                            nick <- getNick
-                            case mucSubject of
-                              Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
-                              _ -> return ()
-                          _ -> return ()
+                      handle (\MUCAlreadyJoinedError -> return ()) $
+                        mucJoin
+                          mucP
+                          (FullJID (BareJID room $ conferenceServer settings) nick0)
+                          joinOpts
+                          ( \(MUC {..}) event ->
+                              case event of
+                                RoomPresence otherNick' (MUCJoined _) -> do
+                                  let otherNick = T.encodeUtf8 $ resourceText otherNick'
+                                  ircUserReply otherNick "JOIN" [channel]
+                                RoomPresence otherNick' (MUCRemoved _) -> do
+                                  let otherNick = T.encodeUtf8 $ resourceText otherNick'
+                                  ircUserReply otherNick "PART" [channel]
+                                RoomSubject -> do
+                                  nick <- getNick
+                                  case mucSubject of
+                                    Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
+                                    _ -> return ()
+                                _ -> return ()
+                          )
+                          (\_ -> return ())
                   | cmd == "USER"
                   , (mnick : _) <- params -> do
                       testNick <- tryReadMVar nickVar
