@@ -69,7 +69,7 @@ rosterUpdate full@(FullJID {..}) (ResourceUnavailable err) rmap =
 instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m) where
   tryHandle (RosterPresencePlugin {..}) (ResourcePresence full presUpd) = do
     roster <- rosterEntries <$> getRoster rpresencePluginRoster
-    if not $ bareJidAddress (fullBare full) `M.member` roster
+    if not $ toXMPPAddress (fullBare full) `M.member` roster
       then return Nothing
       else do
         rpres <- readIORef rpresencePluginRef
@@ -81,7 +81,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m)
             return $ Just ()
   tryHandle (RosterPresencePlugin {..}) (AllResourcesOffline bare extended) = do
     roster <- rosterEntries <$> getRoster rpresencePluginRoster
-    if not $ bareJidAddress bare `M.member` roster
+    if not $ toXMPPAddress bare `M.member` roster
       then return Nothing
       else do
         rpres <- readIORef rpresencePluginRef

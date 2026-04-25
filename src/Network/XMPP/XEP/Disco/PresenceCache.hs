@@ -41,8 +41,7 @@ data PresenceCachePlugin m = PresenceCachePlugin
 
 instance (MonadStream m) => Codec m FullJID Presence (PresenceCachePlugin m) where
   codecDecode (PresenceCachePlugin {pcpDisco}) faddr pres = do
-    let addr = fullJidAddress faddr
-    lazy <- AsyncMemo.new $ getDiscoEntityNoCache pcpDisco addr Nothing
+    lazy <- AsyncMemo.new $ getDiscoEntityNoCache pcpDisco faddr Nothing
     let lde = LazyDiscoEntity lazy :: LazyDiscoEntity m
     return $ pres {presenceExtended = Reg.insert lde (presenceExtended pres)}
   codecEncode _ _ pres =

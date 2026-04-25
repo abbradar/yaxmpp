@@ -231,7 +231,7 @@ the proposed name fails to parse as an 'XMPPResource'.
 -}
 mucGetRegisteredNick :: (MonadStream m) => MUCPlugin m -> BareJID -> (Either StanzaError (Maybe XMPPResource) -> m ()) -> m ()
 mucGetRegisteredNick (MUCPlugin {mucPluginDisco}) room handler =
-  getDiscoEntity mucPluginDisco (bareJidAddress room) (Just mucNickNode) $ \nickResp ->
+  getDiscoEntity mucPluginDisco room (Just mucNickNode) $ \nickResp ->
     handler $ case nickResp of
       Left (StanzaError {szeCondition = ScFeatureNotImplemented}) -> Right Nothing
       Left err -> Left err
@@ -276,7 +276,7 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
         void $
           stanzaSend mucPluginSession $
             presStanza
-              { ostTo = Just $ fullJidAddress addr
+              { ostTo = Just $ toXMPPAddress addr
               }
   bracketOnError takeRoom (const cleanupRoom) (const joinRoom)
 
@@ -294,7 +294,7 @@ mucSendPresence MUCPlugin {..} addr pres = do
       _ <-
         stanzaSend mucPluginSession $
           presStanza
-            { ostTo = Just $ fullJidAddress $ FullJID addr (mucNick room)
+            { ostTo = Just $ toXMPPAddress $ FullJID addr (mucNick room)
             }
       return ()
     _ -> throwM MUCAlreadyLeftError

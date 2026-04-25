@@ -41,8 +41,7 @@ data VersionPresenceCachePlugin m = VersionPresenceCachePlugin
 
 instance (MonadStream m) => Codec m FullJID Presence (VersionPresenceCachePlugin m) where
   codecDecode (VersionPresenceCachePlugin {vpcpVersion}) faddr pres = do
-    let addr = fullJidAddress faddr
-    lazy <- AsyncMemo.new $ requestVersion (versionPluginSession vpcpVersion) addr
+    lazy <- AsyncMemo.new $ requestVersion (versionPluginSession vpcpVersion) faddr
     let lv = LazyVersion lazy :: LazyVersion m
     return $ pres {presenceExtended = Reg.insert lv (presenceExtended pres)}
   codecEncode _ _ pres =

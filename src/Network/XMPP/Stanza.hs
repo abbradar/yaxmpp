@@ -25,6 +25,8 @@ module Network.XMPP.Stanza (
   IQResponseHandler,
   StanzaSession,
   ssSession,
+  ssAddress,
+  ssServer,
   stanzaSend,
   stanzaSend',
   stanzaRequest,
@@ -306,11 +308,17 @@ data StanzaSession m = StanzaSession
   , ssNextIqId :: IORef Word
   }
 
+ssAddress :: StanzaSession m -> FullJID
+ssAddress = sessionAddress . ssSession
+
+ssServer :: StanzaSession m -> BareJID
+ssServer = fullBare . ssAddress
+
 fromServerOrMyself :: Maybe XMPPAddress -> StanzaSession m -> Bool
 fromServerOrMyself Nothing _ = True
 fromServerOrMyself (Just XMPPAddress {..}) sess = addressDomain == bareDomain (fullBare myAddress) && localOk && resourceOk
  where
-  myAddress = sessionAddress $ ssSession sess
+  myAddress = ssAddress sess
   localOk =
     case addressLocal of
       Nothing -> True
@@ -347,7 +355,7 @@ normalizeIQEntity ssSession (Just addr)
   | addr == bare = Nothing
   | otherwise = Just addr
  where
-  bare = bareJidAddress $ fullBare $ sessionAddress ssSession
+  bare = toXMPPAddress $ fullBare $ sessionAddress ssSession
 normalizeIQEntity _ Nothing = Nothing
 
 stanzaRequest :: (MonadStream m) => StanzaSession m -> OutRequestIQ -> IQResponseHandler m -> m ()

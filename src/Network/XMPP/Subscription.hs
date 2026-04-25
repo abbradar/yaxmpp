@@ -86,7 +86,7 @@ requestSubscriptionTo SubscriptionPlugin {..} addr status = do
     stanzaSend
       subscriptionPluginSession
       OutStanza
-        { ostTo = Just $ bareJidAddress addr
+        { ostTo = Just $ toXMPPAddress addr
         , ostType = OutPresence $ Just $ if status then PresenceSubscribe else PresenceUnsubscribe
         , ostChildren = []
         }
@@ -97,7 +97,7 @@ updateSubscriptionFrom SubscriptionPlugin {subscriptionPluginSession} addr statu
     stanzaSend
       subscriptionPluginSession
       OutStanza
-        { ostTo = Just $ bareJidAddress addr
+        { ostTo = Just $ toXMPPAddress addr
         , ostType = OutPresence $ Just $ if status then PresenceSubscribed else PresenceUnsubscribed
         , ostChildren = []
         }

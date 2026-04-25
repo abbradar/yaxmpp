@@ -438,20 +438,20 @@ main = do
                                         Right (Just registered) -> registered
                                         _ -> fullResource addr
                                   case nickResp of
-                                    Left e -> writeMessage [i|#{bareJidToText $ fullBare addr} registered-nick lookup failed: #{e}|]
+                                    Left e -> writeMessage [i|#{addressToText $ fullBare addr} registered-nick lookup failed: #{e}|]
                                     Right (Just registered)
                                       | registered /= fullResource addr ->
-                                          writeMessage [i|#{bareJidToText $ fullBare addr} using server-suggested nick: #{resourceText registered}|]
+                                          writeMessage [i|#{addressToText $ fullBare addr} using server-suggested nick: #{resourceText registered}|]
                                     _ -> return ()
                                   mucJoin
                                     mucP
                                     addr {fullResource = nick}
                                     defaultMUCJoinSettings
                                     ( \_ event ->
-                                        writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
+                                        writeMessage [i|#{addressToText $ fullBare addr} event: #{event}|]
                                     )
                                     ( \result ->
-                                        writeMessage [i|#{bareJidToText $ fullBare addr} join result: #{result}|]
+                                        writeMessage [i|#{addressToText $ fullBare addr} join result: #{result}|]
                                     )
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []

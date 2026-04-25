@@ -81,12 +81,12 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (VersionPlug
   tryHandle _ _ = return Nothing
 
 -- | Direct version IQ fetch — bypasses the cache handler chain.
-requestVersion :: (MonadStream m) => StanzaSession m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
+requestVersion :: (MonadStream m, ToXMPPAddress addr) => StanzaSession m -> addr -> (Either StanzaError VersionInfo -> m ()) -> m ()
 requestVersion sess addr handler =
   stanzaRequest
     sess
     OutRequestIQ
-      { oriTo = Just addr
+      { oriTo = Just (toXMPPAddress addr)
       , oriIqType = IQGet
       , oriChildren = [closedElement (versionName "query")]
       }
@@ -108,8 +108,9 @@ getVersionPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (VersionPlugi
 {- | Get version info, first consulting the cache handlers; falls back to a
 direct IQ if no handler claims the request.
 -}
-getVersion :: (MonadStream m) => VersionPlugin m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
-getVersion (VersionPlugin {..}) addr handler = do
+getVersion :: (MonadStream m, ToXMPPAddress addr) => VersionPlugin m -> addr -> (Either StanzaError VersionInfo -> m ()) -> m ()
+getVersion (VersionPlugin {..}) addr0 handler = do
+  let addr = toXMPPAddress addr0
   handled <- HL.call versionPluginCacheHandlers (addr, handler)
   case handled of
     Just () -> return ()

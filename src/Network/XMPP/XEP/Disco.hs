@@ -16,6 +16,7 @@ module Network.XMPP.XEP.Disco (
   DiscoNode,
   getDiscoEntity,
   getDiscoEntityNoCache,
+  newDiscoFeatureCheck,
   requestDiscoEntity,
   discoItemsNS,
   DiscoItems,
@@ -35,6 +36,8 @@ module Network.XMPP.XEP.Disco (
 where
 
 import Control.Arrow
+import Control.AsyncMemo (AsyncMemo)
+import qualified Control.AsyncMemo as AsyncMemo
 import Control.Concurrent.Linked
 import Control.HandlerList (Handler (..), HandlerList)
 import qualified Control.HandlerList as HL
@@ -151,11 +154,11 @@ callback itself and return @Just ()@.
 type DiscoEntityGetHandlers m = HandlerList m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) ()
 
 -- | Direct disco#info IQ fetch — bypasses the cache handler chain.
-requestDiscoEntity :: (MonadStream m) => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
+requestDiscoEntity :: (MonadStream m, ToXMPPAddress addr) => StanzaSession m -> addr -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
 requestDiscoEntity sess addr node handler = do
   let req =
         OutRequestIQ
-          { oriTo = Just addr
+          { oriTo = Just (toXMPPAddress addr)
           , oriIqType = IQGet
           , oriChildren = [element (discoInfoName "query") (maybeToList $ fmap ("node",) node) []]
           }
@@ -166,12 +169,12 @@ requestDiscoEntity sess addr node handler = do
       _ -> Left $ badRequest "invalid disco#info response"
 
 -- | Direct disco#items IQ fetch — bypasses the cache handler chain.
-requestDiscoItems :: (MonadStream m) => StanzaSession m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoItems -> m ()) -> m ()
+requestDiscoItems :: (MonadStream m, ToXMPPAddress addr) => StanzaSession m -> addr -> Maybe DiscoNode -> (Either StanzaError DiscoItems -> m ()) -> m ()
 requestDiscoItems sess addr node handler =
   stanzaRequest
     sess
     OutRequestIQ
-      { oriTo = Just addr
+      { oriTo = Just (toXMPPAddress addr)
       , oriIqType = IQGet
       , oriChildren = [element (discoItemsName "query") (maybeToList $ fmap ("node",) node) []]
       }
@@ -184,8 +187,9 @@ requestDiscoItems sess addr node handler =
 {- | Get disco#info, first consulting the entity cache handlers, then the
 get-handlers, then a direct IQ.
 -}
-getDiscoEntity :: (MonadStream m) => DiscoPlugin m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
-getDiscoEntity dp@(DiscoPlugin {..}) addr node handler = do
+getDiscoEntity :: (MonadStream m, ToXMPPAddress addr) => DiscoPlugin m -> addr -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
+getDiscoEntity dp@(DiscoPlugin {..}) addr0 node handler = do
+  let addr = toXMPPAddress addr0
   handled <- HL.call discoPluginEntityCacheHandlers (addr, node, handler)
   case handled of
     Just () -> return ()
@@ -194,12 +198,25 @@ getDiscoEntity dp@(DiscoPlugin {..}) addr node handler = do
 {- | Get disco#info skipping the in-process cache layer: first consult the
 entity get-handlers, then fall back to a direct IQ.
 -}
-getDiscoEntityNoCache :: (MonadStream m) => DiscoPlugin m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
-getDiscoEntityNoCache (DiscoPlugin {..}) addr node handler = do
+getDiscoEntityNoCache :: (MonadStream m, ToXMPPAddress addr) => DiscoPlugin m -> addr -> Maybe DiscoNode -> (Either StanzaError DiscoEntity -> m ()) -> m ()
+getDiscoEntityNoCache (DiscoPlugin {..}) addr0 node handler = do
+  let addr = toXMPPAddress addr0
   handled <- HL.call discoPluginEntityGetHandlers (addr, node, handler)
   case handled of
     Just () -> return ()
     Nothing -> requestDiscoEntity discoPluginSession addr node handler
+
+{- | Build a memoized check of whether an entity advertises a disco feature.
+The underlying entity fetch can be memoized by a cache handler (e.g. the
+home-server cache); wrapping the boolean result means each consumer can cache
+its own answer instead of re-traversing the feature set. Disco errors collapse
+to 'False' (treat the feature as unsupported).
+-}
+newDiscoFeatureCheck :: (MonadStream m, ToXMPPAddress addr) => DiscoPlugin m -> addr -> Maybe DiscoNode -> DiscoFeature -> m (AsyncMemo m Bool)
+newDiscoFeatureCheck dp addr node feat = AsyncMemo.new $ \cb ->
+  getDiscoEntity dp addr node $ \case
+    Left _ -> cb False
+    Right ent -> cb (feat `S.member` discoFeatures ent)
 
 {- | Request disco#info for the local account by sending an IQ with no @to@
 attribute (RFC 6120 §10.3.3: handled by the server on behalf of the account).
@@ -241,8 +258,9 @@ data DiscoTopo = DiscoTopo
   }
   deriving (Show, Eq)
 
-getDiscoTopo :: (MonadStream m) => DiscoPlugin m -> XMPPAddress -> Maybe DiscoNode -> (Either StanzaError DiscoTopo -> m ()) -> m ()
-getDiscoTopo dp@(DiscoPlugin {discoPluginSession}) addr node handler = do
+getDiscoTopo :: (MonadStream m, ToXMPPAddress addr) => DiscoPlugin m -> addr -> Maybe DiscoNode -> (Either StanzaError DiscoTopo -> m ()) -> m ()
+getDiscoTopo dp@(DiscoPlugin {discoPluginSession}) addr0 node handler = do
+  let addr = toXMPPAddress addr0
   $(logDebug) [i|getDiscoTopo: starting for #{addressToText addr} node=#{show node}|]
   getDiscoEntity dp addr node $ \case
     Left e -> do

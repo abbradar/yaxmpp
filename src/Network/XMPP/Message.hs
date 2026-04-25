@@ -35,7 +35,6 @@ import qualified Data.UUID as UUID
 import Network.XMPP.Address
 import Network.XMPP.Language
 import Network.XMPP.Plugin
-import Network.XMPP.Session (sessionAddress)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XML
@@ -169,7 +168,7 @@ imPlugin pluginsRef = do
   imPluginSlot <- Slot.new
   imPluginCodecs <- Codec.new
   let imPluginSession = pluginsSession pluginsRef
-      imPluginSelf = fullJidAddress $ sessionAddress $ ssSession imPluginSession
+      imPluginSelf = toXMPPAddress $ ssAddress imPluginSession
       plugin :: IMPlugin m = IMPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef

@@ -17,12 +17,9 @@ module Network.XMPP.Address (
   addressBare,
   BareJID (..),
   bareJidGet,
-  bareJidAddress,
-  bareJidToText,
   FullJID (..),
   fullJidGet,
-  fullJidAddress,
-  fullJidToText,
+  ToXMPPAddress (..),
 ) where
 
 import Control.Applicative
@@ -165,11 +162,14 @@ xmppAddress' = do
 xmppAddress :: Text -> Either String XMPPAddress
 xmppAddress = parseValue xmppAddress'
 
-addressToText :: XMPPAddress -> Text
-addressToText (XMPPAddress {..}) =
+addressToText' :: XMPPAddress -> Text
+addressToText' (XMPPAddress {..}) =
   maybe mempty ((<> "@") . localText) addressLocal
     <> domainText addressDomain
     <> maybe mempty (("/" <>) . resourceText) addressResource
+
+addressToText :: (ToXMPPAddress a) => a -> Text
+addressToText = addressToText' . toXMPPAddress
 
 addressBare :: XMPPAddress -> XMPPAddress
 addressBare (XMPPAddress {..}) =
@@ -184,14 +184,8 @@ data BareJID = BareJID
   }
   deriving (Eq, Ord)
 
-bareJidAddress :: BareJID -> XMPPAddress
-bareJidAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
-
-bareJidToText :: BareJID -> Text
-bareJidToText = addressToText . bareJidAddress
-
 instance Show BareJID where
-  show = show . bareJidToText
+  show = show . addressToText
 
 instance FromJSON BareJID where
   parseJSON v = do
@@ -201,7 +195,7 @@ instance FromJSON BareJID where
       Just r -> return r
 
 instance ToJSON BareJID where
-  toJSON = toJSON . bareJidAddress
+  toJSON = toJSON . toXMPPAddress
 
 bareJidGet :: XMPPAddress -> Maybe BareJID
 bareJidGet XMPPAddress {addressLocal = Just bareLocal, addressDomain = bareDomain, addressResource = Nothing} = Just BareJID {..}
@@ -213,14 +207,8 @@ data FullJID = FullJID
   }
   deriving (Eq, Ord)
 
-fullJidAddress :: FullJID -> XMPPAddress
-fullJidAddress (FullJID {..}) = XMPPAddress (Just $ bareLocal fullBare) (bareDomain fullBare) (Just fullResource)
-
-fullJidToText :: FullJID -> Text
-fullJidToText = addressToText . fullJidAddress
-
 instance Show FullJID where
-  show = show . fullJidToText
+  show = show . addressToText
 
 instance FromJSON FullJID where
   parseJSON v = do
@@ -230,10 +218,22 @@ instance FromJSON FullJID where
       Just r -> return r
 
 instance ToJSON FullJID where
-  toJSON = toJSON . fullJidAddress
+  toJSON = toJSON . toXMPPAddress
 
 fullJidGet :: XMPPAddress -> Maybe FullJID
 fullJidGet XMPPAddress {..} = do
   bareLocal <- addressLocal
   fullResource <- addressResource
   return FullJID {fullBare = BareJID {bareDomain = addressDomain, ..}, ..}
+
+class ToXMPPAddress a where
+  toXMPPAddress :: a -> XMPPAddress
+
+instance ToXMPPAddress XMPPAddress where
+  toXMPPAddress = id
+
+instance ToXMPPAddress BareJID where
+  toXMPPAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
+
+instance ToXMPPAddress FullJID where
+  toXMPPAddress (FullJID {..}) = XMPPAddress (Just $ bareLocal fullBare) (bareDomain fullBare) (Just fullResource)
