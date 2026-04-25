@@ -8,6 +8,7 @@ module Control.AsyncMemo (
 where
 
 import Control.Monad.IO.Unlift
+import UnliftIO.Exception (mask)
 import UnliftIO.IORef
 
 data MemoState m a
@@ -33,7 +34,7 @@ get (AsyncMemo ref) handler = do
   state <- readIORef ref
   case state of
     Done a -> handler a
-    _ -> do
+    _ -> mask $ \unmask -> do
       oldVal <- atomicModifyIORef ref $ \oldVal ->
         let newVal =
               case oldVal of
@@ -42,7 +43,7 @@ get (AsyncMemo ref) handler = do
                 NotStarted _ -> Pending [handler]
          in (newVal, oldVal)
       case oldVal of
-        Done a -> handler a
+        Done a -> unmask $ handler a
         Pending _ -> return ()
         NotStarted action -> action $ \a -> do
           handlers <- atomicModifyIORef ref $ \case
