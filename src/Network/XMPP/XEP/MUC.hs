@@ -16,6 +16,7 @@ module Network.XMPP.XEP.MUC (
   defaultMUCHistorySettings,
   MUCJoinSettings (..),
   defaultMUCJoinSettings,
+  mucGetRegisteredNick,
   mucJoin,
   MUCAlreadyLeftError (..),
   mucSendPresence,
@@ -220,6 +221,26 @@ defaultMUCJoinSettings =
     , joinPresence = defaultPresence
     }
 
+{- | Look up the server-suggested registered nickname for a MUC room
+(XEP-0045 §7.2.16, via the @x-roomuser-item@ disco node). Fires with
+@Right (Just nick)@ when the server proposes a usable resource;
+@Right Nothing@ when the disco response carries no nick identity, or when
+the room/service responds @\<feature-not-implemented/\>@ (per XEP-0045
+§7.2.16 the node is OPTIONAL); @Left err@ on other disco failures or when
+the proposed name fails to parse as an 'XMPPResource'.
+-}
+mucGetRegisteredNick :: (MonadStream m) => MUCPlugin m -> BareJID -> (Either StanzaError (Maybe XMPPResource) -> m ()) -> m ()
+mucGetRegisteredNick (MUCPlugin {mucPluginDisco}) room handler =
+  getDiscoEntity mucPluginDisco (bareJidAddress room) (Just mucNickNode) $ \nickResp ->
+    handler $ case nickResp of
+      Left (StanzaError {szeCondition = ScFeatureNotImplemented}) -> Right Nothing
+      Left err -> Left err
+      Right ent -> case M.lookup mucNickIdentity $ discoIdentities ent of
+        Just (Just n) -> case resourceFromText $ localizedGet Nothing n of
+          Just r -> Right (Just r)
+          Nothing -> Left $ badRequest "invalid resource name proposed by server"
+        _ -> Right Nothing
+
 mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> (MUCJoinResult -> m ()) -> m ()
 mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler pmucOnJoined = do
   let initialRoom =
@@ -237,35 +258,26 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
             Just _ -> (rooms, False)
         unless good $ throwM MUCAlreadyJoinedError
       cleanupRoom = atomicModifyIORef' mucPluginRooms $ \rooms -> (M.delete roomAddr rooms, ())
-      joinRoom =
-        getDiscoEntity mucPluginDisco (fullJidAddress addr) (Just mucNickNode) $ \nickResp -> do
-          resource' <- case nickResp of
-            Right ent | Just (Just n) <- M.lookup mucNickIdentity $ discoIdentities ent ->
-              case resourceFromText $ localizedGet Nothing n of
-                Nothing -> fail "mucJoin: invalid resource name proposed by server"
-                Just r -> do
-                  atomicModifyIORef' mucPluginRooms $ \rooms -> (M.insert roomAddr (Left $ initialRoom {pmucNick = r}) rooms, ())
-                  return r
-            _ -> return $ fullResource addr
-          let historyAttrs =
-                catMaybes
-                  [ fmap (\i -> ("maxchars", showt i)) histMaxChars
-                  , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
-                  , fmap (\i -> ("seconds", showt i)) histSeconds
-                  , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
-                  ]
-              xElement =
-                element
-                  (mucName "x")
-                  []
-                  [ NodeElement $ element (mucName "history") historyAttrs []
-                  ]
-          presStanza <- presenceStanza mucPluginPresence $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
-          void $
-            stanzaSend mucPluginSession $
-              presStanza
-                { ostTo = Just $ fullJidAddress $ addr {fullResource = resource'}
-                }
+      historyAttrs =
+        catMaybes
+          [ fmap (\i -> ("maxchars", showt i)) histMaxChars
+          , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
+          , fmap (\i -> ("seconds", showt i)) histSeconds
+          , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
+          ]
+      xElement =
+        element
+          (mucName "x")
+          []
+          [ NodeElement $ element (mucName "history") historyAttrs []
+          ]
+      joinRoom = do
+        presStanza <- presenceStanza mucPluginPresence $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
+        void $
+          stanzaSend mucPluginSession $
+            presStanza
+              { ostTo = Just $ fullJidAddress addr
+              }
   bracketOnError takeRoom (const cleanupRoom) (const joinRoom)
 
 data MUCAlreadyLeftError = MUCAlreadyLeftError

@@ -428,16 +428,25 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (fullJidGet -> Just addr))] -> do
                               runInBase $
-                                mucJoin
-                                  mucP
-                                  addr
-                                  defaultMUCJoinSettings
-                                  ( \_ event ->
-                                      writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
-                                  )
-                                  ( \result ->
-                                      writeMessage [i|#{bareJidToText $ fullBare addr} join result: #{result}|]
-                                  )
+                                mucGetRegisteredNick mucP (fullBare addr) $ \nickResp -> do
+                                  let nick = case nickResp of
+                                        Right (Just registered) -> registered
+                                        _ -> fullResource addr
+                                  case nickResp of
+                                    Left e -> writeMessage [i|#{bareJidToText $ fullBare addr} registered-nick lookup failed: #{e}|]
+                                    Right (Just registered) | registered /= fullResource addr ->
+                                      writeMessage [i|#{bareJidToText $ fullBare addr} using server-suggested nick: #{resourceText registered}|]
+                                    _ -> return ()
+                                  mucJoin
+                                    mucP
+                                    addr {fullResource = nick}
+                                    defaultMUCJoinSettings
+                                    ( \_ event ->
+                                        writeMessage [i|#{bareJidToText $ fullBare addr} event: #{event}|]
+                                    )
+                                    ( \result ->
+                                        writeMessage [i|#{bareJidToText $ fullBare addr} join result: #{result}|]
+                                    )
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
