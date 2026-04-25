@@ -32,6 +32,7 @@ import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.Disco.HomeCache
 import Network.XMPP.XEP.Forwarding
 import Network.XMPP.XML
 
@@ -145,8 +146,8 @@ carbonsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 carbonsPlugin pluginsRef = do
   carbonsPluginSlot <- Slot.new
   carbonsPluginIMPlugin <- getIMPlugin pluginsRef
-  discoP <- getDiscoPlugin pluginsRef
-  carbonsPluginSupported <- newHomeFeatureCheck discoP carbonsNS
+  homeCacheP <- getHomeCachePlugin pluginsRef
+  carbonsPluginSupported <- newHomeFeatureCheck homeCacheP carbonsNS
   let carbonsPluginSession = pluginsSession pluginsRef
       plugin :: CarbonsPlugin m = CarbonsPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef

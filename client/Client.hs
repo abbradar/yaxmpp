@@ -49,6 +49,8 @@ import Network.XMPP.XEP.ChatStates
 import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.DeliveryReceipts
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.Disco.HomeCache
+import Network.XMPP.XEP.Disco.PresenceCache
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MAM
 import Network.XMPP.XEP.MUC
@@ -215,6 +217,8 @@ main = do
         presencePlugin pluginsRef
         capsPlugin pluginsRef
         discoPlugin pluginsRef
+        homeCachePlugin pluginsRef
+        presenceCachePlugin pluginsRef
         rosterPlugin pluginsRef
         subscriptionPlugin pluginsRef
         rpresencePlugin pluginsRef

@@ -47,6 +47,8 @@ import Network.XMPP.Stream
 import Network.XMPP.XEP.Capabilities
 import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.Disco.HomeCache
+import Network.XMPP.XEP.Disco.PresenceCache
 import Network.XMPP.XEP.MUC
 
 data Settings = Settings
@@ -152,6 +154,8 @@ main = runStderrLoggingT $ do
       presencePlugin pluginsRef
       capsPlugin pluginsRef
       discoPlugin pluginsRef
+      homeCachePlugin pluginsRef
+      presenceCachePlugin pluginsRef
       rosterPlugin pluginsRef
       myPresencePlugin pluginsRef
       imPlugin pluginsRef
