@@ -22,6 +22,7 @@ import Data.Time.XMPP (zonedTimeToXmpp)
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import Network.Connection
+import Network.TLS (EMSMode (..), Supported (..))
 import Network.DNS
 import qualified System.Console.Haskeline as HL
 import System.Environment
@@ -59,6 +60,8 @@ import Network.XMPP.XEP.Ping
 import Network.XMPP.XEP.RSM
 import Network.XMPP.XEP.StanzaIds
 import Network.XMPP.XEP.Version
+import Network.XMPP.XEP.Version.HomeCache
+import Network.XMPP.XEP.Version.PresenceCache
 
 newtype ClientPlugin m = ClientPlugin {clientWriteMessage :: String -> m ()}
 
@@ -176,7 +179,7 @@ main = do
             { settingDisableCertificateValidation = False
             , settingDisableSession = False
             , settingUseServerName = True
-            , settingClientSupported = def
+            , settingClientSupported = def {supportedExtendedMainSecret = AllowEMS}
             }
         esettings =
           ConnectionParams
@@ -231,6 +234,8 @@ main = do
         carbonsPlugin pluginsRef
         deliveryReceiptsPlugin pluginsRef
         versionPlugin pluginsRef defaultVersion
+        versionHomeCachePlugin pluginsRef
+        versionPresenceCachePlugin pluginsRef
         entityTimePlugin pluginsRef
         pingPlugin pluginsRef
         stanzaIdsPlugin pluginsRef
@@ -434,8 +439,9 @@ main = do
                                         _ -> fullResource addr
                                   case nickResp of
                                     Left e -> writeMessage [i|#{bareJidToText $ fullBare addr} registered-nick lookup failed: #{e}|]
-                                    Right (Just registered) | registered /= fullResource addr ->
-                                      writeMessage [i|#{bareJidToText $ fullBare addr} using server-suggested nick: #{resourceText registered}|]
+                                    Right (Just registered)
+                                      | registered /= fullResource addr ->
+                                          writeMessage [i|#{bareJidToText $ fullBare addr} using server-suggested nick: #{resourceText registered}|]
                                     _ -> return ()
                                   mucJoin
                                     mucP

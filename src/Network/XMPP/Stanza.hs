@@ -339,15 +339,27 @@ stanzaSend' StanzaSession {..} sid OutStanza {..} = do
       msg = element (jcName mname) attrs $ map NodeElement ostChildren
   sessionSend ssSession msg
 
+-- Per RFC 6120 §10.3.3, server-on-behalf-of-account IQs use the
+-- account's bare JID as @from@/@to@; that is equivalent to absent.
+-- Normalize for the lookups.
+normalizeIQEntity :: Session m -> Maybe XMPPAddress -> Maybe XMPPAddress
+normalizeIQEntity ssSession (Just addr)
+  | addr == bare = Nothing
+  | otherwise = Just addr
+ where
+  bare = bareJidAddress $ fullBare $ sessionAddress ssSession
+normalizeIQEntity _ Nothing = Nothing
+
 stanzaRequest :: (MonadStream m) => StanzaSession m -> OutRequestIQ -> IQResponseHandler m -> m ()
 stanzaRequest StanzaSession {..} OutRequestIQ {..} handler = do
   sid <- atomicModifyIORef' ssNextIqId $ \n -> (n + 1, T.pack (show n))
-  atomicModifyIORef' ssRequests $ \reqs -> (M.insert (oriTo, sid) handler reqs, ())
+  let oriTo' = normalizeIQEntity ssSession oriTo
+  atomicModifyIORef' ssRequests $ \reqs -> (M.insert (oriTo', sid) handler reqs, ())
   let attrs =
         [ ("id", sid)
         , ("type", injTo oriIqType)
         ]
-          ++ maybeToList (fmap (("to",) . addressToText) oriTo)
+          ++ maybeToList (fmap (("to",) . addressToText) oriTo')
       msg = element (jcName "iq") attrs $ map NodeElement oriChildren
   sessionSend ssSession msg
 
@@ -475,10 +487,7 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
         payload = mapMaybe (\case NodeElement ne -> Just ne; _ -> Nothing) $ elementNodes e
         tmtype = getAttr "type" e
         tmid = getAttr "id" e
-    tfrom' <- getAddr "from"
-    -- Workaround for ejabberd that sometimes uses bare JID as "from" for server responses.
-    let bare = bareJidAddress $ fullBare $ sessionAddress ssSession
-        tfrom = tfrom' >>= \from -> if from == bare then Nothing else return from
+    tfrom <- getAddr "from"
     tto <- getAddr "to"
 
     if ename == jcName "iq"
@@ -511,22 +520,21 @@ stanzaSessionStep sess@StanzaSession {..} (SessionHooks {..}) = void $ runMaybeT
                 sessionSend ssSession $ element (jcName "iq") attrs $ map NodeElement cres
           Nothing -> case injFrom ttype of
             Just resType -> lift $ do
-              mhandler <- atomicModifyIORef' ssRequests $ \requests -> case M.lookup (tfrom, tid) requests of
+              let tfrom' = normalizeIQEntity ssSession tfrom
+              mhandler <- atomicModifyIORef' ssRequests $ \requests -> case M.lookup (tfrom', tid) requests of
                 Nothing -> (requests, Nothing)
-                Just handler -> (M.delete (tfrom, tid) requests, Just handler)
+                Just handler -> (M.delete (tfrom', tid) requests, Just handler)
               case (mhandler, resType) of
                 (Nothing, _) -> sendError $ badRequest "corresponding request for response is not found"
                 (Just handler, IQTypeResult) -> handler $ Right payload
                 (Just handler, IQTypeError) -> handler $ Left $ either id id $ parseStanzaError payload
             Nothing -> lift $ sendError $ badRequest "iq type is invalid"
       else do
-        st0 <- case parseInStanza e of
+        st <- case parseInStanza e of
           Left err -> do
             lift $ sendErrorOnIq err
             mzero
           Right s -> return s
-        -- Apply the bare-JID-from workaround to the parsed stanza.
-        let st = st0 {istFrom = istFrom st0 >>= \f -> if f == bare then Nothing else Just f}
         res <- lift $ inHandler st
         case res of
           InSilent -> return ()

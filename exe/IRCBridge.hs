@@ -25,6 +25,7 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import Network.Connection
+import Network.TLS (EMSMode (..), Supported (..))
 import Network.DNS
 import qualified Network.IRC as IRC
 import System.Environment
@@ -119,7 +120,7 @@ main = runStderrLoggingT $ do
           { settingDisableCertificateValidation = False
           , settingDisableSession = False
           , settingUseServerName = True
-          , settingClientSupported = def
+          , settingClientSupported = def {supportedExtendedMainSecret = AllowEMS}
           }
       esettings =
         ConnectionParams

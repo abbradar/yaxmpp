@@ -19,10 +19,10 @@ module Network.XMPP.XEP.MAM (
 ) where
 
 import Control.Applicative ((<|>))
-import Control.HandlerList (Handler (..))
-import qualified Control.HandlerList as HL
 import Control.AsyncMemo (AsyncMemo)
 import qualified Control.AsyncMemo as AsyncMemo
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe

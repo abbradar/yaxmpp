@@ -201,7 +201,6 @@ getDiscoEntityNoCache (DiscoPlugin {..}) addr node handler = do
     Just () -> return ()
     Nothing -> requestDiscoEntity discoPluginSession addr node handler
 
-
 {- | Request disco#info for the local account by sending an IQ with no @to@
 attribute (RFC 6120 §10.3.3: handled by the server on behalf of the account).
 Used where the target is the session's own bare JID — e.g. XEP-0313 requires

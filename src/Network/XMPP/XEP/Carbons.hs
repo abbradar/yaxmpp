@@ -12,10 +12,10 @@ module Network.XMPP.XEP.Carbons (
   carbonsPlugin,
 ) where
 
-import Control.HandlerList (Handler (..))
-import qualified Control.HandlerList as HL
 import Control.AsyncMemo (AsyncMemo)
 import qualified Control.AsyncMemo as AsyncMemo
+import Control.HandlerList (Handler (..))
+import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Maybe

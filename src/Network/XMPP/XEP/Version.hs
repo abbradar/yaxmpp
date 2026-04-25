@@ -3,20 +3,20 @@
 module Network.XMPP.XEP.Version (
   VersionInfo (..),
   VersionPlugin,
+  versionPluginSession,
+  versionPluginCacheHandlers,
+  VersionCacheHandlers,
   defaultVersion,
   getVersionPlugin,
   getVersion,
+  requestVersion,
   versionPlugin,
 ) where
 
-import Control.Codec (Codec (..))
-import qualified Control.Codec as Codec
-import Control.AsyncMemo (AsyncMemo)
-import qualified Control.AsyncMemo as AsyncMemo
-import qualified Data.Map.Strict as M
+import Control.HandlerList (Handler (..), HandlerList)
+import qualified Control.HandlerList as HL
 import Data.Maybe
 import Data.Proxy
-import qualified Data.Registry as Reg
 import qualified Data.Registry.Mutable as RegRef
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -28,12 +28,8 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 
-import Control.HandlerList (Handler (..))
-import qualified Control.HandlerList as HL
 import Network.XMPP.Address
 import Network.XMPP.Plugin
-import Network.XMPP.Presence
-import Network.XMPP.Session (sessionAddress)
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
@@ -59,31 +55,17 @@ defaultVersion =
     , swOS = Just $ T.pack os
     }
 
--- | Lazy version cache stored in each presence's extended registry.
-newtype LazyVersion m = LazyVersion (AsyncMemo m (Either StanzaError VersionInfo))
-
-instance Show (LazyVersion m) where
-  show _ = "LazyVersion"
+{- | Handler list for resolving version requests from cache. If a handler
+matches the request, it must fire the callback itself and return @Just ()@;
+otherwise return @Nothing@ to fall through.
+-}
+type VersionCacheHandlers m = HandlerList m (XMPPAddress, Either StanzaError VersionInfo -> m ()) ()
 
 data VersionPlugin m = VersionPlugin
   { versionPluginSession :: StanzaSession m
   , versionPluginInfo :: VersionInfo
-  , versionPluginPresencePlugin :: PresencePlugin m
-  , versionPluginHome :: AsyncMemo m (Either StanzaError VersionInfo)
-  , versionPluginMyAddress :: FullJID
+  , versionPluginCacheHandlers :: VersionCacheHandlers m
   }
-
-{- | The 'VersionPlugin' is itself a presence codec: on decode, it attaches a
-'LazyVersion' for the full JID; on encode, it strips it.
--}
-instance (MonadStream m) => Codec m FullJID Presence (VersionPlugin m) where
-  codecDecode (VersionPlugin {versionPluginSession}) faddr pres = do
-    let addr = fullJidAddress faddr
-    lazy <- AsyncMemo.new $ doGetVersion versionPluginSession addr
-    let lv = LazyVersion lazy :: LazyVersion m
-    return $ pres {presenceExtended = Reg.insert lv (presenceExtended pres)}
-  codecEncode _ _ pres =
-    return $ pres {presenceExtended = Reg.delete (Proxy :: Proxy (LazyVersion m)) (presenceExtended pres)}
 
 instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (VersionPlugin m) where
   tryHandle (VersionPlugin {versionPluginInfo = VersionInfo {..}}) (InRequestIQ {iriType = IQGet, iriChildren = [req]})
@@ -98,9 +80,9 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (VersionPlug
         ++ maybeToList (fmap ("os",) swOS)
   tryHandle _ _ = return Nothing
 
--- | Always perform a fresh version request (no caching).
-doGetVersion :: (MonadStream m) => StanzaSession m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
-doGetVersion sess addr handler =
+-- | Direct version IQ fetch — bypasses the cache handler chain.
+requestVersion :: (MonadStream m) => StanzaSession m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
+requestVersion sess addr handler =
   stanzaRequest
     sess
     OutRequestIQ
@@ -123,36 +105,25 @@ doGetVersion sess addr handler =
 getVersionPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (VersionPlugin m)
 getVersionPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (VersionPlugin m)) $ pluginsHooksSet pluginsRef
 
-{- | Get version info, using cached AsyncMemo values for JIDs with
-active presences and for the homeserver.
+{- | Get version info, first consulting the cache handlers; falls back to a
+direct IQ if no handler claims the request.
 -}
 getVersion :: (MonadStream m) => VersionPlugin m -> XMPPAddress -> (Either StanzaError VersionInfo -> m ()) -> m ()
-getVersion (VersionPlugin {versionPluginHome, versionPluginPresencePlugin, versionPluginMyAddress, versionPluginSession}) addr handler
-  | isHomeServer = AsyncMemo.get versionPluginHome handler
-  | Just full <- fullJidGet addr = do
-      presences <- getAllPresences versionPluginPresencePlugin
-      case M.lookup full presences of
-        Just pres
-          | Just (LazyVersion lazy) <- Reg.lookup (Proxy :: Proxy (LazyVersion m)) (presenceExtended pres) ->
-              AsyncMemo.get lazy handler
-        _ -> doGetVersion versionPluginSession addr handler
-  | otherwise = doGetVersion versionPluginSession addr handler
- where
-  isHomeServer = addressLocal addr == Nothing && addressResource addr == Nothing && addressDomain addr == bareDomain (fullBare versionPluginMyAddress)
+getVersion (VersionPlugin {..}) addr handler = do
+  handled <- HL.call versionPluginCacheHandlers (addr, handler)
+  case handled of
+    Just () -> return ()
+    Nothing -> requestVersion versionPluginSession addr handler
 
 instance (Typeable m) => DiscoInfoProvider (VersionPlugin m) where
   discoProviderInfo _ = featuresDiscoInfo Nothing $ S.singleton versionNS
 
 versionPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> VersionInfo -> m ()
 versionPlugin pluginsRef settings = do
+  versionPluginCacheHandlers <- HL.new :: m (VersionCacheHandlers m)
   let versionPluginSession = pluginsSession pluginsRef
-      versionPluginMyAddress = sessionAddress $ ssSession versionPluginSession
       versionPluginInfo = settings
-      homeAddr = XMPPAddress Nothing (bareDomain $ fullBare versionPluginMyAddress) Nothing
-  versionPluginHome <- AsyncMemo.new $ doGetVersion versionPluginSession homeAddr
-  versionPluginPresencePlugin <- getPresencePlugin pluginsRef
-  let plugin :: VersionPlugin m = VersionPlugin {..}
+      plugin :: VersionPlugin m = VersionPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsIQHandlers pluginsRef
   addDiscoInfo pluginsRef plugin
-  Codec.pushNewOrFailM plugin (presencePluginCodecs versionPluginPresencePlugin)
