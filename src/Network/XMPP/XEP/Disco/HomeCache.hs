@@ -6,7 +6,6 @@ The home entity is fetched at most once per session and shared.
 module Network.XMPP.XEP.Disco.HomeCache (
   HomeCachePlugin,
   getHomeCachePlugin,
-  getHomeDiscoEntity,
   homeCachePlugin,
 ) where
 
@@ -35,10 +34,6 @@ instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either Stan
 
 getHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (HomeCachePlugin m)
 getHomeCachePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (HomeCachePlugin m)) $ pluginsHooksSet pluginsRef
-
--- | Get the cached home disco entity, fetching on first call.
-getHomeDiscoEntity :: (MonadStream m) => HomeCachePlugin m -> (Either StanzaError DiscoEntity -> m ()) -> m ()
-getHomeDiscoEntity (HomeCachePlugin {hcpEntity}) = AsyncMemo.get hcpEntity
 
 homeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 homeCachePlugin pluginsRef = do

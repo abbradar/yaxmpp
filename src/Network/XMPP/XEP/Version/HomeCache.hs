@@ -6,7 +6,6 @@ The home version is fetched at most once per session and shared.
 module Network.XMPP.XEP.Version.HomeCache (
   VersionHomeCachePlugin,
   getVersionHomeCachePlugin,
-  getHomeVersion,
   versionHomeCachePlugin,
 ) where
 
@@ -35,10 +34,6 @@ instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionIn
 
 getVersionHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (VersionHomeCachePlugin m)
 getVersionHomeCachePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (VersionHomeCachePlugin m)) $ pluginsHooksSet pluginsRef
-
--- | Get the cached home version, fetching on first call.
-getHomeVersion :: (MonadStream m) => VersionHomeCachePlugin m -> (Either StanzaError VersionInfo -> m ()) -> m ()
-getHomeVersion (VersionHomeCachePlugin {vhcpInfo}) = AsyncMemo.get vhcpInfo
 
 versionHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 versionHomeCachePlugin pluginsRef = do
