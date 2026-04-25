@@ -232,6 +232,9 @@ class ToXMPPAddress a where
 instance ToXMPPAddress XMPPAddress where
   toXMPPAddress = id
 
+instance ToXMPPAddress XMPPDomain where
+  toXMPPAddress d = XMPPAddress Nothing d Nothing
+
 instance ToXMPPAddress BareJID where
   toXMPPAddress (BareJID {..}) = XMPPAddress (Just bareLocal) bareDomain Nothing
 

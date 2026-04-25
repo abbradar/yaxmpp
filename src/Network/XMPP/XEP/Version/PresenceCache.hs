@@ -6,7 +6,6 @@ full JID with an active presence, fires the slot (which fetches once and
 memoizes for the lifetime of that presence).
 -}
 module Network.XMPP.XEP.Version.PresenceCache (
-  VersionPresenceCachePlugin,
   versionPresenceCachePlugin,
 ) where
 
@@ -19,7 +18,6 @@ import qualified Control.HandlerList as HL
 import qualified Data.Map.Strict as M
 import Data.Proxy
 import qualified Data.Registry as Reg
-import qualified Data.Registry.Mutable as RegRef
 
 import Network.XMPP.Address
 import Network.XMPP.Plugin
@@ -63,6 +61,5 @@ versionPresenceCachePlugin pluginsRef = do
   vpcpVersion <- getVersionPlugin pluginsRef
   vpcpPresence <- getPresencePlugin pluginsRef
   let plugin :: VersionPresenceCachePlugin m = VersionPresenceCachePlugin {..}
-  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ versionPluginCacheHandlers vpcpVersion
   Codec.pushNewOrFailM plugin $ presencePluginCodecs vpcpPresence

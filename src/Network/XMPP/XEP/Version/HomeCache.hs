@@ -4,8 +4,6 @@
 The home version is fetched at most once per session and shared.
 -}
 module Network.XMPP.XEP.Version.HomeCache (
-  VersionHomeCachePlugin,
-  getVersionHomeCachePlugin,
   versionHomeCachePlugin,
 ) where
 
@@ -13,8 +11,6 @@ import Control.AsyncMemo (AsyncMemo)
 import qualified Control.AsyncMemo as AsyncMemo
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import Data.Proxy
-import qualified Data.Registry.Mutable as RegRef
 
 import Network.XMPP.Address
 import Network.XMPP.Plugin
@@ -22,24 +18,19 @@ import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Version
 
-data VersionHomeCachePlugin m = VersionHomeCachePlugin
-  { vhcpAddr :: BareJID
-  , vhcpInfo :: AsyncMemo m (Either StanzaError VersionInfo)
+data VersionHomeCacheHandler m = VersionHomeCacheHandler
+  { vhcAddr :: XMPPAddress
+  , vhcInfo :: AsyncMemo m (Either StanzaError VersionInfo)
   }
 
-instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionInfo -> m ()) () (VersionHomeCachePlugin m) where
-  tryHandle (VersionHomeCachePlugin {..}) (addr, handler)
-    | addr == toXMPPAddress vhcpAddr = Just <$> AsyncMemo.get vhcpInfo handler
+instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionInfo -> m ()) () (VersionHomeCacheHandler m) where
+  tryHandle (VersionHomeCacheHandler {..}) (addr, handler)
+    | addr == vhcAddr = Just <$> AsyncMemo.get vhcInfo handler
   tryHandle _ _ = return Nothing
-
-getVersionHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (VersionHomeCachePlugin m)
-getVersionHomeCachePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (VersionHomeCachePlugin m)) $ pluginsHooksSet pluginsRef
 
 versionHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 versionHomeCachePlugin pluginsRef = do
   vp <- getVersionPlugin pluginsRef
-  let vhcpAddr = ssServer $ versionPluginSession vp
-  vhcpInfo <- AsyncMemo.new $ requestVersion (versionPluginSession vp) vhcpAddr
-  let plugin :: VersionHomeCachePlugin m = VersionHomeCachePlugin {..}
-  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  HL.pushNewOrFailM plugin $ versionPluginCacheHandlers vp
+  let vhcAddr = toXMPPAddress $ ssServer $ versionPluginSession vp
+  vhcInfo <- AsyncMemo.new $ requestVersion (versionPluginSession vp) vhcAddr
+  HL.pushNewOrFailM VersionHomeCacheHandler {..} $ versionPluginCacheHandlers vp

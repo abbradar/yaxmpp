@@ -38,13 +38,9 @@ toDescList (ClassVector vec) = map snd $ vectorToDescList vec
 findIndex :: TypeRep -> ClassVector constr -> Maybe Int
 findIndex typ (ClassVector vec) = V.findIndex ((== typ) . fst) vec
 
+-- | Append a value, allowing duplicates of the same type. 'delete' will remove all matching entries.
 push :: (Typeable a, constr a) => a -> ClassVector constr -> ClassVector constr
-push val cls@(ClassVector vec) = ClassVector vec'
- where
-  typ = typeOf val
-  vec'
-    | Just i <- findIndex typ cls = V.unsafeUpd vec [(i, (typ, ClassBox val))]
-    | otherwise = V.snoc vec (typ, ClassBox val)
+push val (ClassVector vec) = ClassVector $ V.snoc vec (typeOf val, ClassBox val)
 
 {- | Try to push a new value. Returns 'Just' the updated vector if inserted,
 or 'Nothing' if the type already exists.

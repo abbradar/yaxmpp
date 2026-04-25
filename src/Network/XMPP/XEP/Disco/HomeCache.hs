@@ -1,45 +1,41 @@
 {-# LANGUAGE Strict #-}
 
-{- | Disco entity cache for the session's home (account) bare JID, no node.
-The home entity is fetched at most once per session and shared.
+{- | Disco entity cache for the session's home: both the home server (the
+session's bare domain JID, no node) and the user's bare JID (used e.g. for
+XEP-0313 MAM lookups). All disco nodes for these addresses are cached lazily
+for the session.
 -}
 module Network.XMPP.XEP.Disco.HomeCache (
-  HomeCachePlugin,
-  getHomeCachePlugin,
   homeCachePlugin,
 ) where
 
-import Control.AsyncMemo (AsyncMemo)
-import qualified Control.AsyncMemo as AsyncMemo
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
-import Data.Proxy
-import qualified Data.Registry.Mutable as RegRef
 
 import Network.XMPP.Address
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.Disco.Cache.NodeCache
 
-data HomeCachePlugin m = HomeCachePlugin
-  { hcpAddr :: BareJID
-  , hcpEntity :: AsyncMemo m (Either StanzaError DiscoEntity)
+data HomeCacheHandler m = HomeCacheHandler
+  { hchDisco :: DiscoPlugin m
+  , hchAddr :: XMPPAddress
+  , hchCache :: DiscoNodeCache m
   }
 
-instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) () (HomeCachePlugin m) where
-  tryHandle (HomeCachePlugin {..}) (addr, Nothing, handler)
-    | addr == toXMPPAddress hcpAddr = Just <$> AsyncMemo.get hcpEntity handler
+instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) () (HomeCacheHandler m) where
+  tryHandle (HomeCacheHandler {..}) (addr, node, handler)
+    | addr == hchAddr = Just <$> getDiscoNodeCache hchDisco hchCache addr node handler
   tryHandle _ _ = return Nothing
-
-getHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (HomeCachePlugin m)
-getHomeCachePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (HomeCachePlugin m)) $ pluginsHooksSet pluginsRef
 
 homeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 homeCachePlugin pluginsRef = do
-  dp <- getDiscoPlugin pluginsRef
-  let hcpAddr = ssServer $ discoPluginSession dp
-  hcpEntity <- AsyncMemo.new $ getDiscoEntityNoCache dp hcpAddr Nothing
-  let plugin :: HomeCachePlugin m = HomeCachePlugin {..}
-  RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  HL.pushNewOrFailM plugin $ discoPluginEntityCacheHandlers dp
+  hchDisco <- getDiscoPlugin pluginsRef
+  let bare = ssServer $ discoPluginSession hchDisco
+      server = bareDomain bare
+  serverCache <- newDiscoNodeCache
+  bareCache <- newDiscoNodeCache
+  HL.push HomeCacheHandler {hchAddr = toXMPPAddress server, hchCache = serverCache, ..} $ discoPluginEntityCacheHandlers hchDisco
+  HL.push HomeCacheHandler {hchAddr = toXMPPAddress bare, hchCache = bareCache, ..} $ discoPluginEntityCacheHandlers hchDisco
