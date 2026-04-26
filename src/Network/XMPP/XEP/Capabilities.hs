@@ -18,10 +18,12 @@ module Network.XMPP.XEP.Capabilities (
 
 import Control.Codec (Codec (..))
 import qualified Control.Codec as Codec
+import Control.Monad.Logger
 import Data.List (partition)
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Proxy
+import Data.String.Interpolate (i)
 import Data.Text (Text)
 import Text.XML
 import Text.XML.Cursor hiding (element)
@@ -61,16 +63,12 @@ newtype CapsInfo = CapsInfo
   }
   deriving (Show, Eq)
 
-tryParseCapsInstance :: Element -> Maybe CapsInstance
-tryParseCapsInstance e = do
-  guard $ elementName e == capsName "c"
-  capsHash <- getAttr "hash" e
-  capsNode <- getAttr "node" e
-  capsVer <- getAttr "ver" e
+parseCapsInstance :: Element -> Either String CapsInstance
+parseCapsInstance e = do
+  capsHash <- maybe (Left "missing hash attribute on <c>") Right $ getAttr "hash" e
+  capsNode <- maybe (Left "missing node attribute on <c>") Right $ getAttr "node" e
+  capsVer <- maybe (Left "missing ver attribute on <c>") Right $ getAttr "ver" e
   return CapsInstance {..}
- where
-  guard True = Just ()
-  guard False = Nothing
 
 capsInstanceToElement :: CapsInstance -> Element
 capsInstanceToElement (CapsInstance {..}) =
@@ -101,13 +99,11 @@ newtype Caps2Info = Caps2Info
   }
   deriving (Show, Eq)
 
-tryParseCaps2Info :: Element -> Maybe Caps2Info
-tryParseCaps2Info e
-  | elementName e == caps2Name "c" =
-      let cur = fromElement e
-          hashes = M.fromList $ mapMaybe parseHash $ cur $/ XC.element (hashesName "hash") &| curElement
-       in if M.null hashes then Nothing else Just $ Caps2Info {caps2Hashes = hashes}
-  | otherwise = Nothing
+parseCaps2Info :: Element -> Either String Caps2Info
+parseCaps2Info e =
+  let cur = fromElement e
+      hashes = M.fromList $ mapMaybe parseHash $ cur $/ XC.element (hashesName "hash") &| curElement
+   in if M.null hashes then Left "no hashes in <c xmlns=\"urn:xmpp:caps\">" else Right Caps2Info {caps2Hashes = hashes}
  where
   parseHash h = do
     algo <- getAttr "algo" h
@@ -128,12 +124,15 @@ caps2InfoToElement (Caps2Info {..}) =
 data CapsPlugin = CapsPlugin
 
 instance (MonadStream m) => Codec m FullJID Presence CapsPlugin where
-  codecDecode _ _ pres =
-    let (mcaps1, mcaps2, raw') = extractCaps (presenceRaw pres)
-        ext = presenceExtended pres
-        ext' = maybe ext (\c -> Reg.insert c ext) mcaps1
-        ext'' = maybe ext' (\c -> Reg.insert c ext') mcaps2
-     in return $ pres {presenceRaw = raw', presenceExtended = ext''}
+  codecDecode _ _ pres = case extractCaps (presenceRaw pres) of
+    Left err -> do
+      $(logError) [i|XEP-0115/0390 entity capabilities: #{err}|]
+      return pres
+    Right (mcaps1, mcaps2, raw') ->
+      let ext = presenceExtended pres
+          ext' = maybe ext (\c -> Reg.insert c ext) mcaps1
+          ext'' = maybe ext' (\c -> Reg.insert c ext') mcaps2
+       in return $ pres {presenceRaw = raw', presenceExtended = ext''}
 
   codecEncode _ _ pres =
     let ext = presenceExtended pres
@@ -144,15 +143,18 @@ instance (MonadStream m) => Codec m FullJID Presence CapsPlugin where
         raw'' = maybe raw' (\c -> caps2InfoToElement c : raw') mcaps2
      in return $ pres {presenceRaw = raw'', presenceExtended = ext''}
 
-extractCaps :: [Element] -> (Maybe CapsInfo, Maybe Caps2Info, [Element])
-extractCaps elems =
+extractCaps :: [Element] -> Either String (Maybe CapsInfo, Maybe Caps2Info, [Element])
+extractCaps elems = do
   let (caps1Elems, rest1) = partition (\e -> elementName e == capsName "c") elems
       (caps2Elems, rest2) = partition (\e -> elementName e == caps2Name "c") rest1
-      mcaps1 = case mapMaybe tryParseCapsInstance caps1Elems of
+  caps1Items <- traverse parseCapsInstance caps1Elems
+  let mcaps1 = case caps1Items of
         [] -> Nothing
         xs -> Just $ CapsInfo xs
-      mcaps2 = listToMaybe $ mapMaybe tryParseCaps2Info caps2Elems
-   in (mcaps1, mcaps2, rest2)
+  mcaps2 <- case caps2Elems of
+    [] -> Right Nothing
+    (e : _) -> Just <$> parseCaps2Info e
+  return (mcaps1, mcaps2, rest2)
 
 capsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 capsPlugin pluginsRef = do

@@ -79,7 +79,7 @@ On encode, generate a fresh origin-id and insert it.
 instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsPlugin where
   codecDecode _ _ msg = case extractStanzaIds (imRaw msg) of
     Left err -> do
-      $(logWarn) [i|Failed to parse XEP-0359 stanza IDs: #{err}|]
+      $(logError) [i|XEP-0359 stanza IDs: #{err}|]
       return msg
     Right (ids, raw') ->
       let ext' = Reg.insert ids (imExtended msg)

@@ -1,9 +1,10 @@
 {-# LANGUAGE Strict #-}
 
-{- | Version cache keyed on full JIDs known via active presence. Decorates
-each incoming presence with a lazy version slot; on version lookup of a
-full JID with an active presence, fires the slot (which fetches once and
-memoizes for the lifetime of that presence).
+{- | Version cache keyed on full JIDs known via active presence. On the first
+presence event for a resource, attaches a lazy 'AsyncMemo' to its
+mutable registry; on version lookup of any full JID with an active
+presence, serves through that memo. The cache lives as long as the resource
+is online.
 -}
 module Network.XMPP.XEP.Version.PresenceCache (
   versionPresenceCachePlugin,
@@ -11,13 +12,13 @@ module Network.XMPP.XEP.Version.PresenceCache (
 
 import Control.AsyncMemo (AsyncMemo)
 import qualified Control.AsyncMemo as AsyncMemo
-import Control.Codec (Codec (..))
-import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
+import Control.Slot (SlotSignal (..))
+import qualified Control.Slot as Slot
 import qualified Data.Map.Strict as M
 import Data.Proxy
-import qualified Data.Registry as Reg
+import qualified Data.Registry.Mutable as RegRef
 
 import Network.XMPP.Address
 import Network.XMPP.Plugin
@@ -26,34 +27,34 @@ import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Version
 
--- | Lazy version cache stored in each presence's extended registry.
 newtype LazyVersion m = LazyVersion (AsyncMemo m (Either StanzaError VersionInfo))
-
-instance Show (LazyVersion m) where
-  show _ = "LazyVersion"
 
 data VersionPresenceCachePlugin m = VersionPresenceCachePlugin
   { vpcpVersion :: VersionPlugin m
   , vpcpPresence :: PresencePlugin m
   }
 
-instance (MonadStream m) => Codec m FullJID Presence (VersionPresenceCachePlugin m) where
-  codecDecode (VersionPresenceCachePlugin {vpcpVersion}) faddr pres = do
-    lazy <- AsyncMemo.new $ requestVersion (versionPluginSession vpcpVersion) faddr
-    let lv = LazyVersion lazy :: LazyVersion m
-    return $ pres {presenceExtended = Reg.insert lv (presenceExtended pres)}
-  codecEncode _ _ pres =
-    return $ pres {presenceExtended = Reg.delete (Proxy :: Proxy (LazyVersion m)) (presenceExtended pres)}
+instance (MonadStream m) => SlotSignal m PresenceUpdate (VersionPresenceCachePlugin m) where
+  emitSignal (VersionPresenceCachePlugin {vpcpVersion}) (ResourcePresence faddr (ResourceAvailable PresenceRef {presenceState})) = do
+    existing <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) presenceState
+    case existing of
+      Just _ -> return ()
+      Nothing -> do
+        lazy <- AsyncMemo.new $ requestVersion (versionPluginSession vpcpVersion) faddr
+        RegRef.insert (LazyVersion lazy :: LazyVersion m) presenceState
+  emitSignal _ _ = return ()
 
 instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionInfo -> m ()) () (VersionPresenceCachePlugin m) where
   tryHandle (VersionPresenceCachePlugin {vpcpPresence}) (addr, handler)
     | Just full <- fullJidGet addr = do
         presences <- getAllPresences vpcpPresence
         case M.lookup full presences of
-          Just pres
-            | Just (LazyVersion lazy) <- Reg.lookup (Proxy :: Proxy (LazyVersion m)) (presenceExtended pres) ->
-                Just <$> AsyncMemo.get lazy handler
-          _ -> return Nothing
+          Just PresenceRef {presenceState} -> do
+            mLazy <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) presenceState
+            case mLazy of
+              Just (LazyVersion lazy) -> Just <$> AsyncMemo.get lazy handler
+              Nothing -> fail "LazyVersion not found in Presence"
+          Nothing -> return Nothing
   tryHandle _ _ = return Nothing
 
 versionPresenceCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
@@ -62,4 +63,4 @@ versionPresenceCachePlugin pluginsRef = do
   vpcpPresence <- getPresencePlugin pluginsRef
   let plugin :: VersionPresenceCachePlugin m = VersionPresenceCachePlugin {..}
   HL.pushNewOrFailM plugin $ versionPluginCacheHandlers vpcpVersion
-  Codec.pushNewOrFailM plugin $ presencePluginCodecs vpcpPresence
+  Slot.pushNewOrFailM plugin $ presencePluginSlot vpcpPresence

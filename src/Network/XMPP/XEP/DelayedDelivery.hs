@@ -9,9 +9,11 @@ module Network.XMPP.XEP.DelayedDelivery (
 
 import Control.Codec (Codec (..))
 import qualified Control.Codec as Codec
+import Control.Monad.Logger
 import Data.List (partition)
 import Data.Maybe
 import Data.Proxy
+import Data.String.Interpolate (i)
 import Data.Text (Text)
 import Data.Time.LocalTime (ZonedTime)
 import Text.XML
@@ -38,18 +40,21 @@ data DelayInfo = DelayInfo
   }
   deriving (Show)
 
+parseDelay :: Element -> Either String DelayInfo
+parseDelay e = do
+  stampText <- maybe (Left "missing stamp attribute on <delay>") Right $ getAttr "stamp" e
+  delayStamp <- case xmppZonedTime stampText of
+    Left err -> Left $ "invalid stamp on <delay>: " <> err
+    Right t -> Right t
+  let delayFrom = getAttr "from" e
+      delayReason = case mconcat $ fromElement e $/ content of
+        "" -> Nothing
+        t -> Just t
+  return DelayInfo {..}
+
 tryParseDelay :: Element -> Maybe DelayInfo
 tryParseDelay e
-  | elementName e == delayName "delay" = do
-      stampText <- getAttr "stamp" e
-      case xmppZonedTime stampText of
-        Left _ -> Nothing
-        Right delayStamp ->
-          let delayFrom = getAttr "from" e
-              delayReason = case mconcat $ fromElement e $/ content of
-                "" -> Nothing
-                t -> Just t
-           in Just DelayInfo {..}
+  | elementName e == delayName "delay" = either (const Nothing) Just $ parseDelay e
   | otherwise = Nothing
 
 delayToElement :: DelayInfo -> Element
@@ -64,11 +69,14 @@ delayToElement (DelayInfo {..}) =
 data DelayedDeliveryPlugin = DelayedDeliveryPlugin
 
 instance (MonadStream m) => Codec m FullJID Presence DelayedDeliveryPlugin where
-  codecDecode _ _ pres =
-    let (mdelay, raw') = extractDelay (presenceRaw pres)
-        ext = presenceExtended pres
-        ext' = maybe ext (\d -> Reg.insert d ext) mdelay
-     in return $ pres {presenceRaw = raw', presenceExtended = ext'}
+  codecDecode _ _ pres = case extractDelay (presenceRaw pres) of
+    Left err -> do
+      $(logError) [i|XEP-0203 delayed delivery: #{err}|]
+      return pres
+    Right (mdelay, raw') ->
+      let ext = presenceExtended pres
+          ext' = maybe ext (\d -> Reg.insert d ext) mdelay
+       in return $ pres {presenceRaw = raw', presenceExtended = ext'}
 
   codecEncode _ _ pres =
     let ext = presenceExtended pres
@@ -78,11 +86,14 @@ instance (MonadStream m) => Codec m FullJID Presence DelayedDeliveryPlugin where
      in return $ pres {presenceRaw = raw', presenceExtended = ext'}
 
 instance (MonadStream m) => Codec m XMPPAddress IMMessage DelayedDeliveryPlugin where
-  codecDecode _ _ msg =
-    let (mdelay, raw') = extractDelay (imRaw msg)
-        ext = imExtended msg
-        ext' = maybe ext (\d -> Reg.insert d ext) mdelay
-     in return $ msg {imRaw = raw', imExtended = ext'}
+  codecDecode _ _ msg = case extractDelay (imRaw msg) of
+    Left err -> do
+      $(logError) [i|XEP-0203 delayed delivery: #{err}|]
+      return msg
+    Right (mdelay, raw') ->
+      let ext = imExtended msg
+          ext' = maybe ext (\d -> Reg.insert d ext) mdelay
+       in return $ msg {imRaw = raw', imExtended = ext'}
 
   codecEncode _ _ msg =
     let ext = imExtended msg
@@ -91,10 +102,12 @@ instance (MonadStream m) => Codec m XMPPAddress IMMessage DelayedDeliveryPlugin 
         raw' = maybe raw (\d -> delayToElement d : raw) mdelay
      in return $ msg {imRaw = raw', imExtended = ext'}
 
-extractDelay :: [Element] -> (Maybe DelayInfo, [Element])
+extractDelay :: [Element] -> Either String (Maybe DelayInfo, [Element])
 extractDelay elems =
   let (delayElems, rest) = partition (\e -> elementName e == delayName "delay") elems
-   in (listToMaybe $ mapMaybe tryParseDelay delayElems, rest)
+   in case delayElems of
+        [] -> Right (Nothing, rest)
+        (e : _) -> (\d -> (Just d, rest)) <$> parseDelay e
 
 delayedDeliveryPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 delayedDeliveryPlugin pluginsRef = do

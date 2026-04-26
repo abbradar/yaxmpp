@@ -8,7 +8,9 @@ module Network.XMPP.XEP.MUC (
   MUCAffiliation (..),
   MUCLeaveReason (..),
   MUCPresenceEvent (..),
-  MUCPresence (..),
+  MUCStatusSet,
+  MUCInfo (..),
+  MUCPresenceCodec (..),
   MUC (..),
   MUCJoinResult (..),
   MUCAlreadyJoinedError (..),
@@ -29,12 +31,14 @@ module Network.XMPP.XEP.MUC (
 
 import Control.Monad
 import Control.Monad.Catch (Exception, throwM)
+import Control.Monad.Logger
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Proxy
 import Data.Set (Set)
 import qualified Data.Set as S
+import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock
@@ -48,11 +52,14 @@ import TextShow (showt)
 import UnliftIO.Exception (bracketOnError)
 import UnliftIO.IORef
 
+import Control.Codec (Codec (..))
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
 import Data.Injective
+import Data.List (partition)
+import qualified Data.Registry as Reg
 import qualified Data.Registry.Mutable as RegRef
 import Data.Time.XMPP
 import Network.XMPP.Address
@@ -79,7 +86,7 @@ type MUCHandler m = MUC -> RoomEvent -> m ()
 
 data MUC = MUC
   { mucSubject :: Maybe (XMPPResource, Text)
-  , mucMembers :: Map XMPPResource Presence
+  , mucMembers :: Map XMPPResource PresenceRef
   , mucNick :: XMPPResource
   , mucNonAnonymous :: Bool
   }
@@ -128,22 +135,75 @@ data MUCLeaveReason
   deriving (Show, Eq)
 
 data MUCPresenceEvent
-  = MUCJoined MUCPresence
-  | MUCUpdated MUCPresence
+  = MUCJoined PresenceRef
+  | MUCUpdated PresenceRef
   | MUCRemoved MUCLeaveReason
   | MUCRenamed XMPPResource
   deriving (Show)
 
-data MUCPresence = MUCPresence
-  { mucPresence :: Presence
-  , mucRealJid :: Maybe FullJID
-  , mucAffiliation :: MUCAffiliation
-  , mucRole :: MUCRole
+type MUCStatusSet = Set Integer
+
+-- | MUC-specific presence information stored in 'presenceExtended' by 'MUCPresenceCodec'.
+data MUCInfo = MUCInfo
+  { mucInfoStatus :: MUCStatusSet
+  , mucInfoRealJid :: Maybe FullJID
+  , mucInfoAffiliation :: MUCAffiliation
+  , mucInfoRole :: MUCRole
   }
-  deriving (Show)
+  deriving (Show, Typeable)
+
+data MUCPresenceCodec = MUCPresenceCodec
+
+instance (MonadStream m) => Codec m FullJID Presence MUCPresenceCodec where
+  codecDecode _ _ pres = case extractMUCInfo (presenceRaw pres) of
+    Left err -> do
+      $(logError) [i|XEP-0045 MUC presence: #{err}|]
+      return pres
+    Right (mInfo, raw') ->
+      let ext = presenceExtended pres
+          ext' = maybe ext (\info -> Reg.insert info ext) mInfo
+       in return $ pres {presenceRaw = raw', presenceExtended = ext'}
+  codecEncode _ _ pres =
+    let ext = presenceExtended pres
+        (mInfo, ext') = Reg.pop (Proxy :: Proxy MUCInfo) ext
+        raw = presenceRaw pres
+        raw' = maybe raw (\info -> mucInfoToElement info : raw) mInfo
+     in return $ pres {presenceRaw = raw', presenceExtended = ext'}
+
+extractMUCInfo :: [Element] -> Either String (Maybe MUCInfo, [Element])
+extractMUCInfo elems =
+  let (xElems, rest) = partition (\e -> elementName e == mucUserName "x") elems
+   in case xElems of
+        [] -> Right (Nothing, rest)
+        (xE : _) -> (\info -> (Just info, rest)) <$> parseMUCInfo xE
+
+parseMUCInfo :: Element -> Either String MUCInfo
+parseMUCInfo xE = do
+  let mucInfoStatus = S.fromList $ mapMaybe (readMaybe . T.unpack) $ fromElement xE $/ XC.element (mucUserName "status") &/ attribute "code"
+  item <- maybe (Left "missing <item> in <x>") Right $ listToMaybe $ fromElement xE $/ XC.element (mucUserName "item") &| curElement
+  affText <- maybe (Left "missing affiliation attribute") Right $ getAttr "affiliation" item
+  mucInfoAffiliation <- maybe (Left $ "invalid affiliation: " <> T.unpack affText) Right $ injFrom affText
+  roleText <- maybe (Left "missing role attribute") Right $ getAttr "role" item
+  mucInfoRole <- maybe (Left $ "invalid role: " <> T.unpack roleText) Right $ injFrom roleText
+  let mucInfoRealJid = getAttr "jid" item >>= (either (const Nothing) Just . xmppAddress) >>= fullJidGet
+  return MUCInfo {..}
+
+mucInfoToElement :: MUCInfo -> Element
+mucInfoToElement (MUCInfo {..}) =
+  element (mucUserName "x") [] $
+    map statusNode (S.toAscList mucInfoStatus)
+      ++ [NodeElement itemElem]
+ where
+  statusNode s = NodeElement $ element (mucUserName "status") [("code", T.pack (show s))] []
+  itemAttrs =
+    [ ("affiliation", injTo mucInfoAffiliation)
+    , ("role", injTo mucInfoRole)
+    ]
+      ++ maybe [] (\j -> [("jid", addressToText j)]) mucInfoRealJid
+  itemElem = element (mucUserName "item") itemAttrs []
 
 data PendingMUC m = PendingMUC
-  { pmucMembers :: Map XMPPResource MUCPresence
+  { pmucMembers :: Map XMPPResource PresenceRef
   , pmucNick :: XMPPResource
   , pmucHandler :: MUCHandler m
   , pmucOnJoined :: MUCJoinResult -> m ()
@@ -299,28 +359,9 @@ mucSendPresence MUCPlugin {..} addr pres = do
       return ()
     _ -> throwM MUCAlreadyLeftError
 
-type MUCStatusSet = Set Integer
-
-_parseMUCPresence :: ResourceStatus -> Maybe (MUCStatusSet, MUCPresence)
-_parseMUCPresence status = do
-  let extended = case status of
-        ResourceAvailable p -> presenceRaw p
-        ResourceUnavailable elems -> elems
-  xE <- listToMaybe $ fromChildren extended $/ XC.element (mucUserName "x") &| curElement
-  let statusSet = S.fromList $ mapMaybe (readMaybe . T.unpack) $ fromElement xE $/ XC.element (mucUserName "status") &/ attribute "code"
-  item <- listToMaybe $ fromElement xE $/ XC.element (mucUserName "item") &| curElement
-  mucAffiliation <- getAttr "affiliation" item >>= injFrom
-  mucRole <- getAttr "role" item >>= injFrom
-  let mucRealJid = getAttr "jid" item >>= (either (const Nothing) Just . xmppAddress) >>= fullJidGet
-      mucPresence = case status of
-        ResourceAvailable p -> p
-        ResourceUnavailable _ -> defaultPresence
-  return (statusSet, MUCPresence {..})
-
 instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
   tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just (fullJidGet -> Just addr), istType = InPresence (Just PresenceError), istChildren}) = do
-    let mucEventHandler = mucPluginSlot
-        err = either id id $ parseStanzaError istChildren
+    let err = either id id $ parseStanzaError istChildren
     mpromise <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup (fullBare addr) rooms of
         Just (Left pending) | pmucNick pending == fullResource addr -> (M.delete (fullBare addr) rooms, Just $ pmucOnJoined pending)
@@ -328,7 +369,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
     case mpromise of
       Nothing -> return Nothing
       Just promise -> do
-        Slot.call mucEventHandler $ MUCRejected addr err
+        Slot.call mucPluginSlot $ MUCRejected addr err
         promise (MUCJoinError err)
         return $ Just InSilent
   tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage MessageGroupchat, istChildren}) =
@@ -366,25 +407,21 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
         Just (Right (room@(MUC {..}), handler)) ->
           case presenceUpdate resource mpres mucMembers of
             Nothing -> (rooms, MUCHandled)
-            Just (members, _event) ->
+            Just (members, event) ->
               let room' = room {mucMembers = members}
-                  mucPres =
-                    MUCPresence
-                      { mucPresence = case mpres of ResourceAvailable p -> p; ResourceUnavailable _ -> defaultPresence
-                      , mucRealJid = Nothing
-                      , mucAffiliation = AffiliationNone
-                      , mucRole = RoleNone
-                      }
-               in (M.insert bare (Right (room', handler)) rooms, MUCRun $ handler room' $ RoomPresence resource (MUCUpdated mucPres))
+                  roomEvent = case event of
+                    Added _ presRef -> MUCJoined presRef
+                    Updated _ presRef -> MUCUpdated presRef
+                    Removed _ _ -> MUCRemoved MUCLeft
+               in (M.insert bare (Right (room', handler)) rooms, MUCRun $ handler room' $ RoomPresence resource roomEvent)
         Just (Left pending) ->
           case mpres of
-            ResourceAvailable pres ->
-              let mucPres = MUCPresence {mucPresence = pres, mucRealJid = Nothing, mucAffiliation = AffiliationNone, mucRole = RoleNone}
-                  members = M.insert resource mucPres $ pmucMembers pending
+            ResourceAvailable presRef ->
+              let members = M.insert resource presRef $ pmucMembers pending
                   pending' = pending {pmucMembers = members}
                   room' =
                     MUC
-                      { mucMembers = M.map mucPresence members
+                      { mucMembers = members
                       , mucSubject = Nothing
                       , mucNick = pmucNick pending
                       , mucNonAnonymous = False

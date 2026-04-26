@@ -28,12 +28,12 @@ import Network.XMPP.Stream
 import Text.XML
 import UnliftIO.IORef
 
-type RosterPresenceMap = Map BareJID (Map XMPPResource Presence)
+type RosterPresenceMap = Map BareJID (Map XMPPResource PresenceRef)
 
 data RosterPresenceEvent
-  = FirstResource FullJID Presence
-  | NewResource FullJID Presence
-  | UpdateResource FullJID Presence
+  = FirstResource FullJID PresenceRef
+  | NewResource FullJID PresenceRef
+  | UpdateResource FullJID PresenceRef
   | RemoveResource FullJID [Element]
   | LastResource FullJID [Element]
   deriving (Show)
@@ -47,14 +47,14 @@ data RosterPresencePlugin m = RosterPresencePlugin
   }
 
 rosterUpdate :: FullJID -> ResourceStatus -> RosterPresenceMap -> Maybe (RosterPresenceMap, RosterPresenceEvent)
-rosterUpdate full@(FullJID {..}) (ResourceAvailable pres) rmap =
+rosterUpdate full@(FullJID {..}) (ResourceAvailable presRef) rmap =
   case M.lookup fullBare rmap of
     Just presences ->
-      let updatedRmap = M.insert fullBare (M.insert fullResource pres presences) rmap
+      let updatedRmap = M.insert fullBare (M.insert fullResource presRef presences) rmap
        in if M.member fullResource presences
-            then Just (updatedRmap, UpdateResource full pres)
-            else Just (updatedRmap, NewResource full pres)
-    Nothing -> Just (M.insert fullBare (M.singleton fullResource pres) rmap, FirstResource full pres)
+            then Just (updatedRmap, UpdateResource full presRef)
+            else Just (updatedRmap, NewResource full presRef)
+    Nothing -> Just (M.insert fullBare (M.singleton fullResource presRef) rmap, FirstResource full presRef)
 rosterUpdate full@(FullJID {..}) (ResourceUnavailable err) rmap =
   case M.lookup fullBare rmap of
     Just presences ->

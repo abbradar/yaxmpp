@@ -28,7 +28,7 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 
-type MyselfPresenceMap = Map XMPPResource Presence
+type MyselfPresenceMap = Map XMPPResource PresenceRef
 
 type MyPresenceSlot m = Slot m (PresenceEvent XMPPResource)
 

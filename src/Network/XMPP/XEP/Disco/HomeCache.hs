@@ -17,7 +17,8 @@ import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
-import Network.XMPP.XEP.Disco.NodeCache
+import Network.XMPP.XEP.Disco.NodeCache (DiscoNodeCache)
+import qualified Network.XMPP.XEP.Disco.NodeCache as DiscoNodeCache
 
 data HomeCacheHandler m = HomeCacheHandler
   { hchDisco :: DiscoPlugin m
@@ -27,7 +28,7 @@ data HomeCacheHandler m = HomeCacheHandler
 
 instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) () (HomeCacheHandler m) where
   tryHandle (HomeCacheHandler {..}) (addr, node, handler)
-    | addr == hchAddr = Just <$> getDiscoNodeCache hchDisco hchCache addr node handler
+    | addr == hchAddr = Just <$> DiscoNodeCache.get hchDisco hchCache addr node handler
   tryHandle _ _ = return Nothing
 
 homeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
@@ -35,7 +36,7 @@ homeCachePlugin pluginsRef = do
   hchDisco <- getDiscoPlugin pluginsRef
   let bare = ssServer $ discoPluginSession hchDisco
       server = bareDomain bare
-  serverCache <- newDiscoNodeCache
-  bareCache <- newDiscoNodeCache
+  serverCache <- DiscoNodeCache.new
+  bareCache <- DiscoNodeCache.new
   HL.push HomeCacheHandler {hchAddr = toXMPPAddress server, hchCache = serverCache, ..} $ discoPluginEntityCacheHandlers hchDisco
   HL.push HomeCacheHandler {hchAddr = toXMPPAddress bare, hchCache = bareCache, ..} $ discoPluginEntityCacheHandlers hchDisco
