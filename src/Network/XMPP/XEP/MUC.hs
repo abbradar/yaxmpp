@@ -53,6 +53,7 @@ import UnliftIO.Exception (bracketOnError)
 import UnliftIO.IORef
 
 import Control.Codec (Codec (..))
+import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
@@ -209,7 +210,10 @@ data PendingMUC m = PendingMUC
   , pmucOnJoined :: MUCJoinResult -> m ()
   }
 
-type MUCValue m = (MUC, MUCHandler m)
+data MUCRef m = MUCRef
+  { mucRoom :: MUC
+  , mucHandler :: MUCHandler m
+  }
 
 type MUCSlot m = Slot m MUCEvent
 
@@ -218,7 +222,7 @@ data MUCPlugin m = MUCPlugin
   , mucPluginDisco :: DiscoPlugin m
   , mucPluginPresence :: PresencePlugin m
   , mucPluginSlot :: MUCSlot m
-  , mucPluginRooms :: IORef (Map BareJID (Either (PendingMUC m) (MUCValue m)))
+  , mucPluginRooms :: IORef (Map BareJID (Either (PendingMUC m) (MUCRef m)))
   }
 
 mucNS :: Text
@@ -349,7 +353,7 @@ mucSendPresence :: forall m. (MonadStream m) => MUCPlugin m -> BareJID -> Maybe 
 mucSendPresence MUCPlugin {..} addr pres = do
   rooms <- readIORef mucPluginRooms
   case M.lookup addr rooms of
-    Just (Right (room, _)) -> do
+    Just (Right MUCRef {mucRoom = room}) -> do
       presStanza <- presenceStanza mucPluginPresence pres
       _ <-
         stanzaSend mucPluginSession $
@@ -377,10 +381,10 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
       (subjE : _) -> do
         rooms <- readIORef mucPluginRooms
         case M.lookup bare rooms of
-          Just (Right (room, handler)) -> do
+          Just (Right ref@MUCRef {mucRoom = room, mucHandler = handler}) -> do
             let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
                 room' = room {mucSubject = subj}
-            atomicWriteIORef mucPluginRooms $ M.insert bare (Right (room', handler)) rooms
+            atomicWriteIORef mucPluginRooms $ M.insert bare (Right ref {mucRoom = room'}) rooms
             handler room' RoomSubject
             return $ Just InSilent
           _ -> return Nothing
@@ -400,11 +404,11 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
         resource = fullResource addr
     processed <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup bare rooms of
-        Just (Right (MUC {..}, _))
+        Just (Right MUCRef {mucRoom = MUC {..}})
           | ResourceUnavailable _ <- mpres
           , resource == mucNick ->
               (M.delete bare rooms, MUCRun $ Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft)
-        Just (Right (room@(MUC {..}), handler)) ->
+        Just (Right ref@MUCRef {mucRoom = room@(MUC {..}), mucHandler = handler}) ->
           case presenceUpdate resource mpres mucMembers of
             Nothing -> (rooms, MUCHandled)
             Just (members, event) ->
@@ -413,7 +417,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
                     Added _ presRef -> MUCJoined presRef
                     Updated _ presRef -> MUCUpdated presRef
                     Removed _ _ -> MUCRemoved MUCLeft
-               in (M.insert bare (Right (room', handler)) rooms, MUCRun $ handler room' $ RoomPresence resource roomEvent)
+               in (M.insert bare (Right ref {mucRoom = room'}) rooms, MUCRun $ handler room' $ RoomPresence resource roomEvent)
         Just (Left pending) ->
           case mpres of
             ResourceAvailable presRef ->
@@ -426,11 +430,12 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
                       , mucNick = pmucNick pending
                       , mucNonAnonymous = False
                       }
+                  ref = MUCRef {mucRoom = room', mucHandler = pmucHandler pending}
                   joinRoom = do
                     Slot.call mucEventHandler $ MUCJoinedRoom addr room'
                     pmucOnJoined pending (MUCJoinFinished room')
                in if resource == pmucNick pending
-                    then (M.insert bare (Right (room', pmucHandler pending)) rooms, MUCRun joinRoom)
+                    then (M.insert bare (Right ref) rooms, MUCRun joinRoom)
                     else (M.insert bare (Left pending') rooms, MUCHandled)
             ResourceUnavailable err
               | resource == pmucNick pending ->
@@ -460,5 +465,6 @@ mucPlugin pluginsRef = do
       plugin :: MUCPlugin m = MUCPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
-  HL.pushNewOrFailM plugin (presencePluginHandlers mucPluginPresence)
+  HL.pushNewOrFailM plugin $ presencePluginHandlers mucPluginPresence
+  Codec.pushNewOrFailM MUCPresenceCodec $ presencePluginCodecs mucPluginPresence
   addDiscoInfo pluginsRef plugin
