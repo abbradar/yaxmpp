@@ -176,9 +176,10 @@ type AllPresencesMap = Map FullJID PresenceRef
 data PresencePlugin m = PresencePlugin
   { presencePluginSession :: StanzaSession m
   , presencePluginHandlers :: HandlerList m PresenceUpdate ()
-  , -- | Broadcast slot fired before the dispatch handler list. Use this for
-    -- observer-style hooks (e.g. to populate per-resource mutable state).
-    presencePluginSlot :: Slot m PresenceUpdate
+  , presencePluginSlot :: Slot m PresenceUpdate
+  {- ^ Broadcast slot fired before the dispatch handler list. Use this for
+  observer-style hooks (e.g. to populate per-resource mutable state).
+  -}
   , presencePluginCodecs :: PresenceCodecList m
   , presencePluginPresences :: IORef AllPresencesMap
   }

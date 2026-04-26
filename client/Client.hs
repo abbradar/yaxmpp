@@ -22,8 +22,8 @@ import Data.Time.XMPP (zonedTimeToXmpp)
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import Network.Connection
-import Network.TLS (EMSMode (..), Supported (..))
 import Network.DNS
+import Network.TLS (EMSMode (..), Supported (..))
 import qualified System.Console.Haskeline as HL
 import System.Environment
 import UnliftIO (liftIO, withRunInIO)

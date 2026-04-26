@@ -25,9 +25,9 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import Network.Connection
-import Network.TLS (EMSMode (..), Supported (..))
 import Network.DNS
 import qualified Network.IRC as IRC
+import Network.TLS (EMSMode (..), Supported (..))
 import System.Environment
 import UnliftIO (liftIO)
 import UnliftIO.Concurrent

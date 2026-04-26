@@ -320,10 +320,10 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
       cleanupRoom = atomicModifyIORef' mucPluginRooms $ \rooms -> (M.delete roomAddr rooms, ())
       historyAttrs =
         catMaybes
-          [ fmap (\i -> ("maxchars", showt i)) histMaxChars
-          , fmap (\i -> ("maxstanzas", showt i)) histMaxStanzas
-          , fmap (\i -> ("seconds", showt i)) histSeconds
-          , fmap (\i -> ("since", utcTimeToXmpp i)) histSince
+          [ fmap (\n -> ("maxchars", showt n)) histMaxChars
+          , fmap (\n -> ("maxstanzas", showt n)) histMaxStanzas
+          , fmap (\n -> ("seconds", showt n)) histSeconds
+          , fmap (\t -> ("since", utcTimeToXmpp t)) histSince
           ]
       xElement =
         element
@@ -441,8 +441,10 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
             _ -> (rooms, MUCHandled)
         Nothing -> (rooms, NotMUCEvent)
     case processed of
-      MUCRun action -> action >> return (Just ())
-      MUCHandled -> return (Just ())
+      MUCRun action -> do
+        action
+        return $ Just ()
+      MUCHandled -> return $ Just ()
       NotMUCEvent -> return Nothing
 
 getMUCPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (MUCPlugin m)
