@@ -12,6 +12,7 @@ module Network.XMPP.XEP.MUC (
   MUCAffiliation (..),
   MUCLeaveReason (..),
   MUCPresenceEvent (..),
+  MUCStatus (..),
   MUCStatusSet,
   MUCInfo (..),
   MUCPresenceCodec (..),
@@ -54,7 +55,7 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import TextShow (showt)
-import UnliftIO.Exception (bracketOnError, finally)
+import UnliftIO.Exception (bracketOnError)
 import UnliftIO.IORef
 
 import Control.Codec (Codec (..))
@@ -83,11 +84,19 @@ data MUCEvent m
   = MUCJoinedRoom FullJID (MUCRef m)
   | MUCRejected FullJID StanzaError
   | MUCLeftRoom FullJID MUCLeaveReason
+  | -- | A per-room event mirrored onto 'mucPluginSlot' so subscribers can
+    -- listen across all joined rooms without subscribing to each room's
+    -- 'mucSlot' individually.
+    MUCRoomEvent BareJID (MUCRef m) (RoomEvent m)
   deriving (Show)
 
 data RoomEvent m
   = RoomPresence XMPPResource (MUCPresenceEvent m)
   | RoomSubject
+  | -- | Configuration change broadcast from the room (XEP-0045 §10.9): a
+    -- groupchat message carrying only @\<x xmlns="muc#user"\>@ with status
+    -- codes describing the change.
+    RoomConfigChanged MUCStatusSet
   deriving (Show)
 
 -- | Per-room slot fired with the latest 'MUCRef' and the event that produced it.
@@ -150,7 +159,41 @@ data MUCPresenceEvent m
   | MUCRenamed XMPPResource
   deriving (Show)
 
-type MUCStatusSet = Set Integer
+{- | (Incomplete) enum of XEP-0045 §10 status codes that the library
+recognizes.Unknown codes parsed from a presence remain as their raw
+integer in 'MUCStatusSet'.
+-}
+data MUCStatus
+  = -- | 102: room now shows unavailable members.
+    MUCStatusShowingUnavailable
+  | -- | 103: room no longer shows unavailable members.
+    MUCStatusHidingUnavailable
+  | -- | 104: a non-privacy-related configuration change occurred.
+    MUCStatusNonPrivacyConfigChanged
+  | -- | 170: room logging is now enabled.
+    MUCStatusLoggingEnabled
+  | -- | 171: room logging is now disabled.
+    MUCStatusLoggingDisabled
+  | -- | 172: room is now non-anonymous.
+    MUCStatusNowNonAnonymous
+  | -- | 173: room is now semi-anonymous.
+    MUCStatusNowSemiAnonymous
+  | -- | 174: room is now fully-anonymous.
+    MUCStatusNowFullyAnonymous
+  deriving (Show, Eq, Ord, Bounded, Enum)
+
+instance Injective MUCStatus Int where
+  injTo s = case s of
+    MUCStatusShowingUnavailable -> 102
+    MUCStatusHidingUnavailable -> 103
+    MUCStatusNonPrivacyConfigChanged -> 104
+    MUCStatusLoggingEnabled -> 170
+    MUCStatusLoggingDisabled -> 171
+    MUCStatusNowNonAnonymous -> 172
+    MUCStatusNowSemiAnonymous -> 173
+    MUCStatusNowFullyAnonymous -> 174
+
+type MUCStatusSet = Set (Either Int MUCStatus)
 
 -- | MUC-specific presence information stored in 'presenceExtended' by 'MUCPresenceCodec'.
 data MUCInfo = MUCInfo
@@ -186,9 +229,16 @@ extractMUCInfo elems =
         [] -> Right (Nothing, rest)
         (xE : _) -> (\info -> (Just info, rest)) <$> parseMUCInfo xE
 
+parseStatusCodes :: Element -> MUCStatusSet
+parseStatusCodes xE =
+  let parseStatus t = do
+        n <- readMaybe (T.unpack t)
+        return $ maybe (Left n) Right (injFrom n)
+   in S.fromList $ mapMaybe parseStatus $ fromElement xE $/ XC.element (mucUserName "status") &/ attribute "code"
+
 parseMUCInfo :: Element -> Either String MUCInfo
 parseMUCInfo xE = do
-  let mucInfoStatus = S.fromList $ mapMaybe (readMaybe . T.unpack) $ fromElement xE $/ XC.element (mucUserName "status") &/ attribute "code"
+  let mucInfoStatus = parseStatusCodes xE
   item <- maybe (Left "missing <item> in <x>") Right $ listToMaybe $ fromElement xE $/ XC.element (mucUserName "item") &| curElement
   affText <- maybe (Left "missing affiliation attribute") Right $ getAttr "affiliation" item
   mucInfoAffiliation <- maybe (Left $ "invalid affiliation: " <> T.unpack affText) Right $ injFrom affText
@@ -203,7 +253,7 @@ mucInfoToElement (MUCInfo {..}) =
     map statusNode (S.toAscList mucInfoStatus)
       ++ [NodeElement itemElem]
  where
-  statusNode s = NodeElement $ element (mucUserName "status") [("code", T.pack (show s))] []
+  statusNode s = NodeElement $ element (mucUserName "status") [("code", T.pack (show (either id injTo s)))] []
   itemAttrs =
     [ ("affiliation", injTo mucInfoAffiliation)
     , ("role", injTo mucInfoRole)
@@ -324,13 +374,14 @@ mucGetRegisteredNick (MUCPlugin {mucPluginDisco}) room handler =
           Nothing -> Left $ badRequest "invalid resource name proposed by server"
         _ -> Right Nothing
 
-{- | Join a MUC room. The 'setupSlot' callback runs after the slot is created
-and the pending MUC value is inserted into the rooms map, but before the
-join presence is sent — giving the caller a chance to subscribe before any
-events fire.
+{- | Join a MUC room. The join handler is invoked with a 'MUCJoinFinished'
+carrying the 'MUCRef' once the room is fully joined; subscribe to
+'mucSlot' from there if you want to receive subsequent room events. The
+handler runs synchronously between the rooms-map transition and the next
+incoming stanza, so no per-room events can be missed.
 -}
-mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> (MUCRoomSlot m -> m ()) -> (MUCJoinResult m -> m ()) -> m ()
-mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) setupSlot pmucOnJoined = do
+mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> (MUCJoinResult m -> m ()) -> m ()
+mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) pmucOnJoined = do
   pmucSlot <- Slot.new
   let initialRoom =
         PendingMUC
@@ -367,8 +418,7 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
             presStanza
               { ostTo = Just $ toXMPPAddress addr
               }
-      joinRoom = setupSlot pmucSlot `finally` sendRequest
-  bracketOnError takeRoom (const cleanupRoom) (const joinRoom)
+  bracketOnError takeRoom (const cleanupRoom) (const sendRequest)
 
 data MUCAlreadyLeftError = MUCAlreadyLeftError
   deriving (Show, Typeable)
@@ -403,19 +453,35 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
         promise (MUCJoinError err)
         return $ Just InSilent
   tryHandle (MUCPlugin {..}) (InStanza {istFrom = Just addr@(bareJidGet -> Just bare), istType = InMessage MessageGroupchat, istChildren}) =
-    case fromChildren istChildren $/ XC.element (jcName "subject") &| curElement of
-      (subjE : _) -> do
-        rooms <- readIORef mucPluginRooms
-        case M.lookup bare rooms of
-          Just (Right ref@MUCRef {mucRoom = room, mucSlot = slot}) -> do
-            let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
-                room' = room {mucSubject = subj}
-                ref' = ref {mucRoom = room'}
-            atomicWriteIORef mucPluginRooms $ M.insert bare (Right ref') rooms
-            Slot.call slot (ref', RoomSubject)
-            return $ Just InSilent
-          _ -> return Nothing
-      _ -> return Nothing
+    let cur = fromChildren istChildren
+        mSubjE = listToMaybe $ cur $/ XC.element (jcName "subject") &| curElement
+        mXE = listToMaybe $ cur $/ XC.element (mucUserName "x") &| curElement
+     in case mSubjE of
+          Just subjE -> do
+            rooms <- readIORef mucPluginRooms
+            case M.lookup bare rooms of
+              Just (Right ref@MUCRef {mucRoom = room, mucSlot = slot}) -> do
+                let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
+                    room' = room {mucSubject = subj}
+                    ref' = ref {mucRoom = room'}
+                atomicWriteIORef mucPluginRooms $ M.insert bare (Right ref') rooms
+                Slot.call mucPluginSlot $ MUCRoomEvent bare ref' RoomSubject
+                Slot.call slot (ref', RoomSubject)
+                return $ Just InSilent
+              _ -> return Nothing
+          Nothing -> case mXE of
+            Just xE
+              | let statuses = parseStatusCodes xE
+              , not (S.null statuses) -> do
+                  rooms <- readIORef mucPluginRooms
+                  case M.lookup bare rooms of
+                    Just (Right ref@MUCRef {mucSlot = slot}) -> do
+                      let ev = RoomConfigChanged statuses
+                      Slot.call mucPluginSlot $ MUCRoomEvent bare ref ev
+                      Slot.call slot (ref, ev)
+                      return $ Just InSilent
+                    _ -> return Nothing
+            _ -> return Nothing
   tryHandle _ _ = return Nothing
 
 data MUCHandleResult a
@@ -444,7 +510,11 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
                     Added _ presRef -> MUCJoined presRef
                     Updated _ presRef -> MUCUpdated presRef
                     Removed _ _ -> MUCRemoved MUCLeft
-               in (M.insert bare (Right ref') rooms, MUCRun $ Slot.call slot (ref', RoomPresence resource roomEvent))
+                  ev = RoomPresence resource roomEvent
+                  fire = do
+                    Slot.call mucPluginSlot $ MUCRoomEvent bare ref' ev
+                    Slot.call slot (ref', ev)
+               in (M.insert bare (Right ref') rooms, MUCRun fire)
         Just (Left pending) ->
           case mpres of
             ResourceAvailable presRef ->

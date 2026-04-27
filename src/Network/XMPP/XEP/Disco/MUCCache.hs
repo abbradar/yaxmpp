@@ -11,6 +11,7 @@ module Network.XMPP.XEP.Disco.MUCCache (
 
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
+import Control.Monad
 import Control.Slot (SlotSignal (..))
 import qualified Control.Slot as Slot
 import Data.Proxy
@@ -29,7 +30,10 @@ data MUCDiscoCachePlugin m = MUCDiscoCachePlugin
   , mdcpMUC :: MUCPlugin m
   }
 
--- | On every 'MUCJoinedRoom' event, ensure the room has a 'DiscoNodeCache' in its mutable registry.
+{- | Listens to the global MUC slot:
+* On 'MUCJoinedRoom' attaches a fresh 'DiscoNodeCache' to the room's registry.
+* On 'RoomConfigChanged' invalidates the cache.
+-}
 instance (MonadStream m) => SlotSignal m (MUCEvent m) (MUCDiscoCachePlugin m) where
   emitSignal _ (MUCJoinedRoom _ ref) = do
     let state = mucState ref
@@ -39,6 +43,9 @@ instance (MonadStream m) => SlotSignal m (MUCEvent m) (MUCDiscoCachePlugin m) wh
       Nothing -> do
         cache <- DiscoNodeCache.new
         RegRef.insert (cache :: DiscoNodeCache.DiscoNodeCache m) state
+  emitSignal _ (MUCRoomEvent _ ref (RoomConfigChanged _)) = do
+    mCache <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) (mucState ref)
+    forM_ mCache DiscoNodeCache.clear
   emitSignal _ _ = return ()
 
 instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) () (MUCDiscoCachePlugin m) where
