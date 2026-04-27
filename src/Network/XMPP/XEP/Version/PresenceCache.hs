@@ -34,7 +34,7 @@ data VersionPresenceCachePlugin m = VersionPresenceCachePlugin
   , vpcpPresence :: PresencePlugin m
   }
 
-instance (MonadStream m) => SlotSignal m PresenceUpdate (VersionPresenceCachePlugin m) where
+instance (MonadStream m) => SlotSignal m (PresenceUpdate m) (VersionPresenceCachePlugin m) where
   emitSignal (VersionPresenceCachePlugin {vpcpVersion}) (ResourcePresence faddr (ResourceAvailable PresenceRef {presenceState})) = do
     existing <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) presenceState
     case existing of

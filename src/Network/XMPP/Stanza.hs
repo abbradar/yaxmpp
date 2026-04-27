@@ -26,6 +26,7 @@ module Network.XMPP.Stanza (
   StanzaSession,
   ssSession,
   ssAddress,
+  ssBare,
   ssServer,
   stanzaSend,
   stanzaSend',
@@ -311,8 +312,11 @@ data StanzaSession m = StanzaSession
 ssAddress :: StanzaSession m -> FullJID
 ssAddress = sessionAddress . ssSession
 
-ssServer :: StanzaSession m -> BareJID
-ssServer = fullBare . ssAddress
+ssBare :: StanzaSession m -> BareJID
+ssBare = fullBare . ssAddress
+
+ssServer :: StanzaSession m -> XMPPDomain
+ssServer = bareDomain . ssBare
 
 fromServerOrMyself :: Maybe XMPPAddress -> StanzaSession m -> Bool
 fromServerOrMyself Nothing _ = True

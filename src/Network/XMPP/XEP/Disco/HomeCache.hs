@@ -34,8 +34,9 @@ instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either Stan
 homeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 homeCachePlugin pluginsRef = do
   hchDisco <- getDiscoPlugin pluginsRef
-  let bare = ssServer $ discoPluginSession hchDisco
-      server = bareDomain bare
+  let session = discoPluginSession hchDisco
+      server = ssServer session
+      bare = ssBare session
   serverCache <- DiscoNodeCache.new
   bareCache <- DiscoNodeCache.new
   HL.push HomeCacheHandler {hchAddr = toXMPPAddress server, hchCache = serverCache, ..} $ discoPluginEntityCacheHandlers hchDisco

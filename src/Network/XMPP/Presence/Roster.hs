@@ -28,25 +28,25 @@ import Network.XMPP.Stream
 import Text.XML
 import UnliftIO.IORef
 
-type RosterPresenceMap = Map BareJID (Map XMPPResource PresenceRef)
+type RosterPresenceMap m = Map BareJID (Map XMPPResource (PresenceRef m))
 
-data RosterPresenceEvent
-  = FirstResource FullJID PresenceRef
-  | NewResource FullJID PresenceRef
-  | UpdateResource FullJID PresenceRef
+data RosterPresenceEvent m
+  = FirstResource FullJID (PresenceRef m)
+  | NewResource FullJID (PresenceRef m)
+  | UpdateResource FullJID (PresenceRef m)
   | RemoveResource FullJID [Element]
   | LastResource FullJID [Element]
   deriving (Show)
 
-type RosterPresenceSlot m = Slot m RosterPresenceEvent
+type RosterPresenceSlot m = Slot m (RosterPresenceEvent m)
 
 data RosterPresencePlugin m = RosterPresencePlugin
   { rpresencePluginRoster :: RosterPlugin m
   , rpresencePluginSlot :: RosterPresenceSlot m
-  , rpresencePluginRef :: IORef RosterPresenceMap
+  , rpresencePluginRef :: IORef (RosterPresenceMap m)
   }
 
-rosterUpdate :: FullJID -> ResourceStatus -> RosterPresenceMap -> Maybe (RosterPresenceMap, RosterPresenceEvent)
+rosterUpdate :: FullJID -> ResourceStatus m -> RosterPresenceMap m -> Maybe (RosterPresenceMap m, RosterPresenceEvent m)
 rosterUpdate full@(FullJID {..}) (ResourceAvailable presRef) rmap =
   case M.lookup fullBare rmap of
     Just presences ->
@@ -66,7 +66,7 @@ rosterUpdate full@(FullJID {..}) (ResourceUnavailable err) rmap =
         else Nothing
     Nothing -> Nothing
 
-instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m) where
+instance (MonadStream m) => Handler m (PresenceUpdate m) () (RosterPresencePlugin m) where
   tryHandle (RosterPresencePlugin {..}) (ResourcePresence full presUpd) = do
     roster <- rosterEntries <$> getRoster rpresencePluginRoster
     if not $ toXMPPAddress (fullBare full) `M.member` roster
@@ -101,7 +101,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (RosterPresencePlugin m)
 getRosterPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (RosterPresencePlugin m)
 getRosterPresencePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (RosterPresencePlugin m)) $ pluginsHooksSet pluginsRef
 
-getRosterPresence :: (MonadStream m) => RosterPresencePlugin m -> m RosterPresenceMap
+getRosterPresence :: (MonadStream m) => RosterPresencePlugin m -> m (RosterPresenceMap m)
 getRosterPresence RosterPresencePlugin {rpresencePluginRef} = readIORef rpresencePluginRef
 
 rpresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()

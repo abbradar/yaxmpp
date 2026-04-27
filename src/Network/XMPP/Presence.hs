@@ -93,39 +93,46 @@ defaultPresence =
     }
 
 {- | Per-resource presence with attached mutable state. The 'Presence' value
-is replaced on each update; the mutable registry is preserved for the
-lifetime of the resource (created when the resource first appears, dropped
-when it goes offline). Plugins may store per-presence mutable state there
-(e.g. lazy disco caches).
+is replaced on each update; the mutable registry and per-presence slot are
+preserved for the lifetime of the resource (created when the resource first
+appears, dropped when it goes offline). Plugins may store per-presence
+mutable state there (e.g. lazy disco caches), and consumers may subscribe
+to 'presenceSlot' to receive subsequent updates and the removal event for
+this particular resource.
 -}
-data PresenceRef = PresenceRef
+data PresenceRef m = PresenceRef
   { presenceValue :: Presence
   , presenceState :: RegistryRef Unconstrained
+  , presenceSlot :: Slot m (ResourceStatus m)
+  {- ^ Fires on each update after the first appearance, and on removal.
+  Subscribe via 'Slot.pushNewOrFailM' (or 'Slot.push') after receiving
+  the ref from the plugin's 'Added' event.
+  -}
   }
 
-instance Show PresenceRef where
+instance Show (PresenceRef m) where
   show PresenceRef {presenceValue} = "PresenceRef { presenceValue = " ++ show presenceValue ++ " }"
 
 -- | Status of a single resource.
-data ResourceStatus
-  = ResourceAvailable PresenceRef
+data ResourceStatus m
+  = ResourceAvailable (PresenceRef m)
   | -- | Resource went unavailable; carries extended stanza elements.
     ResourceUnavailable [Element]
 
 {- | A presence update from a specific resource, or a bare-JID unavailable
 notification meaning all resources are offline (RFC 6121 §4.5.4).
 -}
-data PresenceUpdate
-  = ResourcePresence FullJID ResourceStatus
+data PresenceUpdate m
+  = ResourcePresence FullJID (ResourceStatus m)
   | -- | All resources offline; carries the bare JID and extended stanza elements.
     AllResourcesOffline BareJID [Element]
 
-showPresenceUpdate :: PresenceUpdate -> String
+showPresenceUpdate :: PresenceUpdate m -> String
 showPresenceUpdate (ResourcePresence faddr (ResourceAvailable _)) = "ResourcePresence " <> show faddr <> " (ResourceAvailable …)"
 showPresenceUpdate (ResourcePresence faddr (ResourceUnavailable _)) = "ResourcePresence " <> show faddr <> " (ResourceUnavailable …)"
 showPresenceUpdate (AllResourcesOffline bare _) = "AllResourcesOffline " <> show bare
 
-type PresenceHandler m = PresenceUpdate -> m (Maybe ())
+type PresenceHandler m = PresenceUpdate m -> m (Maybe ())
 
 data PresenceOp
   = PresenceSet
@@ -137,7 +144,7 @@ presenceOp Nothing = Just PresenceSet
 presenceOp (Just PresenceUnavailable) = Just PresenceUnset
 presenceOp _ = Nothing
 
-emitPresence :: (MonadStream m) => HandlerList m PresenceUpdate () -> PresenceUpdate -> m ()
+emitPresence :: (MonadStream m) => HandlerList m (PresenceUpdate m) () -> PresenceUpdate m -> m ()
 emitPresence handlers upd = do
   mr <- HL.call handlers upd
   case mr of
@@ -171,17 +178,17 @@ parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameName
 
 type PresenceCodecList m = CodecList m FullJID Presence
 
-type AllPresencesMap = Map FullJID PresenceRef
+type AllPresencesMap m = Map FullJID (PresenceRef m)
 
 data PresencePlugin m = PresencePlugin
   { presencePluginSession :: StanzaSession m
-  , presencePluginHandlers :: HandlerList m PresenceUpdate ()
-  , presencePluginSlot :: Slot m PresenceUpdate
+  , presencePluginHandlers :: HandlerList m (PresenceUpdate m) ()
+  , presencePluginSlot :: Slot m (PresenceUpdate m)
   {- ^ Broadcast slot fired before the dispatch handler list. Use this for
   observer-style hooks (e.g. to populate per-resource mutable state).
   -}
   , presencePluginCodecs :: PresenceCodecList m
-  , presencePluginPresences :: IORef AllPresencesMap
+  , presencePluginPresences :: IORef (AllPresencesMap m)
   }
 
 instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) where
@@ -191,31 +198,44 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
         PresenceSet -> case parsePresence istChildren of
           Right p -> do
             existing <- M.lookup faddr <$> readIORef presencePluginPresences
-            state <- case existing of
-              Just old -> return $ presenceState old
-              Nothing -> RegRef.new
+            (state, slot) <- case existing of
+              Just old -> return (presenceState old, presenceSlot old)
+              Nothing -> (,) <$> RegRef.new <*> Slot.new
             p' <- decodeAll presencePluginCodecs faddr p
-            let presRef = PresenceRef {presenceValue = p', presenceState = state}
-                upd = ResourcePresence faddr (ResourceAvailable presRef)
+            let presRef = PresenceRef {presenceValue = p', presenceState = state, presenceSlot = slot}
+                status = ResourceAvailable presRef
+                upd = ResourcePresence faddr status
             atomicModifyIORef' presencePluginPresences . ((,()) .) $ M.insert faddr presRef
             Slot.call presencePluginSlot upd
+            when (isJust existing) $ Slot.call slot status
             emitPresence presencePluginHandlers upd
             return InSilent
           Left e -> return $ InError e
         PresenceUnset -> do
           let extended = parseExtended istChildren
-              upd = ResourcePresence faddr (ResourceUnavailable extended)
-          atomicModifyIORef' presencePluginPresences . ((,()) .) $ M.delete faddr
-          Slot.call presencePluginSlot upd
-          emitPresence presencePluginHandlers upd
+              status = ResourceUnavailable extended
+              upd = ResourcePresence faddr status
+          existing <- atomicModifyIORef' presencePluginPresences $ \m ->
+            (M.delete faddr m, M.lookup faddr m)
+          case existing of
+            Nothing -> $(logError) [i|Tried to unset presence for #{faddr}, but it was not present|]
+            Just old -> do
+              Slot.call presencePluginSlot upd
+              Slot.call (presenceSlot old) status
+              emitPresence presencePluginHandlers upd
           return InSilent
   -- Bare-JID unavailable presence (RFC 6121 §4.5.4): all resources are offline.
+  -- Also arrive to mark that a contact is offline when logging in.
   tryHandle (PresencePlugin {..}) (InStanza {istType = InPresence (Just PresenceUnavailable), istFrom = Just (bareJidGet -> Just bare), istChildren}) =
     Just <$> do
       let extended = parseExtended istChildren
+          status = ResourceUnavailable extended
           upd = AllResourcesOffline bare extended
-      atomicModifyIORef' presencePluginPresences . ((,()) .) $ M.filterWithKey (\k _ -> fullBare k /= bare)
+      removed <- atomicModifyIORef' presencePluginPresences $ \m ->
+        let (rest, rem') = M.partitionWithKey (\k _ -> fullBare k /= bare) m
+         in (rest, rem')
       Slot.call presencePluginSlot upd
+      forM_ (M.elems removed) $ \old -> Slot.call (presenceSlot old) status
       emitPresence presencePluginHandlers upd
       return InSilent
   tryHandle _ _ = return Nothing
@@ -225,7 +245,7 @@ getPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (Presenc
 getPresencePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (PresencePlugin m)) $ pluginsHooksSet pluginsRef
 
 -- | Get the map of all currently available presences.
-getAllPresences :: (MonadStream m) => PresencePlugin m -> m AllPresencesMap
+getAllPresences :: (MonadStream m) => PresencePlugin m -> m (AllPresencesMap m)
 getAllPresences PresencePlugin {presencePluginPresences} = readIORef presencePluginPresences
 
 presencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
@@ -239,13 +259,13 @@ presencePlugin pluginsRef = do
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
 
-data PresenceEvent k
-  = Added k PresenceRef
-  | Updated k PresenceRef
+data PresenceEvent m k
+  = Added k (PresenceRef m)
+  | Updated k (PresenceRef m)
   | Removed k [Element]
   deriving (Show)
 
-presenceUpdate :: (Ord k) => k -> ResourceStatus -> Map k PresenceRef -> Maybe (Map k PresenceRef, PresenceEvent k)
+presenceUpdate :: (Ord k) => k -> ResourceStatus m -> Map k (PresenceRef m) -> Maybe (Map k (PresenceRef m), PresenceEvent m k)
 presenceUpdate k (ResourceAvailable presRef) m
   | M.member k m = Just (M.insert k presRef m, Updated k presRef)
   | otherwise = Just (M.insert k presRef m, Added k presRef)

@@ -31,6 +31,6 @@ instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionIn
 versionHomeCachePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 versionHomeCachePlugin pluginsRef = do
   vp <- getVersionPlugin pluginsRef
-  let vhcAddr = toXMPPAddress $ ssServer $ versionPluginSession vp
+  let vhcAddr = toXMPPAddress $ ssBare $ versionPluginSession vp
   vhcInfo <- AsyncMemo.new $ requestVersion (versionPluginSession vp) vhcAddr
   HL.pushNewOrFailM VersionHomeCacheHandler {..} $ versionPluginCacheHandlers vp

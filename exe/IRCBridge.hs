@@ -81,7 +81,7 @@ instance (MonadStream m) => SlotSignal m AddressedIMMessage (IRCBridgePlugin m) 
         unless (nick == otherNick) $ ircUserReply otherNick "PRIVMSG" [channel, T.encodeUtf8 $ T.map (\x -> if isSpace x then ' ' else x) $ localizedGet Nothing imBody]
       else $(logWarn) [i|Got unknown message from #{addr}: #{imBody}|]
 
-instance (MonadStream m) => SlotSignal m MUCEvent (IRCBridgePlugin m) where
+instance (MonadStream m) => SlotSignal m (MUCEvent m) (IRCBridgePlugin m) where
   emitSignal (IRCBridgePlugin {..}) = \case
     MUCJoinedRoom jid (MUC {..}) -> do
       nick <- ircGetNick

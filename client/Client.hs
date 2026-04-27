@@ -73,11 +73,11 @@ instance (MonadStream m) => SlotSignal m (BareJID, SubscriptionStatus) (ClientPl
   emitSignal (ClientPlugin {..}) (addr, stat) =
     clientWriteMessage [i|Got subscription update for #{addr}: #{stat}|]
 
-instance (MonadStream m) => SlotSignal m (PresenceEvent XMPPResource) (ClientPlugin m) where
+instance (MonadStream m) => SlotSignal m (PresenceEvent m XMPPResource) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
     clientWriteMessage [i|Got presence update for myself: #{event}|]
 
-instance (MonadStream m) => SlotSignal m RosterPresenceEvent (ClientPlugin m) where
+instance (MonadStream m) => SlotSignal m (RosterPresenceEvent m) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
     clientWriteMessage [i|Got presence update for roster: #{event}|]
 
@@ -117,7 +117,7 @@ clientMAMHandler imP writeMsg = go
       writeMsg [i|MAM query failed: #{e}|]
       return OutDone
 
-instance (MonadStream m) => SlotSignal m MUCEvent (ClientPlugin m) where
+instance (MonadStream m) => SlotSignal m (MUCEvent m) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
     clientWriteMessage [i|Got MUC event: #{event}|]
 

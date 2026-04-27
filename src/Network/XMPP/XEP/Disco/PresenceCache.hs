@@ -32,7 +32,7 @@ data PresenceCachePlugin m = PresenceCachePlugin
   }
 
 -- | On every available-presence event, ensure the resource has a 'DiscoNodeCache' in its mutable registry.
-instance (MonadStream m) => SlotSignal m PresenceUpdate (PresenceCachePlugin m) where
+instance (MonadStream m) => SlotSignal m (PresenceUpdate m) (PresenceCachePlugin m) where
   emitSignal _ (ResourcePresence _ (ResourceAvailable PresenceRef {presenceState})) = do
     existing <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) presenceState
     case existing of

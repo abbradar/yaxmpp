@@ -72,29 +72,29 @@ import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XML
 
-data MUCEvent
-  = MUCJoinedRoom FullJID MUC
+data MUCEvent m
+  = MUCJoinedRoom FullJID (MUC m)
   | MUCRejected FullJID StanzaError
   | MUCLeftRoom FullJID MUCLeaveReason
   deriving (Show)
 
-data RoomEvent
-  = RoomPresence XMPPResource MUCPresenceEvent
+data RoomEvent m
+  = RoomPresence XMPPResource (MUCPresenceEvent m)
   | RoomSubject
   deriving (Show)
 
-type MUCHandler m = MUC -> RoomEvent -> m ()
+type MUCHandler m = MUC m -> RoomEvent m -> m ()
 
-data MUC = MUC
+data MUC m = MUC
   { mucSubject :: Maybe (XMPPResource, Text)
-  , mucMembers :: Map XMPPResource PresenceRef
+  , mucMembers :: Map XMPPResource (PresenceRef m)
   , mucNick :: XMPPResource
   , mucNonAnonymous :: Bool
   }
   deriving (Show)
 
-data MUCJoinResult
-  = MUCJoinFinished MUC
+data MUCJoinResult m
+  = MUCJoinFinished (MUC m)
   | MUCJoinError StanzaError
   | MUCJoinStopped [Element]
   deriving (Show)
@@ -135,9 +135,9 @@ data MUCLeaveReason
   | MUCBanned {banActor :: XMPPResource, banReason :: Maybe Text}
   deriving (Show, Eq)
 
-data MUCPresenceEvent
-  = MUCJoined PresenceRef
-  | MUCUpdated PresenceRef
+data MUCPresenceEvent m
+  = MUCJoined (PresenceRef m)
+  | MUCUpdated (PresenceRef m)
   | MUCRemoved MUCLeaveReason
   | MUCRenamed XMPPResource
   deriving (Show)
@@ -204,18 +204,18 @@ mucInfoToElement (MUCInfo {..}) =
   itemElem = element (mucUserName "item") itemAttrs []
 
 data PendingMUC m = PendingMUC
-  { pmucMembers :: Map XMPPResource PresenceRef
+  { pmucMembers :: Map XMPPResource (PresenceRef m)
   , pmucNick :: XMPPResource
   , pmucHandler :: MUCHandler m
-  , pmucOnJoined :: MUCJoinResult -> m ()
+  , pmucOnJoined :: MUCJoinResult m -> m ()
   }
 
 data MUCRef m = MUCRef
-  { mucRoom :: MUC
+  { mucRoom :: MUC m
   , mucHandler :: MUCHandler m
   }
 
-type MUCSlot m = Slot m MUCEvent
+type MUCSlot m = Slot m (MUCEvent m)
 
 data MUCPlugin m = MUCPlugin
   { mucPluginSession :: StanzaSession m
@@ -305,7 +305,7 @@ mucGetRegisteredNick (MUCPlugin {mucPluginDisco}) room handler =
           Nothing -> Left $ badRequest "invalid resource name proposed by server"
         _ -> Right Nothing
 
-mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> (MUCJoinResult -> m ()) -> m ()
+mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> (MUCJoinResult m -> m ()) -> m ()
 mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler pmucOnJoined = do
   let initialRoom =
         PendingMUC
@@ -396,7 +396,7 @@ data MUCHandleResult a
   | MUCHandled
   | MUCRun a
 
-instance (MonadStream m) => Handler m PresenceUpdate () (MUCPlugin m) where
+instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
   tryHandle _ (AllResourcesOffline _ _) = return Nothing -- MUC rooms don't use bare JID presence
   tryHandle (MUCPlugin {..}) (ResourcePresence addr mpres) = do
     let mucEventHandler = mucPluginSlot

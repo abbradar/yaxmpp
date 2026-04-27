@@ -28,18 +28,18 @@ import Network.XMPP.Session
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 
-type MyselfPresenceMap = Map XMPPResource PresenceRef
+type MyselfPresenceMap m = Map XMPPResource (PresenceRef m)
 
-type MyPresenceSlot m = Slot m (PresenceEvent XMPPResource)
+type MyPresenceSlot m = Slot m (PresenceEvent m XMPPResource)
 
 data MyPresencePlugin m = MyPresencePlugin
   { myPresencePluginSession :: StanzaSession m
   , myPresencePluginPresencePlugin :: PresencePlugin m
   , myPresencePluginSlot :: MyPresenceSlot m
-  , myPresencePluginRef :: IORef MyselfPresenceMap
+  , myPresencePluginRef :: IORef (MyselfPresenceMap m)
   }
 
-instance (MonadStream m) => Handler m PresenceUpdate () (MyPresencePlugin m) where
+instance (MonadStream m) => Handler m (PresenceUpdate m) () (MyPresencePlugin m) where
   tryHandle (MyPresencePlugin {..}) (ResourcePresence from pres)
     | fullBare from == fullBare (sessionAddress $ ssSession myPresencePluginSession) = do
         presences <- readIORef myPresencePluginRef
@@ -54,7 +54,7 @@ instance (MonadStream m) => Handler m PresenceUpdate () (MyPresencePlugin m) whe
 getMyPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (MyPresencePlugin m)
 getMyPresencePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (MyPresencePlugin m)) $ pluginsHooksSet pluginsRef
 
-myPresenceGet :: (MonadStream m) => MyPresencePlugin m -> m MyselfPresenceMap
+myPresenceGet :: (MonadStream m) => MyPresencePlugin m -> m (MyselfPresenceMap m)
 myPresenceGet MyPresencePlugin {myPresencePluginRef} = readIORef myPresencePluginRef
 
 myPresenceSend :: (MonadStream m) => MyPresencePlugin m -> Maybe Presence -> m ()
