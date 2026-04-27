@@ -7,6 +7,7 @@ module Network.XMPP.XEP.MUC (
   MUCRef,
   mucRoom,
   mucSlot,
+  mucState,
   MUCRole (..),
   MUCAffiliation (..),
   MUCLeaveReason (..),
@@ -29,6 +30,7 @@ module Network.XMPP.XEP.MUC (
   MUCPlugin,
   mucPluginSlot,
   getMUCPlugin,
+  lookupMUCRoom,
   mucPlugin,
 ) where
 
@@ -61,9 +63,11 @@ import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
+import Data.ClassBox (Unconstrained)
 import Data.Injective
 import Data.List (partition)
 import qualified Data.Registry as Reg
+import Data.Registry.Mutable (RegistryRef)
 import qualified Data.Registry.Mutable as RegRef
 import Data.Time.XMPP
 import Network.XMPP.Address
@@ -76,7 +80,7 @@ import Network.XMPP.XEP.Disco
 import Network.XMPP.XML
 
 data MUCEvent m
-  = MUCJoinedRoom FullJID (MUC m)
+  = MUCJoinedRoom FullJID (MUCRef m)
   | MUCRejected FullJID StanzaError
   | MUCLeftRoom FullJID MUCLeaveReason
   deriving (Show)
@@ -98,7 +102,7 @@ data MUC m = MUC
   deriving (Show)
 
 data MUCJoinResult m
-  = MUCJoinFinished (MUC m)
+  = MUCJoinFinished (MUCRef m)
   | MUCJoinError StanzaError
   | MUCJoinStopped [Element]
   deriving (Show)
@@ -217,6 +221,11 @@ data PendingMUC m = PendingMUC
 data MUCRef m = MUCRef
   { mucRoom :: MUC m
   , mucSlot :: MUCRoomSlot m
+  , mucState :: RegistryRef Unconstrained
+  {- ^ Mutable per-room registry. Created when the join is initiated and
+  preserved for the lifetime of the room (dropped when the room is left).
+  Holds a 'DiscoNodeCache' that backs all disco-info lookups for the room.
+  -}
   }
 
 -- | Hand-written 'Show' that omits the per-room slot.
@@ -417,15 +426,14 @@ data MUCHandleResult a
 instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
   tryHandle _ (AllResourcesOffline _ _) = return Nothing -- MUC rooms don't use bare JID presence
   tryHandle (MUCPlugin {..}) (ResourcePresence addr mpres) = do
-    let mucEventHandler = mucPluginSlot
-        bare = fullBare addr
+    let bare = fullBare addr
         resource = fullResource addr
     processed <- atomicModifyIORef' mucPluginRooms $ \rooms ->
       case M.lookup bare rooms of
         Just (Right MUCRef {mucRoom = MUC {..}})
           | ResourceUnavailable _ <- mpres
           , resource == mucNick ->
-              (M.delete bare rooms, MUCRun $ Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft)
+              (M.delete bare rooms, MUCRun $ Slot.call mucPluginSlot $ MUCLeftRoom addr MUCLeft)
         Just (Right ref@MUCRef {mucRoom = room@(MUC {..}), mucSlot = slot}) ->
           case presenceUpdate resource mpres mucMembers of
             Nothing -> (rooms, MUCHandled)
@@ -449,18 +457,20 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
                       , mucNick = pmucNick pending
                       , mucNonAnonymous = False
                       }
-                  ref = MUCRef {mucRoom = room', mucSlot = pmucSlot pending}
                   joinRoom = do
-                    Slot.call mucEventHandler $ MUCJoinedRoom addr room'
-                    pmucOnJoined pending (MUCJoinFinished room')
+                    state <- RegRef.new
+                    let ref = MUCRef {mucRoom = room', mucSlot = pmucSlot pending, mucState = state}
+                    atomicModifyIORef' mucPluginRooms $ \rs -> (M.insert bare (Right ref) rs, ())
+                    Slot.call mucPluginSlot $ MUCJoinedRoom addr ref
+                    pmucOnJoined pending $ MUCJoinFinished ref
                in if resource == pmucNick pending
-                    then (M.insert bare (Right ref) rooms, MUCRun joinRoom)
+                    then (rooms, MUCRun joinRoom)
                     else (M.insert bare (Left pending') rooms, MUCHandled)
             ResourceUnavailable err
               | resource == pmucNick pending ->
                   let leaveRoom = do
-                        Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft
-                        pmucOnJoined pending (MUCJoinStopped err)
+                        Slot.call mucPluginSlot $ MUCLeftRoom addr MUCLeft
+                        pmucOnJoined pending $ MUCJoinStopped err
                    in (M.delete bare rooms, MUCRun leaveRoom)
             _ -> (rooms, MUCHandled)
         Nothing -> (rooms, NotMUCEvent)
@@ -473,6 +483,16 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
 
 getMUCPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (MUCPlugin m)
 getMUCPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (MUCPlugin m)) $ pluginsHooksSet pluginsRef
+
+{- | Look up a joined room by its bare JID. Returns 'Nothing' if the room is
+not yet joined (still pending) or unknown.
+-}
+lookupMUCRoom :: (MonadStream m) => MUCPlugin m -> BareJID -> m (Maybe (MUCRef m))
+lookupMUCRoom MUCPlugin {mucPluginRooms} bare = do
+  rooms <- readIORef mucPluginRooms
+  return $ case M.lookup bare rooms of
+    Just (Right ref) -> Just ref
+    _ -> Nothing
 
 mucPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 mucPlugin pluginsRef = do

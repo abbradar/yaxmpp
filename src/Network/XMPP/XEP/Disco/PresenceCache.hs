@@ -51,7 +51,8 @@ instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either Stan
             mCache <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) state
             case mCache of
               Just cache -> Just <$> DiscoNodeCache.get pcpDisco cache addr node handler
-              Nothing -> fail "DiscoNodeCache not found in Presence"
+              -- There may be a brief race condition.
+              Nothing -> return Nothing
           Nothing -> return Nothing
   tryHandle _ _ = return Nothing
 

@@ -105,7 +105,7 @@ instance (MonadStream m) => SlotSignal m AddressedIMMessage (IRCBridgePlugin m) 
 
 instance (MonadStream m) => SlotSignal m (MUCEvent m) (IRCBridgePlugin m) where
   emitSignal (IRCBridgePlugin {..}) = \case
-    MUCJoinedRoom jid (MUC {..}) -> do
+    MUCJoinedRoom jid (mucRoom -> MUC {..}) -> do
       nick <- ircGetNick
       let channel = "#" <> T.encodeUtf8 (localText $ bareLocal $ fullBare jid)
           users = B.intercalate " " $ map (T.encodeUtf8 . resourceText) $ M.keys mucMembers

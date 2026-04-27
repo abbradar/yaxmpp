@@ -51,6 +51,7 @@ import Network.XMPP.XEP.DelayedDelivery
 import Network.XMPP.XEP.DeliveryReceipts
 import Network.XMPP.XEP.Disco
 import Network.XMPP.XEP.Disco.HomeCache
+import Network.XMPP.XEP.Disco.MUCCache
 import Network.XMPP.XEP.Disco.PresenceCache
 import Network.XMPP.XEP.EntityTime
 import Network.XMPP.XEP.MAM
@@ -238,6 +239,7 @@ main = do
         imPlugin pluginsRef
         delayedDeliveryPlugin pluginsRef
         mucPlugin pluginsRef
+        mucDiscoCachePlugin pluginsRef
         chatStatePlugin pluginsRef
         chatMarkersPlugin pluginsRef
         carbonsPlugin pluginsRef
