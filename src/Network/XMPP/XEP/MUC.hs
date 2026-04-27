@@ -217,6 +217,12 @@ data MUCRef m = MUCRef
   , mucSlot :: MUCRoomSlot m
   }
 
+-- | Hand-written 'Show' that omits the per-room slot.
+instance Show (MUCRef m) where
+  showsPrec p MUCRef {mucRoom} =
+    showParen (p > 10) $
+      showString "MUCRef {mucRoom = " . showsPrec 0 mucRoom . showString "}"
+
 type MUCSlot m = Slot m (MUCEvent m)
 
 data MUCPlugin m = MUCPlugin

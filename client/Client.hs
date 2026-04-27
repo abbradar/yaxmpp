@@ -504,7 +504,7 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             [] ->
                               runInBase $ mamMetadata mamP $ \case
-                                Right m -> writeMessage [i|MAM metadata: #{show m}|]
+                                Right m -> writeMessage [i|MAM metadata: #{m}|]
                                 Left e -> writeMessage [i|MAM metadata failed: #{e}|]
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []

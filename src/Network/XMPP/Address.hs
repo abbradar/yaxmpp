@@ -66,7 +66,7 @@ data XMPPAddress = XMPPAddress
   deriving (Eq, Ord)
 
 instance Show XMPPAddress where
-  show = show . addressToText
+  showsPrec p = showsPrec p . addressToText
 
 instance FromJSON XMPPAddress where
   parseJSON = withText "XMPPAddress" $ \t -> case xmppAddress t of
@@ -185,7 +185,7 @@ data BareJID = BareJID
   deriving (Eq, Ord)
 
 instance Show BareJID where
-  show = show . addressToText
+  showsPrec p = showsPrec p . addressToText
 
 instance FromJSON BareJID where
   parseJSON v = do
@@ -208,7 +208,7 @@ data FullJID = FullJID
   deriving (Eq, Ord)
 
 instance Show FullJID where
-  show = show . addressToText
+  showsPrec p = showsPrec p . addressToText
 
 instance FromJSON FullJID where
   parseJSON v = do

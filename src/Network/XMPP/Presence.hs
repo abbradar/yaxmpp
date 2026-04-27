@@ -110,14 +110,18 @@ data PresenceRef m = PresenceRef
   -}
   }
 
+-- | Hand-written 'Show' that omits the mutable registry and per-presence slot.
 instance Show (PresenceRef m) where
-  show PresenceRef {presenceValue} = "PresenceRef { presenceValue = " ++ show presenceValue ++ " }"
+  showsPrec p PresenceRef {presenceValue} =
+    showParen (p > 10) $
+      showString "PresenceRef {presenceValue = " . showsPrec 0 presenceValue . showString "}"
 
 -- | Status of a single resource.
 data ResourceStatus m
   = ResourceAvailable (PresenceRef m)
   | -- | Resource went unavailable; carries extended stanza elements.
     ResourceUnavailable [Element]
+  deriving (Show)
 
 {- | A presence update from a specific resource, or a bare-JID unavailable
 notification meaning all resources are offline (RFC 6121 §4.5.4).
@@ -126,6 +130,7 @@ data PresenceUpdate m
   = ResourcePresence FullJID (ResourceStatus m)
   | -- | All resources offline; carries the bare JID and extended stanza elements.
     AllResourcesOffline BareJID [Element]
+  deriving (Show)
 
 showPresenceUpdate :: PresenceUpdate m -> String
 showPresenceUpdate (ResourcePresence faddr (ResourceAvailable _)) = "ResourcePresence " <> show faddr <> " (ResourceAvailable …)"
