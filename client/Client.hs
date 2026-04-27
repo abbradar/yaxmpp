@@ -121,6 +121,15 @@ instance (MonadStream m) => SlotSignal m (MUCEvent m) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) event =
     clientWriteMessage [i|Got MUC event: #{event}|]
 
+data ClientMUCRoom m = ClientMUCRoom
+  { cmrAddr :: BareJID
+  , cmrWriteMessage :: String -> m ()
+  }
+
+instance (MonadStream m) => SlotSignal m (MUC m, RoomEvent m) (ClientMUCRoom m) where
+  emitSignal ClientMUCRoom {..} (_, event) =
+    cmrWriteMessage [i|#{addressToText cmrAddr} event: #{event}|]
+
 instance (MonadStream m) => SlotSignal m (XMPPAddress, MessageType, ChatState) (ClientPlugin m) where
   emitSignal (ClientPlugin {..}) (addr, _msgType, cs) =
     clientWriteMessage [i|#{addressToText addr} is #{cs}|]
@@ -443,13 +452,12 @@ main = do
                                       | registered /= fullResource addr ->
                                           writeMessage [i|#{addressToText $ fullBare addr} using server-suggested nick: #{resourceText registered}|]
                                     _ -> return ()
+                                  let roomHandler = ClientMUCRoom (fullBare addr) writeMessage
                                   mucJoin
                                     mucP
                                     addr {fullResource = nick}
                                     defaultMUCJoinSettings
-                                    ( \_ event ->
-                                        writeMessage [i|#{addressToText $ fullBare addr} event: #{event}|]
-                                    )
+                                    (Slot.pushNewOrFailM roomHandler)
                                     ( \result ->
                                         writeMessage [i|#{addressToText $ fullBare addr} join result: #{result}|]
                                     )

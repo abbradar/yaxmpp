@@ -3,7 +3,8 @@
 module Network.XMPP.XEP.MUC (
   MUCEvent (..),
   RoomEvent (..),
-  MUCHandler,
+  MUCRoomSlot,
+  MUCRef (..),
   MUCRole (..),
   MUCAffiliation (..),
   MUCLeaveReason (..),
@@ -49,7 +50,7 @@ import Text.XML
 import Text.XML.Cursor hiding (element)
 import qualified Text.XML.Cursor as XC
 import TextShow (showt)
-import UnliftIO.Exception (bracketOnError)
+import UnliftIO.Exception (bracketOnError, finally)
 import UnliftIO.IORef
 
 import Control.Codec (Codec (..))
@@ -83,7 +84,8 @@ data RoomEvent m
   | RoomSubject
   deriving (Show)
 
-type MUCHandler m = MUC m -> RoomEvent m -> m ()
+-- | Per-room slot fired with the latest 'MUC' state and the event that produced it.
+type MUCRoomSlot m = Slot m (MUC m, RoomEvent m)
 
 data MUC m = MUC
   { mucSubject :: Maybe (XMPPResource, Text)
@@ -206,13 +208,13 @@ mucInfoToElement (MUCInfo {..}) =
 data PendingMUC m = PendingMUC
   { pmucMembers :: Map XMPPResource (PresenceRef m)
   , pmucNick :: XMPPResource
-  , pmucHandler :: MUCHandler m
+  , pmucSlot :: MUCRoomSlot m
   , pmucOnJoined :: MUCJoinResult m -> m ()
   }
 
 data MUCRef m = MUCRef
   { mucRoom :: MUC m
-  , mucHandler :: MUCHandler m
+  , mucSlot :: MUCRoomSlot m
   }
 
 type MUCSlot m = Slot m (MUCEvent m)
@@ -305,13 +307,19 @@ mucGetRegisteredNick (MUCPlugin {mucPluginDisco}) room handler =
           Nothing -> Left $ badRequest "invalid resource name proposed by server"
         _ -> Right Nothing
 
-mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> MUCHandler m -> (MUCJoinResult m -> m ()) -> m ()
-mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) handler pmucOnJoined = do
+{- | Join a MUC room. The 'setupSlot' callback runs after the slot is created
+and the pending MUC value is inserted into the rooms map, but before the
+join presence is sent — giving the caller a chance to subscribe before any
+events fire.
+-}
+mucJoin :: forall m. (MonadStream m) => MUCPlugin m -> FullJID -> MUCJoinSettings -> (MUCRoomSlot m -> m ()) -> (MUCJoinResult m -> m ()) -> m ()
+mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {..}, ..}) setupSlot pmucOnJoined = do
+  pmucSlot <- Slot.new
   let initialRoom =
         PendingMUC
           { pmucNick = fullResource addr
           , pmucMembers = M.empty
-          , pmucHandler = handler
+          , pmucSlot = pmucSlot
           , ..
           }
       roomAddr = fullBare addr
@@ -335,13 +343,14 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
           []
           [ NodeElement $ element (mucName "history") historyAttrs []
           ]
-      joinRoom = do
+      sendRequest = do
         presStanza <- presenceStanza mucPluginPresence $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
         void $
           stanzaSend mucPluginSession $
             presStanza
               { ostTo = Just $ toXMPPAddress addr
               }
+      joinRoom = setupSlot pmucSlot `finally` sendRequest
   bracketOnError takeRoom (const cleanupRoom) (const joinRoom)
 
 data MUCAlreadyLeftError = MUCAlreadyLeftError
@@ -381,11 +390,11 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
       (subjE : _) -> do
         rooms <- readIORef mucPluginRooms
         case M.lookup bare rooms of
-          Just (Right ref@MUCRef {mucRoom = room, mucHandler = handler}) -> do
+          Just (Right ref@MUCRef {mucRoom = room, mucSlot = slot}) -> do
             let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
                 room' = room {mucSubject = subj}
             atomicWriteIORef mucPluginRooms $ M.insert bare (Right ref {mucRoom = room'}) rooms
-            handler room' RoomSubject
+            Slot.call slot (room', RoomSubject)
             return $ Just InSilent
           _ -> return Nothing
       _ -> return Nothing
@@ -408,7 +417,7 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
           | ResourceUnavailable _ <- mpres
           , resource == mucNick ->
               (M.delete bare rooms, MUCRun $ Slot.call mucEventHandler $ MUCLeftRoom addr MUCLeft)
-        Just (Right ref@MUCRef {mucRoom = room@(MUC {..}), mucHandler = handler}) ->
+        Just (Right ref@MUCRef {mucRoom = room@(MUC {..}), mucSlot = slot}) ->
           case presenceUpdate resource mpres mucMembers of
             Nothing -> (rooms, MUCHandled)
             Just (members, event) ->
@@ -417,7 +426,7 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
                     Added _ presRef -> MUCJoined presRef
                     Updated _ presRef -> MUCUpdated presRef
                     Removed _ _ -> MUCRemoved MUCLeft
-               in (M.insert bare (Right ref {mucRoom = room'}) rooms, MUCRun $ handler room' $ RoomPresence resource roomEvent)
+               in (M.insert bare (Right ref {mucRoom = room'}) rooms, MUCRun $ Slot.call slot (room', RoomPresence resource roomEvent))
         Just (Left pending) ->
           case mpres of
             ResourceAvailable presRef ->
@@ -430,7 +439,7 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
                       , mucNick = pmucNick pending
                       , mucNonAnonymous = False
                       }
-                  ref = MUCRef {mucRoom = room', mucHandler = pmucHandler pending}
+                  ref = MUCRef {mucRoom = room', mucSlot = pmucSlot pending}
                   joinRoom = do
                     Slot.call mucEventHandler $ MUCJoinedRoom addr room'
                     pmucOnJoined pending (MUCJoinFinished room')

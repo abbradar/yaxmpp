@@ -71,6 +71,28 @@ data IRCBridgePlugin m = IRCBridgePlugin
   , ircUserReply :: ByteString -> ByteString -> [ByteString] -> m ()
   }
 
+data IRCBridgeRoom m = IRCBridgeRoom
+  { irbRoomChannel :: ByteString
+  , irbRoomGetNick :: m ByteString
+  , irbRoomServReply :: ByteString -> [ByteString] -> m ()
+  , irbRoomUserReply :: ByteString -> ByteString -> [ByteString] -> m ()
+  }
+
+instance (MonadStream m) => SlotSignal m (MUC m, RoomEvent m) (IRCBridgeRoom m) where
+  emitSignal IRCBridgeRoom {..} (MUC {..}, event) = case event of
+    RoomPresence otherNick' (MUCJoined _) -> do
+      let otherNick = T.encodeUtf8 $ resourceText otherNick'
+      irbRoomUserReply otherNick "JOIN" [irbRoomChannel]
+    RoomPresence otherNick' (MUCRemoved _) -> do
+      let otherNick = T.encodeUtf8 $ resourceText otherNick'
+      irbRoomUserReply otherNick "PART" [irbRoomChannel]
+    RoomSubject -> do
+      nick <- irbRoomGetNick
+      case mucSubject of
+        Just (_, subj) -> irbRoomServReply rplTOPIC [nick, irbRoomChannel, T.encodeUtf8 subj]
+        _ -> return ()
+    _ -> return ()
+
 instance (MonadStream m) => SlotSignal m AddressedIMMessage (IRCBridgePlugin m) where
   emitSignal (IRCBridgePlugin {..}) AddressedIMMessage {imFrom = addr@(XMPPAddress {..}), imMessage = IMMessage {..}} =
     if addressDomain == ircConferenceServer
@@ -210,26 +232,19 @@ main = runStderrLoggingT $ do
                       nick0 <- readMVar nickVar
                       let room = fromJust $ localFromText $ T.tail $ T.decodeLatin1 channel
                           joinOpts = defaultMUCJoinSettings {joinHistory = defaultMUCHistorySettings {histMaxStanzas = Just 0}}
+                          roomHandler =
+                            IRCBridgeRoom
+                              { irbRoomChannel = channel
+                              , irbRoomGetNick = getNick
+                              , irbRoomServReply = ircServReply
+                              , irbRoomUserReply = ircUserReply
+                              }
                       handle (\MUCAlreadyJoinedError -> return ()) $
                         mucJoin
                           mucP
                           (FullJID (BareJID room $ conferenceServer settings) nick0)
                           joinOpts
-                          ( \(MUC {..}) event ->
-                              case event of
-                                RoomPresence otherNick' (MUCJoined _) -> do
-                                  let otherNick = T.encodeUtf8 $ resourceText otherNick'
-                                  ircUserReply otherNick "JOIN" [channel]
-                                RoomPresence otherNick' (MUCRemoved _) -> do
-                                  let otherNick = T.encodeUtf8 $ resourceText otherNick'
-                                  ircUserReply otherNick "PART" [channel]
-                                RoomSubject -> do
-                                  nick <- getNick
-                                  case mucSubject of
-                                    Just (_, subj) -> ircServReply rplTOPIC [nick, channel, T.encodeUtf8 subj]
-                                    _ -> return ()
-                                _ -> return ()
-                          )
+                          (Slot.pushNewOrFailM roomHandler)
                           (\_ -> return ())
                   | cmd == "USER"
                   , (mnick : _) <- params -> do
