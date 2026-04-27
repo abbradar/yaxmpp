@@ -33,13 +33,13 @@ data PresenceCachePlugin m = PresenceCachePlugin
 
 -- | On every available-presence event, ensure the resource has a 'DiscoNodeCache' in its mutable registry.
 instance (MonadStream m) => SlotSignal m (PresenceUpdate m) (PresenceCachePlugin m) where
-  emitSignal _ (ResourcePresence _ (ResourceAvailable PresenceRef {presenceState})) = do
-    existing <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) presenceState
+  emitSignal _ (ResourcePresence _ (ResourceAvailable (presenceState -> state))) = do
+    existing <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) state
     case existing of
       Just _ -> return ()
       Nothing -> do
         cache <- DiscoNodeCache.new
-        RegRef.insert (cache :: DiscoNodeCache.DiscoNodeCache m) presenceState
+        RegRef.insert (cache :: DiscoNodeCache.DiscoNodeCache m) state
   emitSignal _ _ = return ()
 
 instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either StanzaError DiscoEntity -> m ()) () (PresenceCachePlugin m) where
@@ -47,8 +47,8 @@ instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either Stan
     | Just full <- fullJidGet addr = do
         presences <- getAllPresences pcpPresence
         case M.lookup full presences of
-          Just PresenceRef {presenceState} -> do
-            mCache <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) presenceState
+          Just (presenceState -> state) -> do
+            mCache <- RegRef.lookup (Proxy :: Proxy (DiscoNodeCache.DiscoNodeCache m)) state
             case mCache of
               Just cache -> Just <$> DiscoNodeCache.get pcpDisco cache addr node handler
               Nothing -> fail "DiscoNodeCache not found in Presence"

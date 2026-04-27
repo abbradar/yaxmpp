@@ -4,7 +4,9 @@ module Network.XMPP.XEP.MUC (
   MUCEvent (..),
   RoomEvent (..),
   MUCRoomSlot,
-  MUCRef (..),
+  MUCRef,
+  mucRoom,
+  mucSlot,
   MUCRole (..),
   MUCAffiliation (..),
   MUCLeaveReason (..),
@@ -84,8 +86,8 @@ data RoomEvent m
   | RoomSubject
   deriving (Show)
 
--- | Per-room slot fired with the latest 'MUC' state and the event that produced it.
-type MUCRoomSlot m = Slot m (MUC m, RoomEvent m)
+-- | Per-room slot fired with the latest 'MUCRef' and the event that produced it.
+type MUCRoomSlot m = Slot m (MUCRef m, RoomEvent m)
 
 data MUC m = MUC
   { mucSubject :: Maybe (XMPPResource, Text)
@@ -399,8 +401,9 @@ instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
           Just (Right ref@MUCRef {mucRoom = room, mucSlot = slot}) -> do
             let subj = (,mconcat $ fromElement subjE $/ content) <$> addressResource addr
                 room' = room {mucSubject = subj}
-            atomicWriteIORef mucPluginRooms $ M.insert bare (Right ref {mucRoom = room'}) rooms
-            Slot.call slot (room', RoomSubject)
+                ref' = ref {mucRoom = room'}
+            atomicWriteIORef mucPluginRooms $ M.insert bare (Right ref') rooms
+            Slot.call slot (ref', RoomSubject)
             return $ Just InSilent
           _ -> return Nothing
       _ -> return Nothing
@@ -428,11 +431,12 @@ instance (MonadStream m) => Handler m (PresenceUpdate m) () (MUCPlugin m) where
             Nothing -> (rooms, MUCHandled)
             Just (members, event) ->
               let room' = room {mucMembers = members}
+                  ref' = ref {mucRoom = room'}
                   roomEvent = case event of
                     Added _ presRef -> MUCJoined presRef
                     Updated _ presRef -> MUCUpdated presRef
                     Removed _ _ -> MUCRemoved MUCLeft
-               in (M.insert bare (Right ref {mucRoom = room'}) rooms, MUCRun $ Slot.call slot (room', RoomPresence resource roomEvent))
+               in (M.insert bare (Right ref') rooms, MUCRun $ Slot.call slot (ref', RoomPresence resource roomEvent))
         Just (Left pending) ->
           case mpres of
             ResourceAvailable presRef ->

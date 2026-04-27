@@ -126,7 +126,7 @@ data ClientMUCRoom m = ClientMUCRoom
   , cmrWriteMessage :: String -> m ()
   }
 
-instance (MonadStream m) => SlotSignal m (MUC m, RoomEvent m) (ClientMUCRoom m) where
+instance (MonadStream m) => SlotSignal m (MUCRef m, RoomEvent m) (ClientMUCRoom m) where
   emitSignal ClientMUCRoom {..} (_, event) =
     cmrWriteMessage [i|#{addressToText cmrAddr} event: #{event}|]
 

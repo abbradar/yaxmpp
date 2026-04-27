@@ -35,13 +35,13 @@ data VersionPresenceCachePlugin m = VersionPresenceCachePlugin
   }
 
 instance (MonadStream m) => SlotSignal m (PresenceUpdate m) (VersionPresenceCachePlugin m) where
-  emitSignal (VersionPresenceCachePlugin {vpcpVersion}) (ResourcePresence faddr (ResourceAvailable PresenceRef {presenceState})) = do
-    existing <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) presenceState
+  emitSignal (VersionPresenceCachePlugin {vpcpVersion}) (ResourcePresence faddr (ResourceAvailable (presenceState -> state))) = do
+    existing <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) state
     case existing of
       Just _ -> return ()
       Nothing -> do
         lazy <- AsyncMemo.new $ requestVersion (versionPluginSession vpcpVersion) faddr
-        RegRef.insert (LazyVersion lazy :: LazyVersion m) presenceState
+        RegRef.insert (LazyVersion lazy :: LazyVersion m) state
   emitSignal _ _ = return ()
 
 instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionInfo -> m ()) () (VersionPresenceCachePlugin m) where
@@ -49,8 +49,8 @@ instance (MonadStream m) => Handler m (XMPPAddress, Either StanzaError VersionIn
     | Just full <- fullJidGet addr = do
         presences <- getAllPresences vpcpPresence
         case M.lookup full presences of
-          Just PresenceRef {presenceState} -> do
-            mLazy <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) presenceState
+          Just (presenceState -> state) -> do
+            mLazy <- RegRef.lookup (Proxy :: Proxy (LazyVersion m)) state
             case mLazy of
               Just (LazyVersion lazy) -> Just <$> AsyncMemo.get lazy handler
               Nothing -> fail "LazyVersion not found in Presence"

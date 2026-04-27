@@ -78,8 +78,8 @@ data IRCBridgeRoom m = IRCBridgeRoom
   , irbRoomUserReply :: ByteString -> ByteString -> [ByteString] -> m ()
   }
 
-instance (MonadStream m) => SlotSignal m (MUC m, RoomEvent m) (IRCBridgeRoom m) where
-  emitSignal IRCBridgeRoom {..} (MUC {..}, event) = case event of
+instance (MonadStream m) => SlotSignal m (MUCRef m, RoomEvent m) (IRCBridgeRoom m) where
+  emitSignal IRCBridgeRoom {..} (mucRoom -> MUC {..}, event) = case event of
     RoomPresence otherNick' (MUCJoined _) -> do
       let otherNick = T.encodeUtf8 $ resourceText otherNick'
       irbRoomUserReply otherNick "JOIN" [irbRoomChannel]
