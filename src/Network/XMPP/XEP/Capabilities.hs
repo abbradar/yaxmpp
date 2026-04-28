@@ -33,6 +33,7 @@ import Data.Proxy
 import qualified Data.Set as S
 import Data.String.Interpolate (i)
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import GHC.Generics (Generic)
 import Text.XML
@@ -317,8 +318,8 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError (CapsPlugin m)
     (mcaps1, mcaps2) <- case cached of
       Just pair -> return pair
       Nothing -> do
-        merged <- readIORef (discoPluginMerged capsPluginDisco)
-        let pair = computeOwnCaps cp (discoNEntity $ discoINode merged)
+        merged <- readIORef (discoPluginMyselfMerged capsPluginDisco)
+        let pair = computeOwnCaps cp (discoEntityFromNode (discoINode merged))
         atomicWriteIORef capsPluginOwnCaps (Just pair)
         return pair
     let raw = presenceRaw pres
@@ -446,6 +447,15 @@ instance (MonadStream m) => Handler m (XMPPAddress, Maybe DiscoNode, Either Stan
           Just entity -> Just <$> handler (Right entity)
           Nothing -> Just <$> fetchAndCache cp addr first candidates handler
 
+{- | XEP-0115 §3.4: peers will disco us with @node='\<our-node\>#\<ver\>'@.
+Recognize any such synthetic node and respond with our bare entity.
+-}
+instance (MonadStream m) => Handler m (DiscoInfo, Maybe DiscoNode) DiscoEntity (CapsPlugin m) where
+  tryHandle CapsPlugin {capsPluginNode} (info, Just node)
+    | (capsPluginNode <> "#") `T.isPrefixOf` node =
+        return $ Just $ discoEntityFromNode (discoINode info)
+  tryHandle _ _ = return Nothing
+
 {- | XEP-0115 §3.4 recommends issuing the disco IQ with @node='\<node\>#\<ver\>'@
 to handle implementations that disambiguate by node. Caps 2.0 has no node,
 so we fall back to a bare disco-info request.
@@ -507,3 +517,4 @@ capsPlugin pluginsRef = do
   registerCacheGetter pluginsRef (CapsPluginCache plugin)
   Filter.pushNewOrFailM plugin (presencePluginFilters capsPluginPresence)
   HL.pushNewOrFailM plugin (discoPluginEntityGetHandlers capsPluginDisco)
+  HL.pushNewOrFailM plugin (discoPluginMyEntityHandlers capsPluginDisco)

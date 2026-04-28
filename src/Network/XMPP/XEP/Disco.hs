@@ -10,9 +10,12 @@ module Network.XMPP.XEP.Disco (
   discoPluginSession,
   discoPluginEntityCacheHandlers,
   discoPluginEntityGetHandlers,
-  discoPluginMerged,
-  discoPluginMergedSlot,
+  discoPluginMyEntityHandlers,
+  discoPluginMyselfMerged,
+  discoPluginMergedMyInfoSlot,
   getDiscoPlugin,
+  DiscoMyEntityHandlers,
+  discoEntityFromNode,
   DiscoEntityCacheHandlers,
   DiscoEntityGetHandlers,
   DiscoNode,
@@ -383,51 +386,75 @@ emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
 class (Typeable a) => DiscoInfoProvider a where
   discoProviderInfo :: a -> DiscoInfo
 
+{- | Dynamic handler list for incoming @disco#info@ queries directed at us.
+Each handler receives the merged 'DiscoInfo' and the optional @node@
+attribute, and may return 'Just' a 'DiscoEntity' to handle the query, or
+'Nothing' to fall through to the next handler (and ultimately to the
+default lookup in 'discoIChildren'). 'disco#items' queries always go
+through the default lookup.
+-}
+type DiscoMyEntityHandlers m = HandlerList m (DiscoInfo, Maybe DiscoNode) DiscoEntity
+
 data DiscoPlugin m = DiscoPlugin
   { discoPluginSession :: StanzaSession m
-  , discoPluginProviders :: RegistryRef DiscoInfoProvider
-  , discoPluginMerged :: IORef DiscoInfo
+  , discoPluginMyselfProviders :: RegistryRef DiscoInfoProvider
+  , discoPluginMyselfMerged :: IORef DiscoInfo
   , discoPluginEntityCacheHandlers :: DiscoEntityCacheHandlers m
   , discoPluginEntityGetHandlers :: DiscoEntityGetHandlers m
-  {- ^ Fired with the freshly merged 'DiscoInfo' after every successful
-  'addDiscoInfo' call. Subscribe to recompute derived data (e.g.
-  XEP-0115/0390 verification hashes).
+  , discoPluginMyEntityHandlers :: DiscoMyEntityHandlers m
+  -- ^ Consulted before the default 'discoIChildren' lookup for incoming
+  -- @disco#info@ queries; lets plugins synthesize responses for nodes
+  -- they own (e.g. XEP-0115 caps @\<node\>#\<ver\>@).
+  , discoPluginMergedMyInfoSlot :: Slot m DiscoInfo
+  {- ^ Fires with the freshly merged 'DiscoInfo' for our own entity after
+  every successful 'addDiscoInfo' call. Subscribe to react to changes in
+  what we advertise (e.g. log them, update derived UI state). Note that
+  this slot only covers our own disco info; remote entities' disco info
+  is fetched via 'getDiscoEntity'.
   -}
-  , discoPluginMergedSlot :: Slot m DiscoInfo
   }
 
--- | Add disco#items feature to a node info if it has items.
-addItemsFeature :: DiscoNodeInfo -> Maybe DiscoNodeInfo
-addItemsFeature node = case discoNItems node of
-  Nothing -> Just node
-  Just _ -> discoNodeInfoUnion node $ featuresDiscoNodeInfo $ S.singleton discoItemsNS
+{- | Project the canonical 'DiscoEntity' out of a 'DiscoNodeInfo': the
+entity's features automatically gain @disco#items@ when the node has any
+items. Use this everywhere we need "the entity as advertised", so that
+in-memory 'DiscoNodeInfo' values don't need to bake the items feature in.
+-}
+discoEntityFromNode :: DiscoNodeInfo -> DiscoEntity
+discoEntityFromNode DiscoNodeInfo {discoNEntity, discoNItems} = case discoNItems of
+  Nothing -> discoNEntity
+  Just _ -> discoNEntity {discoFeatures = S.insert discoItemsNS (discoFeatures discoNEntity)}
 
 mergeProviders :: Registry DiscoInfoProvider -> Maybe DiscoInfo
-mergeProviders reg = do
+mergeProviders reg =
   let infos = map (\(ClassBox p) -> discoProviderInfo p) $ Reg.toList reg
-  r <- foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos
-  rootNode <- addItemsFeature $ discoINode r
-  children <- mapM addItemsFeature $ discoIChildren r
-  return r {discoINode = rootNode, discoIChildren = children}
+   in foldr (\a acc -> acc >>= discoInfoUnion a) (Just emptyDiscoInfo) infos
 
 instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin m) where
-  tryHandle (DiscoPlugin {discoPluginMerged}) (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
-    DiscoInfo {discoINode = DiscoNodeInfo {..}, ..} <- readIORef discoPluginMerged
-    let res
-          | elementName req == infoName = Just $ fmap (infoName,) $ case getAttr "node" req of
-              Nothing -> Just $ emitDiscoEntity discoNEntity
-              Just node | Just DiscoNodeInfo {discoNEntity = entity} <- M.lookup node discoIChildren -> Just $ emitDiscoEntity entity
-              _ -> Nothing
-          | elementName req == itemsName = Just $ fmap (itemsName,) $ case getAttr "node" req of
-              Nothing -> fmap emitDiscoItems discoNItems
-              Just node | Just DiscoNodeInfo {discoNItems = Just items} <- M.lookup node discoIChildren -> Just $ emitDiscoItems items
-              _ -> Nothing
-          | otherwise = Nothing
-    case res of
-      Nothing -> return Nothing
-      Just Nothing -> return $ Just $ IQError $ itemNotFound "Unknown node"
-      Just (Just (name, elems)) ->
-        return $ Just $ IQResult [element name (maybeToList $ ("node",) <$> getAttr "node" req) $ map NodeElement elems]
+  tryHandle (DiscoPlugin {discoPluginMyselfMerged, discoPluginMyEntityHandlers}) (InRequestIQ {iriType = IQGet, iriChildren = [req]}) = do
+    info@DiscoInfo {discoINode = root, discoIChildren} <- readIORef discoPluginMyselfMerged
+    let mNode = getAttr "node" req
+        nodeAttr = maybeToList $ ("node",) <$> mNode
+    if elementName req == infoName
+      then do
+        dynamic <- HL.call discoPluginMyEntityHandlers (info, mNode)
+        let entity = case dynamic of
+              Just e -> Just e
+              Nothing -> case mNode of
+                Nothing -> Just $ discoEntityFromNode root
+                Just node -> discoEntityFromNode <$> M.lookup node discoIChildren
+        Just <$> case entity of
+          Just e -> return $ IQResult [element infoName nodeAttr $ map NodeElement (emitDiscoEntity e)]
+          Nothing -> return $ IQError $ itemNotFound "Unknown node"
+      else
+        if elementName req == itemsName
+          then
+            let items = case mNode of
+                  Nothing -> discoNItems root
+                  Just node -> M.lookup node discoIChildren >>= discoNItems
+             in Just <$> case items of
+                  Just is -> return $ IQResult [element itemsName nodeAttr $ map NodeElement (emitDiscoItems is)]
+                  Nothing -> return $ IQError $ itemNotFound "Unknown node"
+          else return Nothing
    where
     infoName = discoInfoName "query"
     itemsName = discoItemsName "query"
@@ -436,17 +463,17 @@ instance (MonadStream m) => Handler m InRequestIQ RequestIQResponse (DiscoPlugin
 addDiscoInfo :: forall m a. (MonadStream m, DiscoInfoProvider a) => XMPPPluginsRef m -> a -> m ()
 addDiscoInfo pluginsRef provider = do
   dp <- getDiscoPlugin pluginsRef
-  RegRef.insertNewOrFailM provider $ discoPluginProviders dp
-  reg <- RegRef.read $ discoPluginProviders dp
-  result <- atomicModifyIORef (discoPluginMerged dp) $ \old ->
+  RegRef.insertNewOrFailM provider $ discoPluginMyselfProviders dp
+  reg <- RegRef.read $ discoPluginMyselfProviders dp
+  result <- atomicModifyIORef (discoPluginMyselfMerged dp) $ \old ->
     case mergeProviders reg of
       Nothing -> (old, Nothing)
       Just merged -> (merged, Just merged)
   case result of
     Nothing -> do
-      RegRef.delete (Proxy :: Proxy a) $ discoPluginProviders dp
+      RegRef.delete (Proxy :: Proxy a) $ discoPluginMyselfProviders dp
       fail "addDiscoInfo: overlapping disco infos"
-    Just merged -> Slot.call (discoPluginMergedSlot dp) merged
+    Just merged -> Slot.call (discoPluginMergedMyInfoSlot dp) merged
 
 getDiscoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (DiscoPlugin m)
 getDiscoPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (DiscoPlugin m)) $ pluginsHooksSet pluginsRef
@@ -466,11 +493,12 @@ instance (Typeable m) => DiscoInfoProvider (DiscoPlugin m) where
 
 discoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 discoPlugin pluginsRef = do
-  discoPluginProviders <- RegRef.new
-  discoPluginMerged <- newIORef emptyDiscoInfo
+  discoPluginMyselfProviders <- RegRef.new
+  discoPluginMyselfMerged <- newIORef emptyDiscoInfo
   discoPluginEntityCacheHandlers <- HL.new :: m (DiscoEntityCacheHandlers m)
   discoPluginEntityGetHandlers <- HL.new :: m (DiscoEntityGetHandlers m)
-  discoPluginMergedSlot <- Slot.new
+  discoPluginMyEntityHandlers <- HL.new :: m (DiscoMyEntityHandlers m)
+  discoPluginMergedMyInfoSlot <- Slot.new
   let discoPluginSession = pluginsSession pluginsRef
       plugin :: DiscoPlugin m = DiscoPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
