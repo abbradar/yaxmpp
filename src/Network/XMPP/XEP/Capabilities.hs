@@ -199,26 +199,29 @@ caps2Bytes DiscoEntity {..} = BSB.toLazyByteString input
 
 -- * Cache
 
--- | Which XEP a verification hash was advertised under. Used both as part
--- of the cache key (the verification string is XEP-specific) and to dispatch
--- the right verification string when validating a candidate.
+{- | Which XEP a verification hash was advertised under. Used both as part
+of the cache key (the verification string is XEP-specific) and to dispatch
+the right verification string when validating a candidate.
+-}
 data CapsVer = Caps1 | Caps2
   deriving (Show, Eq, Ord, Generic)
 
 instance ToJSON CapsVer
 instance FromJSON CapsVer
 
--- | Cache: hash-keyed disco entities. Persisted across runs. The key is
--- @(xep, algo, ver)@ — the verification string differs between XEP-0115
--- and XEP-0390, so a given @(algo, ver)@ pair could in principle map to
--- different disco entities under each XEP.
+{- | Cache: hash-keyed disco entities. Persisted across runs. The key is
+@(xep, algo, ver)@ — the verification string differs between XEP-0115
+and XEP-0390, so a given @(algo, ver)@ pair could in principle map to
+different disco entities under each XEP.
+-}
 data CapsCache = CapsCache
   { ccByHash :: Map (CapsVer, HashAlgo, HashValue) DiscoEntity
   }
   deriving (Show, Eq, Generic)
 
--- | A single cache row used purely for the JSON encoding (the in-memory
--- 'CapsCache' uses a tuple-keyed 'Map' which Aeson can't encode directly).
+{- | A single cache row used purely for the JSON encoding (the in-memory
+'CapsCache' uses a tuple-keyed 'Map' which Aeson can't encode directly).
+-}
 data SerializedCapsRow = SerializedCapsRow
   { scrXep :: CapsVer
   , scrAlgo :: HashAlgo
@@ -264,8 +267,9 @@ data CapsPlugin m = CapsPlugin
   , capsPluginNode :: Text
   -- ^ Node URI used in our XEP-0115 @\<c\>@.
   , capsPluginAlgos1 :: [SomeXMPPHashAlgorithm]
-  -- ^ Hashers we publish in XEP-0115 @\<c\>@ elements. Resolved at plugin
-  -- init from 'supportedHashAlgos', so the send path can't fail at runtime.
+  {- ^ Hashers we publish in XEP-0115 @\<c\>@ elements. Resolved at plugin
+  init from 'supportedHashAlgos', so the send path can't fail at runtime.
+  -}
   , capsPluginAlgos2 :: [SomeXMPPHashAlgorithm]
   -- ^ Hashers we publish in our XEP-0390 @\<c\>@ element. Same as above.
   }
@@ -364,14 +368,16 @@ presenceCaps CapsPlugin {capsPluginPresence} addr
                 )
   | otherwise = return (Nothing, Nothing)
 
--- | A peer-advertised caps variant we know how to validate. Carries the
--- resolved 'SomeXMPPHashAlgorithm' so neither 'validatedHashes' nor the
--- cache lookup needs to redo 'supportedHashAlgos' resolution.
+{- | A peer-advertised caps variant we know how to validate. Carries the
+resolved 'SomeXMPPHashAlgorithm' so neither 'validatedHashes' nor the
+cache lookup needs to redo 'supportedHashAlgos' resolution.
+-}
 data CapsCandidate = CapsCandidate
   { ccVer :: CapsVer
   , ccNode :: Maybe Text
-  -- ^ XEP-0115 @node@ attribute, if any (used to drive the disco IQ as
-  -- @node='\<node\>#\<ver\>'@ per XEP-0115 §3.4). 'Nothing' for Caps 2.0.
+  {- ^ XEP-0115 @node@ attribute, if any (used to drive the disco IQ as
+  @node='\<node\>#\<ver\>'@ per XEP-0115 §3.4). 'Nothing' for Caps 2.0.
+  -}
   , ccAlgo :: HashAlgo
   , ccHash :: HashValue
   , ccHasher :: SomeXMPPHashAlgorithm
@@ -489,8 +495,8 @@ capsPlugin pluginsRef = do
   capsPluginCache <- newIORef $ fromMaybe emptyCapsCache oldCache
   capsPluginOwnCaps <- newIORef Nothing
   let capsPluginNode = "https://github.com/abbradar/yaxmpp"
-      algoNames1 = ["sha-1", "sha-256"]
-      algoNames2 = ["sha-256", "sha-512"]
+      algoNames1 = ["sha-1"]
+      algoNames2 = ["sha-256"]
       resolveAlgo a = case M.lookup a supportedHashAlgos of
         Just some -> return some
         Nothing -> fail $ "capsPlugin: unsupported hash algorithm " <> show a
