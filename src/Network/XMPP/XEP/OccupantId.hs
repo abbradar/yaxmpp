@@ -44,8 +44,9 @@ extractOccupantId elems =
 
 data OccupantIdPlugin = OccupantIdPlugin
 
--- | Receive-only filter: occupant IDs are stamped by the MUC service, so
--- the send side is a no-op.
+{- | Receive-only filter: occupant IDs are stamped by the MUC service, so
+the send side is a no-op.
+-}
 instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError OccupantIdPlugin where
   filterReceive _ _ msg = case extractOccupantId (imRaw msg) of
     Left err -> do

@@ -1,8 +1,9 @@
 {-# LANGUAGE Strict #-}
 
--- | XEP-0300: Use of Cryptographic Hash Functions in XMPP — algorithm
--- registry, parsing/emitting of @\<hash xmlns="urn:xmpp:hashes:2"/\>@,
--- and convenience hashers built on @crypton@.
+{- | XEP-0300: Use of Cryptographic Hash Functions in XMPP — algorithm
+registry, parsing/emitting of @\<hash xmlns="urn:xmpp:hashes:2"/\>@,
+and convenience hashers built on @crypton@.
+-}
 module Network.XMPP.XEP.Hash (
   HashAlgo,
   HashValue,

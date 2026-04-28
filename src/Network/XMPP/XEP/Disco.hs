@@ -47,9 +47,8 @@ import Control.Monad
 import Control.Monad.Logger
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
-import Data.Aeson (FromJSON (..), ToJSON (..))
+import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.=))
 import qualified Data.Aeson as JSON
-import Data.Aeson ((.:), (.=))
 import Data.ClassBox (ClassBox (..))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M

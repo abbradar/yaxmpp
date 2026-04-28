@@ -84,18 +84,20 @@ data MUCEvent m
   = MUCJoinedRoom FullJID (MUCRef m)
   | MUCRejected FullJID StanzaError
   | MUCLeftRoom FullJID MUCLeaveReason
-  | -- | A per-room event mirrored onto 'mucPluginSlot' so subscribers can
-    -- listen across all joined rooms without subscribing to each room's
-    -- 'mucSlot' individually.
+  | {- | A per-room event mirrored onto 'mucPluginSlot' so subscribers can
+    listen across all joined rooms without subscribing to each room's
+    'mucSlot' individually.
+    -}
     MUCRoomEvent BareJID (MUCRef m) (RoomEvent m)
   deriving (Show)
 
 data RoomEvent m
   = RoomPresence XMPPResource (MUCPresenceEvent m)
   | RoomSubject
-  | -- | Configuration change broadcast from the room (XEP-0045 §10.9): a
-    -- groupchat message carrying only @\<x xmlns="muc#user"\>@ with status
-    -- codes describing the change.
+  | {- | Configuration change broadcast from the room (XEP-0045 §10.9): a
+    groupchat message carrying only @\<x xmlns="muc#user"\>@ with status
+    codes describing the change.
+    -}
     RoomConfigChanged MUCStatusSet
   deriving (Show)
 
@@ -206,9 +208,10 @@ data MUCInfo = MUCInfo
 
 data MUCPresenceFilter = MUCPresenceFilter
 
--- | Receive-only filter: parses MUC @\<x xmlns=\"muc#user\"/\>@ on incoming
--- presences. The send side is a no-op because the server is the sole
--- authority for these elements (XEP-0045 §7.2).
+{- | Receive-only filter: parses MUC @\<x xmlns=\"muc#user\"/\>@ on incoming
+presences. The send side is a no-op because the server is the sole
+authority for these elements (XEP-0045 §7.2).
+-}
 instance (MonadStream m) => Filter m FullJID Presence StanzaError MUCPresenceFilter where
   filterReceive _ _ pres = case extractMUCInfo (presenceRaw pres) of
     Left err -> do

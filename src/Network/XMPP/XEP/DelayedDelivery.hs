@@ -60,8 +60,9 @@ tryParseDelay e
 
 data DelayedDeliveryPlugin = DelayedDeliveryPlugin
 
--- | Receive-only filter: clients don't stamp @\<delay/\>@ themselves
--- (servers/intermediaries do it).
+{- | Receive-only filter: clients don't stamp @\<delay/\>@ themselves
+(servers/intermediaries do it).
+-}
 instance (MonadStream m) => Filter m FullJID Presence StanzaError DelayedDeliveryPlugin where
   filterReceive _ _ pres = case extractDelay (presenceRaw pres) of
     Left err -> do
