@@ -10,6 +10,8 @@ module Network.XMPP.XEP.Disco (
   discoPluginSession,
   discoPluginEntityCacheHandlers,
   discoPluginEntityGetHandlers,
+  discoPluginMerged,
+  discoPluginMergedSlot,
   getDiscoPlugin,
   DiscoEntityCacheHandlers,
   DiscoEntityGetHandlers,
@@ -43,6 +45,11 @@ import Control.HandlerList (Handler (..), HandlerList)
 import qualified Control.HandlerList as HL
 import Control.Monad
 import Control.Monad.Logger
+import Control.Slot (Slot)
+import qualified Control.Slot as Slot
+import Data.Aeson (FromJSON (..), ToJSON (..))
+import qualified Data.Aeson as JSON
+import Data.Aeson ((.:), (.=))
 import Data.ClassBox (ClassBox (..))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -75,7 +82,10 @@ data DiscoIdentity = DiscoIdentity
   { discoCategory :: Text
   , discoType :: Text
   }
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Generic)
+
+instance ToJSON DiscoIdentity
+instance FromJSON DiscoIdentity
 
 type DiscoFeature = Text
 
@@ -84,6 +94,24 @@ data DiscoEntity = DiscoEntity
   , discoFeatures :: Set DiscoFeature
   }
   deriving (Show, Eq, Generic)
+
+-- | JSON encoding: @{ identities: [[ident, names], ...], features: [feat, ...] }@.
+instance ToJSON DiscoEntity where
+  toJSON DiscoEntity {..} =
+    JSON.object
+      [ "identities" .= M.toList discoIdentities
+      , "features" .= discoFeatures
+      ]
+
+instance FromJSON DiscoEntity where
+  parseJSON = JSON.withObject "DiscoEntity" $ \o -> do
+    ids <- o .: "identities"
+    feats <- o .: "features"
+    return
+      DiscoEntity
+        { discoIdentities = M.fromList ids
+        , discoFeatures = feats
+        }
 
 emptyDiscoEntity :: DiscoEntity
 emptyDiscoEntity =
@@ -362,6 +390,11 @@ data DiscoPlugin m = DiscoPlugin
   , discoPluginMerged :: IORef DiscoInfo
   , discoPluginEntityCacheHandlers :: DiscoEntityCacheHandlers m
   , discoPluginEntityGetHandlers :: DiscoEntityGetHandlers m
+  {- ^ Fired with the freshly merged 'DiscoInfo' after every successful
+  'addDiscoInfo' call. Subscribe to recompute derived data (e.g.
+  XEP-0115/0390 verification hashes).
+  -}
+  , discoPluginMergedSlot :: Slot m DiscoInfo
   }
 
 -- | Add disco#items feature to a node info if it has items.
@@ -406,13 +439,15 @@ addDiscoInfo pluginsRef provider = do
   dp <- getDiscoPlugin pluginsRef
   RegRef.insertNewOrFailM provider $ discoPluginProviders dp
   reg <- RegRef.read $ discoPluginProviders dp
-  success <- atomicModifyIORef (discoPluginMerged dp) $ \old ->
+  result <- atomicModifyIORef (discoPluginMerged dp) $ \old ->
     case mergeProviders reg of
-      Nothing -> (old, False)
-      Just merged -> (merged, True)
-  unless success $ do
-    RegRef.delete (Proxy :: Proxy a) $ discoPluginProviders dp
-    fail "addDiscoInfo: overlapping disco infos"
+      Nothing -> (old, Nothing)
+      Just merged -> (merged, Just merged)
+  case result of
+    Nothing -> do
+      RegRef.delete (Proxy :: Proxy a) $ discoPluginProviders dp
+      fail "addDiscoInfo: overlapping disco infos"
+    Just merged -> Slot.call (discoPluginMergedSlot dp) merged
 
 getDiscoPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (DiscoPlugin m)
 getDiscoPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (DiscoPlugin m)) $ pluginsHooksSet pluginsRef
@@ -436,6 +471,7 @@ discoPlugin pluginsRef = do
   discoPluginMerged <- newIORef emptyDiscoInfo
   discoPluginEntityCacheHandlers <- HL.new :: m (DiscoEntityCacheHandlers m)
   discoPluginEntityGetHandlers <- HL.new :: m (DiscoEntityGetHandlers m)
+  discoPluginMergedSlot <- Slot.new
   let discoPluginSession = pluginsSession pluginsRef
       plugin :: DiscoPlugin m = DiscoPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef

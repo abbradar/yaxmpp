@@ -11,8 +11,6 @@ module Network.XMPP.XEP.DeliveryReceipts (
   deliveryReceiptsPlugin,
 ) where
 
-import Control.Codec (Codec (..))
-import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Monad
@@ -30,6 +28,8 @@ import Data.Typeable (Typeable)
 import Text.XML
 
 import Network.XMPP.Address
+import Network.XMPP.Filter (Filter (..))
+import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Message
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
@@ -90,20 +90,20 @@ sendReceipt DeliveryReceiptsPlugin {deliveryReceiptsPluginSession} to msgType mi
         , ostChildren = [receivedElement mid]
         }
 
--- | Codec witness for moving 'DeliveryReceiptRequest' between 'imExtended' and @\<request/\>@.
-data DeliveryReceiptRequestCodec = DeliveryReceiptRequestCodec
+-- | Filter witness for moving 'DeliveryReceiptRequest' between 'imExtended' and @\<request/\>@.
+data DeliveryReceiptRequestFilter = DeliveryReceiptRequestFilter
 
-instance (MonadStream m) => Codec m XMPPAddress IMMessage DeliveryReceiptRequestCodec where
-  codecDecode _ _ msg =
+instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError DeliveryReceiptRequestFilter where
+  filterReceive _ _ msg =
     let (mreq, raw') = extractRequest (imRaw msg)
         ext' = maybe (imExtended msg) (`Reg.insert` imExtended msg) mreq
-     in return $ msg {imRaw = raw', imExtended = ext'}
-  codecEncode _ _ msg =
+     in return $ Right $ msg {imRaw = raw', imExtended = ext'}
+  filterSend _ _ msg =
     let ext = imExtended msg
         (mreq, ext') = Reg.pop (Proxy :: Proxy DeliveryReceiptRequest) ext
         raw = imRaw msg
         raw' = maybe raw (const (requestElement : raw)) mreq
-     in return $ msg {imRaw = raw', imExtended = ext'}
+     in return $ Right $ msg {imRaw = raw', imExtended = ext'}
 
 {- | Swallow bodyless message stanzas carrying only @\<request/\>@ or
 @\<received/\>@ children so the handler chain does not log them as unhandled.
@@ -152,6 +152,6 @@ deliveryReceiptsPlugin pluginsRef = do
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   imp <- getIMPlugin pluginsRef
-  Codec.pushNewOrFailM DeliveryReceiptRequestCodec (imPluginCodecs imp)
+  Filter.pushNewOrFailM DeliveryReceiptRequestFilter (imPluginFilters imp)
   Slot.pushNewOrFailM plugin $ postInSlot pluginsRef
   addDiscoInfo pluginsRef plugin

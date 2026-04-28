@@ -8,8 +8,6 @@ module Network.XMPP.XEP.StanzaIds (
 ) where
 
 import Control.Applicative ((<|>))
-import Control.Codec (Codec (..))
-import qualified Control.Codec as Codec
 import Control.Monad.IO.Class
 import Control.Monad.Logger
 import Data.List (partition)
@@ -25,6 +23,8 @@ import qualified Data.UUID.V4 as UUID
 import Text.XML
 
 import Network.XMPP.Address
+import Network.XMPP.Filter (Filter (..))
+import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Message
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
@@ -73,28 +73,28 @@ extractStanzaIds elems = do
 
 data StanzaIdsPlugin = StanzaIdsPlugin
 
-{- | Message codec: on decode, extract origin-id and stanza-ids into extended.
-On encode, generate a fresh origin-id and insert it.
+{- | Message filter: on receive, extract origin-id and stanza-ids into
+extended. On send, generate a fresh origin-id and insert it.
 -}
-instance (MonadStream m) => Codec m XMPPAddress IMMessage StanzaIdsPlugin where
-  codecDecode _ _ msg = case extractStanzaIds (imRaw msg) of
+instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError StanzaIdsPlugin where
+  filterReceive _ _ msg = case extractStanzaIds (imRaw msg) of
     Left err -> do
       $(logError) [i|XEP-0359 stanza IDs: #{err}|]
-      return msg
+      return $ Right msg
     Right (ids, raw') ->
       let ext' = Reg.insert ids (imExtended msg)
-       in return $ msg {imRaw = raw', imExtended = ext'}
+       in return $ Right $ msg {imRaw = raw', imExtended = ext'}
 
-  codecEncode _ _ msg = do
+  filterSend _ _ msg = do
     oid <- liftIO $ UUID.toText <$> UUID.nextRandom
     let ext = imExtended msg
         (_, ext') = Reg.pop (Proxy :: Proxy StanzaIds) ext
         raw = imRaw msg
         raw' = originIdElement oid : raw
         mid = imId msg <|> Just oid
-     in return $ msg {imId = mid, imRaw = raw', imExtended = ext'}
+     in return $ Right $ msg {imId = mid, imRaw = raw', imExtended = ext'}
 
 stanzaIdsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 stanzaIdsPlugin pluginsRef = do
   imp <- getIMPlugin pluginsRef
-  Codec.pushNewOrFailM StanzaIdsPlugin (imPluginCodecs imp)
+  Filter.pushNewOrFailM StanzaIdsPlugin (imPluginFilters imp)

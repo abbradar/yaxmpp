@@ -24,7 +24,6 @@ import Control.Monad
 import Control.Monad.Logger
 import Data.Aeson
 import qualified Data.Aeson.Types as JSON
-import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -87,18 +86,8 @@ data RosterEntry = RosterEntry
   }
   deriving (Show, Eq, Generic)
 
-prefixedField :: String -> String -> String
-prefixedField prefix = JSON.camelTo2 '_' . fromJust . stripPrefix prefix
-
-rosterEntryOptions :: JSON.Options
-rosterEntryOptions = JSON.defaultOptions {JSON.fieldLabelModifier = prefixedField "rentry"}
-
-instance FromJSON RosterEntry where
-  parseJSON = genericParseJSON rosterEntryOptions
-
-instance ToJSON RosterEntry where
-  toJSON = genericToJSON rosterEntryOptions
-  toEncoding = genericToEncoding rosterEntryOptions
+instance FromJSON RosterEntry
+instance ToJSON RosterEntry
 
 type RosterEntries = Map XMPPAddress RosterEntry
 
@@ -108,15 +97,8 @@ data Roster = Roster
   }
   deriving (Show, Eq, Generic)
 
-rosterOptions :: JSON.Options
-rosterOptions = JSON.defaultOptions {JSON.fieldLabelModifier = prefixedField "roster"}
-
-instance FromJSON Roster where
-  parseJSON = genericParseJSON rosterOptions
-
-instance ToJSON Roster where
-  toJSON = genericToJSON rosterOptions
-  toEncoding = genericToEncoding rosterOptions
+instance FromJSON Roster
+instance ToJSON Roster
 
 rosterVerName :: Text -> Name
 rosterVerName = nsName "urn:xmpp:features:rosterver"

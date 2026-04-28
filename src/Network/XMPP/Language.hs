@@ -13,6 +13,7 @@ module Network.XMPP.Language (
   localizedElements,
 ) where
 
+import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -29,6 +30,13 @@ import Network.XMPP.XML
 type XMLLang = Maybe Text
 newtype LocalizedText = LocalizedText {localTexts :: Map XMLLang Text}
   deriving (Show, Eq)
+
+-- | JSON encoding: list of @[lang, text]@ pairs (lang is @null@ when absent).
+instance ToJSON LocalizedText where
+  toJSON (LocalizedText m) = toJSON $ M.toList m
+
+instance FromJSON LocalizedText where
+  parseJSON v = LocalizedText . M.fromList <$> parseJSON v
 
 localizedFromTexts :: Map XMLLang Text -> Maybe LocalizedText
 localizedFromTexts m

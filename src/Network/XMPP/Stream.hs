@@ -30,8 +30,8 @@ import Control.Monad.Catch
 import Control.Monad.IO.Unlift
 import Control.Monad.Logger
 import Control.Monad.Trans.Class
+import qualified Data.ByteArray.Encoding as BA
 import Data.ByteString (ByteString)
-import qualified Data.ByteString.Base64 as B64
 import Data.Conduit
 import Data.Conduit.ByteString.Builder
 import qualified Data.Conduit.List as CL
@@ -435,6 +435,12 @@ streamKill (Stream {..}) = liftIO $ connectionClose streamConn
 streamIsClosed :: (MonadStream m) => Stream m -> m Bool
 streamIsClosed (Stream {..}) = readIORef streamClosedFlag
 
+b64Encode :: ByteString -> Text
+b64Encode bs = T.decodeUtf8 (BA.convertToBase BA.Base64 bs)
+
+b64Decode :: ByteString -> Either String ByteString
+b64Decode = BA.convertFromBase BA.Base64
+
 saslAuth :: (MonadStream m) => Stream m -> [SASLAuthenticator r] -> m (Maybe r)
 saslAuth _ [] = return Nothing
 saslAuth s (auth : others) = do
@@ -442,13 +448,13 @@ saslAuth s (auth : others) = do
   streamSend s $
     element (saslName "auth") [("mechanism", T.decodeUtf8 $ saslMechanism auth)] $
       maybeToList $
-        fmap (NodeContent . T.decodeUtf8 . B64.encode) $
+        fmap (NodeContent . b64Encode) $
           saslInitial auth
   proceedAuth $ saslWire auth
  where
   proceedAuth wire = do
     eresp <- streamRecv s
-    let mdat = listToMaybe $ fmap (B64.decode . T.encodeUtf8) $ fromElement eresp $/ content
+    let mdat = listToMaybe $ fmap (b64Decode . T.encodeUtf8) $ fromElement eresp $/ content
     mdat' <- forM mdat $ \case
       Left err -> streamThrow s $ unexpectedInput [i|proceedAuth, base64 decode: #{err}|]
       Right d -> return d
@@ -461,7 +467,7 @@ saslAuth s (auth : others) = do
     case res of
       Left (msg, wire') -> do
         streamSend s $ case msg of
-          SASLResponse r -> element (saslName "response") [] [NodeContent $ T.decodeUtf8 $ B64.encode r]
+          SASLResponse r -> element (saslName "response") [] [NodeContent $ b64Encode r]
           SASLAbort -> closedElement (saslName "abort")
         proceedAuth wire'
       Right (Just a) -> do

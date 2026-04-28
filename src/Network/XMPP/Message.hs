@@ -5,10 +5,10 @@ module Network.XMPP.Message (
   IMMessage (..),
   AddressedIMMessage (..),
   IMSlot,
-  IMCodecList,
+  IMFilterList,
   IMPlugin,
   imPluginSlot,
-  imPluginCodecs,
+  imPluginFilters,
   imPluginSelf,
   plainIMMessage,
   getIMPlugin,
@@ -18,8 +18,6 @@ module Network.XMPP.Message (
 )
 where
 
-import Control.Codec (CodecList, decodeAll, encodeAll)
-import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Monad
@@ -33,6 +31,8 @@ import qualified Data.Registry.Mutable as RegRef
 import Data.Text (Text)
 import qualified Data.UUID as UUID
 import Network.XMPP.Address
+import Network.XMPP.Filter (FilterList)
+import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language
 import Network.XMPP.Plugin
 import Network.XMPP.Stanza
@@ -80,13 +80,13 @@ plainIMMessage txt =
 
 type IMSlot m = Slot m AddressedIMMessage
 
-type IMCodecList m = CodecList m XMPPAddress IMMessage
+type IMFilterList m = FilterList m XMPPAddress StanzaError IMMessage
 
 data IMPlugin m = IMPlugin
   { imPluginSession :: StanzaSession m
   , imPluginSelf :: XMPPAddress
   , imPluginSlot :: IMSlot m
-  , imPluginCodecs :: IMCodecList m
+  , imPluginFilters :: IMFilterList m
   }
 
 {- | Parse an 'InStanza' into an 'AddressedIMMessage' structurally (no codec
@@ -120,14 +120,16 @@ tryParseRawIMMessage self InStanza {istFrom, istTo, istId, istType, istChildren}
     Right IMThread {imParent = getAttr "parent" e, imThreadId = tid}
   parseThread _ = Left $ badRequest "invalid <thread> element"
 
--- | Parse and decode a message through IM codecs.
+-- | Parse and decode a message through IM filters.
 tryParseIMMessage :: (MonadStream m) => IMPlugin m -> InStanza -> m (Either StanzaError (Maybe AddressedIMMessage))
-tryParseIMMessage IMPlugin {imPluginSelf, imPluginCodecs} st = case tryParseRawIMMessage (addressBare imPluginSelf) st of
+tryParseIMMessage IMPlugin {imPluginSelf, imPluginFilters} st = case tryParseRawIMMessage (addressBare imPluginSelf) st of
   Left err -> return $ Left err
   Right Nothing -> return $ Right Nothing
   Right (Just addressed@AddressedIMMessage {imFrom, imMessage = msg}) -> do
-    msg' <- decodeAll imPluginCodecs imFrom msg
-    return $ Right $ Just $ addressed {imMessage = msg'}
+    filtered <- Filter.runReceiveFilters imPluginFilters imFrom msg
+    case filtered of
+      Left err -> return $ Left err
+      Right msg' -> return $ Right $ Just $ addressed {imMessage = msg'}
 
 instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
   tryHandle imp st@(InStanza {istFrom = Just _, istType = InMessage _, istChildren})
@@ -146,27 +148,30 @@ instance (MonadStream m) => Handler m InStanza InResponse (IMPlugin m) where
 getIMPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (IMPlugin m)
 getIMPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (IMPlugin m)) $ pluginsHooksSet pluginsRef
 
-imSend :: (MonadStream m) => IMPlugin m -> XMPPAddress -> IMMessage -> m StanzaId
-imSend IMPlugin {imPluginSession, imPluginCodecs} to msg = do
-  IMMessage {..} <- encodeAll imPluginCodecs to msg
-  unless (Reg.null imExtended) $ error "imSend: imExtended is not empty after encoding"
-  let subjects = maybe [] (localizedElements $ jcName "subject") imSubject
-      bodies = localizedElements (jcName "body") imBody
-      mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent",) imParent) [NodeContent imThreadId]) imThread
-      out =
-        OutStanza
-          { ostTo = Just to
-          , ostType = OutMessage imType
-          , ostChildren = subjects ++ bodies ++ maybeToList mThread ++ imRaw
-          }
-  case imId of
-    Just mid -> stanzaSend' imPluginSession mid out >> return mid
-    Nothing -> UUID.toText <$> stanzaSend imPluginSession out
+imSend :: (MonadStream m) => IMPlugin m -> XMPPAddress -> IMMessage -> m (Either StanzaError StanzaId)
+imSend IMPlugin {imPluginSession, imPluginFilters} to msg = do
+  filtered <- Filter.runSendFilters imPluginFilters to msg
+  case filtered of
+    Left err -> return $ Left err
+    Right IMMessage {..} -> do
+      unless (Reg.null imExtended) $ error "imSend: imExtended is not empty after encoding"
+      let subjects = maybe [] (localizedElements $ jcName "subject") imSubject
+          bodies = localizedElements (jcName "body") imBody
+          mThread = fmap (\IMThread {..} -> element (jcName "thread") (maybeToList $ fmap ("parent",) imParent) [NodeContent imThreadId]) imThread
+          out =
+            OutStanza
+              { ostTo = Just to
+              , ostType = OutMessage imType
+              , ostChildren = subjects ++ bodies ++ maybeToList mThread ++ imRaw
+              }
+      Right <$> case imId of
+        Just mid -> stanzaSend' imPluginSession mid out >> return mid
+        Nothing -> UUID.toText <$> stanzaSend imPluginSession out
 
 imPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 imPlugin pluginsRef = do
   imPluginSlot <- Slot.new
-  imPluginCodecs <- Codec.new
+  imPluginFilters <- Filter.new
   let imPluginSession = pluginsSession pluginsRef
       imPluginSelf = toXMPPAddress $ ssAddress imPluginSession
       plugin :: IMPlugin m = IMPlugin {..}

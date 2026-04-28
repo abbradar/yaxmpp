@@ -219,7 +219,6 @@ main = do
         oldCache <- liftIO $ (JSON.decodeStrict <$> B.readFile (cachePath settings)) `catch` (\(SomeException _) -> return Nothing)
         pluginsRef <- newXmppPlugins sess oldCache
         presencePlugin pluginsRef
-        capsPlugin pluginsRef
         discoPlugin pluginsRef
         homeCachePlugin pluginsRef
         presenceCachePlugin pluginsRef
@@ -227,6 +226,7 @@ main = do
         subscriptionPlugin pluginsRef
         rpresencePlugin pluginsRef
         myPresencePlugin pluginsRef
+        capsPlugin pluginsRef
         imPlugin pluginsRef
         delayedDeliveryPlugin pluginsRef
         mucPlugin pluginsRef
@@ -278,7 +278,7 @@ main = do
           Slot.pushNewOrFailM clientPlugin (carbonsPluginSlot cbP)
           Slot.pushNewOrFailM clientPlugin (deliveryReceiptsPluginSlot drP)
 
-          myPresenceSend myPresP $ Just defaultPresence
+          void $ myPresenceSend myPresP $ Just defaultPresence
 
           carbonsEnable cbP $ \case
             Right () -> writeMessage "Carbons enabled"
@@ -313,8 +313,10 @@ main = do
                         { commandHandler = \runInBase args -> case args of
                             (xmppAddress . T.pack -> Right addr) : msg -> do
                               let imsg = requestReceipt $ plainIMMessage $ T.pack $ unwords msg
-                              mid <- runInBase $ imSend imP addr imsg
-                              HL.outputStrLn [i|Sent #{mid}|]
+                              result <- runInBase $ imSend imP addr imsg
+                              case result of
+                                Right mid -> HL.outputStrLn [i|Sent #{mid}|]
+                                Left err -> HL.outputStrLn [i|Send error: #{show err}|]
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -357,7 +359,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(read -> online)] -> do
-                              runInBase $ myPresenceSend myPresP $ if online then Just defaultPresence else Nothing
+                              runInBase $ void $ myPresenceSend myPresP $ if online then Just defaultPresence else Nothing
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }
@@ -516,7 +518,7 @@ main = do
                     , Command
                         { commandHandler = \runInBase args -> case args of
                             [(xmppAddress . T.pack -> Right (bareJidGet -> Just addr))] -> do
-                              runInBase $ mucSendPresence mucP addr Nothing
+                              runInBase $ void $ mucSendPresence mucP addr Nothing
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

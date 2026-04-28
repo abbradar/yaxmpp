@@ -15,7 +15,7 @@ module Network.XMPP.XEP.MUC (
   MUCStatus (..),
   MUCStatusSet,
   MUCInfo (..),
-  MUCPresenceCodec (..),
+  MUCPresenceFilter (..),
   MUC (..),
   MUCJoinResult (..),
   MUCAlreadyJoinedError (..),
@@ -58,8 +58,6 @@ import TextShow (showt)
 import UnliftIO.Exception (bracketOnError)
 import UnliftIO.IORef
 
-import Control.Codec (Codec (..))
-import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..))
 import qualified Control.HandlerList as HL
 import Control.Slot (Slot)
@@ -72,6 +70,8 @@ import Data.Registry.Mutable (RegistryRef)
 import qualified Data.Registry.Mutable as RegRef
 import Data.Time.XMPP
 import Network.XMPP.Address
+import Network.XMPP.Filter (Filter (..))
+import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language
 import Network.XMPP.Plugin
 import Network.XMPP.Presence
@@ -195,7 +195,7 @@ instance Injective MUCStatus Int where
 
 type MUCStatusSet = Set (Either Int MUCStatus)
 
--- | MUC-specific presence information stored in 'presenceExtended' by 'MUCPresenceCodec'.
+-- | MUC-specific presence information stored in 'presenceExtended' by 'MUCPresenceFilter'.
 data MUCInfo = MUCInfo
   { mucInfoStatus :: MUCStatusSet
   , mucInfoRealJid :: Maybe FullJID
@@ -204,23 +204,21 @@ data MUCInfo = MUCInfo
   }
   deriving (Show, Typeable)
 
-data MUCPresenceCodec = MUCPresenceCodec
+data MUCPresenceFilter = MUCPresenceFilter
 
-instance (MonadStream m) => Codec m FullJID Presence MUCPresenceCodec where
-  codecDecode _ _ pres = case extractMUCInfo (presenceRaw pres) of
+-- | Receive-only filter: parses MUC @\<x xmlns=\"muc#user\"/\>@ on incoming
+-- presences. The send side is a no-op because the server is the sole
+-- authority for these elements (XEP-0045 §7.2).
+instance (MonadStream m) => Filter m FullJID Presence StanzaError MUCPresenceFilter where
+  filterReceive _ _ pres = case extractMUCInfo (presenceRaw pres) of
     Left err -> do
       $(logError) [i|XEP-0045 MUC presence: #{err}|]
-      return pres
+      return $ Right pres
     Right (mInfo, raw') ->
       let ext = presenceExtended pres
           ext' = maybe ext (\info -> Reg.insert info ext) mInfo
-       in return $ pres {presenceRaw = raw', presenceExtended = ext'}
-  codecEncode _ _ pres =
-    let ext = presenceExtended pres
-        (mInfo, ext') = Reg.pop (Proxy :: Proxy MUCInfo) ext
-        raw = presenceRaw pres
-        raw' = maybe raw (\info -> mucInfoToElement info : raw) mInfo
-     in return $ pres {presenceRaw = raw', presenceExtended = ext'}
+       in return $ Right $ pres {presenceRaw = raw', presenceExtended = ext'}
+  filterSend _ _ pres = return $ Right pres
 
 extractMUCInfo :: [Element] -> Either String (Maybe MUCInfo, [Element])
 extractMUCInfo elems =
@@ -246,20 +244,6 @@ parseMUCInfo xE = do
   mucInfoRole <- maybe (Left $ "invalid role: " <> T.unpack roleText) Right $ injFrom roleText
   let mucInfoRealJid = getAttr "jid" item >>= (either (const Nothing) Just . xmppAddress) >>= fullJidGet
   return MUCInfo {..}
-
-mucInfoToElement :: MUCInfo -> Element
-mucInfoToElement (MUCInfo {..}) =
-  element (mucUserName "x") [] $
-    map statusNode (S.toAscList mucInfoStatus)
-      ++ [NodeElement itemElem]
- where
-  statusNode s = NodeElement $ element (mucUserName "status") [("code", T.pack (show (either id injTo s)))] []
-  itemAttrs =
-    [ ("affiliation", injTo mucInfoAffiliation)
-    , ("role", injTo mucInfoRole)
-    ]
-      ++ maybe [] (\j -> [("jid", addressToText j)]) mucInfoRealJid
-  itemElem = element (mucUserName "item") itemAttrs []
 
 data PendingMUC m = PendingMUC
   { pmucMembers :: Map XMPPResource (PresenceRef m)
@@ -412,12 +396,17 @@ mucJoin MUCPlugin {..} addr (MUCJoinSettings {joinHistory = MUCHistorySettings {
           [ NodeElement $ element (mucName "history") historyAttrs []
           ]
       sendRequest = do
-        presStanza <- presenceStanza mucPluginPresence $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
-        void $
-          stanzaSend mucPluginSession $
-            presStanza
-              { ostTo = Just $ toXMPPAddress addr
-              }
+        result <- presenceStanza mucPluginPresence $ Just joinPresence {presenceRaw = xElement : presenceRaw joinPresence}
+        case result of
+          Left err -> do
+            cleanupRoom
+            pmucOnJoined $ MUCJoinError err
+          Right presStanza ->
+            void $
+              stanzaSend mucPluginSession $
+                presStanza
+                  { ostTo = Just $ toXMPPAddress addr
+                  }
   bracketOnError takeRoom (const cleanupRoom) (const sendRequest)
 
 data MUCAlreadyLeftError = MUCAlreadyLeftError
@@ -425,18 +414,21 @@ data MUCAlreadyLeftError = MUCAlreadyLeftError
 
 instance Exception MUCAlreadyLeftError
 
-mucSendPresence :: forall m. (MonadStream m) => MUCPlugin m -> BareJID -> Maybe Presence -> m ()
+mucSendPresence :: forall m. (MonadStream m) => MUCPlugin m -> BareJID -> Maybe Presence -> m (Either StanzaError ())
 mucSendPresence MUCPlugin {..} addr pres = do
   rooms <- readIORef mucPluginRooms
   case M.lookup addr rooms of
     Just (Right MUCRef {mucRoom = room}) -> do
-      presStanza <- presenceStanza mucPluginPresence pres
-      _ <-
-        stanzaSend mucPluginSession $
-          presStanza
-            { ostTo = Just $ toXMPPAddress $ FullJID addr (mucNick room)
-            }
-      return ()
+      result <- presenceStanza mucPluginPresence pres
+      case result of
+        Left err -> return $ Left err
+        Right presStanza -> do
+          _ <-
+            stanzaSend mucPluginSession $
+              presStanza
+                { ostTo = Just $ toXMPPAddress $ FullJID addr (mucNick room)
+                }
+          return $ Right ()
     _ -> throwM MUCAlreadyLeftError
 
 instance (MonadStream m) => Handler m InStanza InResponse (MUCPlugin m) where
@@ -575,5 +567,5 @@ mucPlugin pluginsRef = do
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin $ presencePluginHandlers mucPluginPresence
-  Codec.pushNewOrFailM MUCPresenceCodec $ presencePluginCodecs mucPluginPresence
+  Filter.pushNewOrFailM MUCPresenceFilter $ presencePluginFilters mucPluginPresence
   addDiscoInfo pluginsRef plugin

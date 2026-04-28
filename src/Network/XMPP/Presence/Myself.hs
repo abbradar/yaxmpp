@@ -57,10 +57,14 @@ getMyPresencePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (MyPresenc
 myPresenceGet :: (MonadStream m) => MyPresencePlugin m -> m (MyselfPresenceMap m)
 myPresenceGet MyPresencePlugin {myPresencePluginRef} = readIORef myPresencePluginRef
 
-myPresenceSend :: (MonadStream m) => MyPresencePlugin m -> Maybe Presence -> m ()
+myPresenceSend :: (MonadStream m) => MyPresencePlugin m -> Maybe Presence -> m (Either StanzaError ())
 myPresenceSend MyPresencePlugin {myPresencePluginSession, myPresencePluginPresencePlugin} pres = do
-  stanza <- presenceStanza myPresencePluginPresencePlugin pres
-  void $ stanzaSend myPresencePluginSession stanza
+  result <- presenceStanza myPresencePluginPresencePlugin pres
+  case result of
+    Left err -> return $ Left err
+    Right stanza -> do
+      void $ stanzaSend myPresencePluginSession stanza
+      return $ Right ()
 
 myPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 myPresencePlugin pluginsRef = do

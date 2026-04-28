@@ -23,7 +23,6 @@ dependencies:
   - xml-conduit >= 1.5.0
   - attoparsec
   - attoparsec-iso8601
-  - base64-bytestring
   - iproute
   - dns
   - conduit
@@ -38,6 +37,7 @@ dependencies:
   - uuid
   - text-show
   - crypton
+  - ram
   - random
 
 default-extensions:

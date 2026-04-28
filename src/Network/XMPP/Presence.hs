@@ -11,11 +11,11 @@ module Network.XMPP.Presence (
   presenceValue,
   presenceState,
   presenceSlot,
-  PresenceCodecList,
+  PresenceFilterList,
   PresencePlugin,
   presencePluginHandlers,
   presencePluginSlot,
-  presencePluginCodecs,
+  presencePluginFilters,
   getPresencePlugin,
   presencePlugin,
   PresenceEvent (..),
@@ -26,8 +26,6 @@ module Network.XMPP.Presence (
 )
 where
 
-import Control.Codec (CodecList, decodeAll, encodeAll)
-import qualified Control.Codec as Codec
 import Control.HandlerList (Handler (..), HandlerList)
 import qualified Control.HandlerList as HL
 import Control.Monad
@@ -49,6 +47,8 @@ import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Network.XMPP.Address
+import Network.XMPP.Filter (FilterList)
+import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language
 import Network.XMPP.Plugin
 import Network.XMPP.Session (sessionAddress)
@@ -184,7 +184,7 @@ parsePresence elems = do
 parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
-type PresenceCodecList m = CodecList m FullJID Presence
+type PresenceFilterList m = FilterList m FullJID StanzaError Presence
 
 type AllPresencesMap m = Map FullJID (PresenceRef m)
 
@@ -195,7 +195,7 @@ data PresencePlugin m = PresencePlugin
   {- ^ Broadcast slot fired before the dispatch handler list. Use this for
   observer-style hooks (e.g. to populate per-resource mutable state).
   -}
-  , presencePluginCodecs :: PresenceCodecList m
+  , presencePluginFilters :: PresenceFilterList m
   , presencePluginPresences :: IORef (AllPresencesMap m)
   }
 
@@ -209,15 +209,18 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
             (state, slot) <- case existing of
               Just old -> return (presenceState old, presenceSlot old)
               Nothing -> (,) <$> RegRef.new <*> Slot.new
-            p' <- decodeAll presencePluginCodecs faddr p
-            let presRef = PresenceRef {presenceValue = p', presenceState = state, presenceSlot = slot}
-                status = ResourceAvailable presRef
-                upd = ResourcePresence faddr status
-            atomicModifyIORef' presencePluginPresences . ((,()) .) $ M.insert faddr presRef
-            Slot.call presencePluginSlot upd
-            when (isJust existing) $ Slot.call slot status
-            emitPresence presencePluginHandlers upd
-            return InSilent
+            filtered <- Filter.runReceiveFilters presencePluginFilters faddr p
+            case filtered of
+              Left e -> return $ InError e
+              Right p' -> do
+                let presRef = PresenceRef {presenceValue = p', presenceState = state, presenceSlot = slot}
+                    status = ResourceAvailable presRef
+                    upd = ResourcePresence faddr status
+                atomicModifyIORef' presencePluginPresences . ((,()) .) $ M.insert faddr presRef
+                Slot.call presencePluginSlot upd
+                when (isJust existing) $ Slot.call slot status
+                emitPresence presencePluginHandlers upd
+                return InSilent
           Left e -> return $ InError e
         PresenceUnset -> do
           let extended = parseExtended istChildren
@@ -260,7 +263,7 @@ presencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 presencePlugin pluginsRef = do
   presencePluginHandlers <- HL.new
   presencePluginSlot <- Slot.new
-  presencePluginCodecs <- Codec.new
+  presencePluginFilters <- Filter.new
   presencePluginPresences <- newIORef M.empty
   let presencePluginSession = pluginsSession pluginsRef
       plugin :: PresencePlugin m = PresencePlugin {..}
@@ -281,24 +284,29 @@ presenceUpdate k (ResourceUnavailable e) m
   | M.member k m = Just (M.delete k m, Removed k e)
   | otherwise = Nothing
 
-presenceStanza :: (MonadStream m) => PresencePlugin m -> Maybe Presence -> m OutStanza
-presenceStanza PresencePlugin {presencePluginSession, presencePluginCodecs} (Just pres) = do
+presenceStanza :: (MonadStream m) => PresencePlugin m -> Maybe Presence -> m (Either StanzaError OutStanza)
+presenceStanza PresencePlugin {presencePluginSession, presencePluginFilters} (Just pres) = do
   let myAddr = sessionAddress $ ssSession presencePluginSession
-  Presence {..} <- encodeAll presencePluginCodecs myAddr pres
-  unless (Reg.null presenceExtended) $ error "presenceStanza: presenceExtended is not empty after encoding"
-  let priority = element (jcName "priority") [] [NodeContent $ showt presencePriority]
-      mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
-      statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
-  return
-    OutStanza
-      { ostTo = Nothing
-      , ostType = OutPresence Nothing
-      , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceRaw
-      }
+  filtered <- Filter.runSendFilters presencePluginFilters myAddr pres
+  case filtered of
+    Left err -> return $ Left err
+    Right Presence {..} -> do
+      unless (Reg.null presenceExtended) $ error "presenceStanza: presenceExtended is not empty after encoding"
+      let priority = element (jcName "priority") [] [NodeContent $ showt presencePriority]
+          mShow = fmap (\s -> element (jcName "show") [] [NodeContent $ injTo s]) presenceShow
+          statuses = maybe [] (localizedElements $ jcName "status") presenceStatus
+      return $
+        Right
+          OutStanza
+            { ostTo = Nothing
+            , ostType = OutPresence Nothing
+            , ostChildren = [priority] ++ maybeToList mShow ++ statuses ++ presenceRaw
+            }
 presenceStanza _ Nothing =
-  return
-    OutStanza
-      { ostTo = Nothing
-      , ostType = OutPresence (Just PresenceUnavailable)
-      , ostChildren = []
-      }
+  return $
+    Right
+      OutStanza
+        { ostTo = Nothing
+        , ostType = OutPresence (Just PresenceUnavailable)
+        , ostChildren = []
+        }

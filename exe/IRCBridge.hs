@@ -170,12 +170,12 @@ main = runStderrLoggingT $ do
       $(logInfo) "Session successfully created!"
       pluginsRef <- newXmppPlugins sess Nothing
       presencePlugin pluginsRef
-      capsPlugin pluginsRef
       discoPlugin pluginsRef
       homeCachePlugin pluginsRef
       presenceCachePlugin pluginsRef
       rosterPlugin pluginsRef
       myPresencePlugin pluginsRef
+      capsPlugin pluginsRef
       imPlugin pluginsRef
       delayedDeliveryPlugin pluginsRef
       mucPlugin pluginsRef
@@ -194,7 +194,7 @@ main = runStderrLoggingT $ do
       _ <- forkLinked $ do
         rst <- getRoster rosterP
         $(logInfo) [i|Got initial roster: #{rst}|]
-        myPresenceSend myPresP (Just defaultPresence)
+        void $ myPresenceSend myPresP (Just defaultPresence)
 
         let processIrcRequest = do
               $(logInfo) [i|New IRC connection|]
