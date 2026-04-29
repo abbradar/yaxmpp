@@ -98,4 +98,5 @@ tests:
       - yaxmpp
       - tasty
       - tasty-quickcheck
+      - tasty-hunit
       - QuickCheck

@@ -13,6 +13,10 @@ module Network.XMPP.XEP.Capabilities (
   CapsPlugin,
   getCapsPlugin,
   capsPlugin,
+
+  -- * Verification strings (exposed for testing)
+  caps1Bytes,
+  caps2Bytes,
 ) where
 
 import Control.Applicative ((<|>))

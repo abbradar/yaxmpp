@@ -89,7 +89,9 @@ parseForm e
  where
   fieldPair fld = case getAttr "var" fld of
     Nothing -> Left "<field> without var attribute"
-    Just var -> Right (var, [mconcat (fromElement fld $/ XC.element (formsName "value") &/ content)])
+    Just var ->
+      let values = fromElement fld $/ XC.element (formsName "value") &| (mconcat . ($/ content))
+       in Right (var, values)
 
 {- | Render a 'Form' as @\<x type="result"\>@. When a @FORM_TYPE@ value is
 supplied it is emitted first; remaining fields follow in sorted @var@

@@ -2,8 +2,9 @@ module Main (main) where
 
 import Test.Tasty
 
+import qualified CapsTest
+import qualified FormTest
 import qualified GenericRegistryTest
-import qualified LazyOnceTest
 import qualified RegistryTest
 
 main :: IO ()
@@ -16,5 +17,6 @@ main =
           [ GenericRegistryTest.tests
           , RegistryTest.tests
           ]
-      , LazyOnceTest.tests
+      , FormTest.tests
+      , CapsTest.tests
       ]
