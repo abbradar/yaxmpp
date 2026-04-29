@@ -53,6 +53,7 @@ import Network.XMPP.Session (sessionStreamFeatures)
 import Network.XMPP.Stanza (StanzaError, ssBare, ssServer, ssSession)
 import Network.XMPP.Stream
 import Network.XMPP.XEP.Disco
+import Network.XMPP.XEP.Forms
 import Network.XMPP.XEP.Hash
 import Network.XMPP.XML
 
@@ -150,14 +151,16 @@ expandIdentities = concatMap expandOne . M.toList
      where
       fromLang (mLang, name) = ExpandedIdentity discoCategory discoType (fromMaybe "" mLang) name
 
-{- | XEP-0115 §5.2 verification string for a 'DiscoEntity'. Forms (XEP-0128)
-are not yet considered. Compute once per entity and feed to 'hashLazy' for
+{- | XEP-0115 §5.4 verification string for a 'DiscoEntity'. Includes
+XEP-0128 forms in 'discoForms', sorted by @FORM_TYPE@; within each form
+non-@FORM_TYPE@ fields are sorted by @var@ and their values
+lexicographically. Compute once per entity and feed to 'hashLazy' for
 each algorithm.
 -}
 caps1Bytes :: DiscoEntity -> BSL.ByteString
 caps1Bytes DiscoEntity {..} = BSB.toLazyByteString input
  where
-  input = mconcat idChunks <> mconcat featChunks
+  input = mconcat idChunks <> mconcat featChunks <> mconcat formChunks
   idChunks = map idChunk (sort $ expandIdentities discoIdentities)
   idChunk ExpandedIdentity {..} =
     encUtf8 eiCategory
@@ -169,17 +172,27 @@ caps1Bytes DiscoEntity {..} = BSB.toLazyByteString input
       <> encUtf8 eiName
       <> lt
   featChunks = map (\f -> encUtf8 f <> lt) (S.toAscList discoFeatures)
+  formChunks = [formChunk ft f | (ft, f) <- M.toAscList discoForms]
+  formChunk ft Form {formFields} =
+    encUtf8 ft
+      <> lt
+      <> mconcat
+        [ encUtf8 var <> lt <> mconcat [encUtf8 v <> lt | v <- sort vs]
+        | (var, vs) <- M.toAscList formFields
+        ]
   slash = BSB.char7 '/'
   lt = BSB.char7 '<'
 
-{- | XEP-0390 §5.4 verification string for a 'DiscoEntity'. Forms are not
-yet considered (extensions component is empty). Compute once per entity
-and feed to 'hashLazy' for each algorithm.
+{- | XEP-0390 §5.4 verification string for a 'DiscoEntity'. Includes the
+extensions component built from XEP-0128 forms in 'discoForms', sorted
+by @FORM_TYPE@; within each form non-@FORM_TYPE@ fields are sorted by
+@var@ and their values lexicographically. Compute once per entity and
+feed to 'hashLazy' for each algorithm.
 -}
 caps2Bytes :: DiscoEntity -> BSL.ByteString
 caps2Bytes DiscoEntity {..} = BSB.toLazyByteString input
  where
-  input = identitiesPart <> sep <> featuresPart <> sep <> sep
+  input = identitiesPart <> sep <> featuresPart <> sep <> extensionsPart <> sep
   sep = BSB.word8 0x1c
   us = BSB.word8 0x1f
   rs = BSB.word8 0x1e
@@ -197,6 +210,20 @@ caps2Bytes DiscoEntity {..} = BSB.toLazyByteString input
 
   featuresPart = mconcat $ map featureChunk (S.toAscList discoFeatures)
   featureChunk f = encUtf8 f <> us <> rs
+
+  -- Forms are emitted in @FORM_TYPE@ order via the @Map Text Form@'s
+  -- ascending key traversal.
+  extensionsPart = mconcat [formChunk ft f | (ft, f) <- M.toAscList discoForms]
+  formChunk ft Form {formFields} =
+    encUtf8 ft
+      <> us
+      <> mconcat [fieldChunk var vs | (var, vs) <- M.toAscList formFields]
+      <> rs
+  fieldChunk var vs =
+    encUtf8 var
+      <> us
+      <> mconcat [encUtf8 v <> us | v <- sort vs]
+      <> rs
 
 -- * Cache
 
@@ -268,18 +295,15 @@ data CapsPlugin m = CapsPlugin
   , capsPluginNode :: Text
   -- ^ Node URI used in our XEP-0115 @\<c\>@.
   , capsPluginAlgos1 :: [SomeXMPPHashAlgorithm]
-  {- ^ Hashers we publish in XEP-0115 @\<c\>@ elements. Resolved at plugin
-  init from 'supportedHashAlgos', so the send path can't fail at runtime.
-  -}
+  -- ^ Hashers we publish in XEP-0115 @\<c\>@ elements.
   , capsPluginAlgos2 :: [SomeXMPPHashAlgorithm]
   -- ^ Hashers we publish in our XEP-0390 @\<c\>@ element. Same as above.
   }
 
--- | Pure caps computation for a given 'DiscoEntity' under our advertised algorithms.
-computeOwnCaps :: CapsPlugin m -> DiscoEntity -> (Maybe CapsInfo, Maybe Caps2Info)
-computeOwnCaps CapsPlugin {capsPluginNode, capsPluginAlgos1, capsPluginAlgos2} entity =
+-- | XEP-0115 caps computation for a given 'DiscoEntity'.
+computeOwnCaps :: CapsPlugin m -> DiscoEntity -> Maybe CapsInfo
+computeOwnCaps CapsPlugin {capsPluginNode, capsPluginAlgos1} entity =
   let bs1 = caps1Bytes entity
-      bs2 = caps2Bytes entity
       caps1 =
         CapsInfo
           { capsInstances =
@@ -287,13 +311,17 @@ computeOwnCaps CapsPlugin {capsPluginNode, capsPluginAlgos1, capsPluginAlgos2} e
               | some <- capsPluginAlgos1
               ]
           }
+   in if null (capsInstances caps1) then Nothing else Just caps1
+
+-- | XEP-0390 caps computation for a given 'DiscoEntity'.
+computeOwnCaps2 :: CapsPlugin m -> DiscoEntity -> Maybe Caps2Info
+computeOwnCaps2 CapsPlugin {capsPluginAlgos2} entity =
+  let bs2 = caps2Bytes entity
       caps2 =
         Caps2Info
           { caps2Hashes = M.fromList [(someXMPPHashName some, hashLazyBase64 some bs2) | some <- capsPluginAlgos2]
           }
-      mCaps1 = if null (capsInstances caps1) then Nothing else Just caps1
-      mCaps2 = if M.null (caps2Hashes caps2) then Nothing else Just caps2
-   in (mCaps1, mCaps2)
+   in if M.null (caps2Hashes caps2) then Nothing else Just caps2
 
 {- | Filter injects our currently-advertised XEP-0115/0390 caps into outgoing
 presences and parses incoming caps into 'presenceExtended'. The first
@@ -303,7 +331,10 @@ results are memoized for subsequent sends — later disco changes do
 not propagate.
 -}
 instance (MonadStream m) => Filter m FullJID Presence StanzaError (CapsPlugin m) where
-  filterReceive _ _ pres = case extractCaps (presenceRaw pres) of
+  filterReceive _ _ pres = case do
+    (mcaps1, raw1) <- extractCaps (presenceRaw pres)
+    (mcaps2, raw2) <- extractCaps2 raw1
+    return (mcaps1, mcaps2, raw2) of
     Left err -> do
       $(logError) [i|XEP-0115/0390 entity capabilities: #{err}|]
       return $ Right pres
@@ -319,7 +350,8 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError (CapsPlugin m)
       Just pair -> return pair
       Nothing -> do
         merged <- readIORef (discoPluginMyselfMerged capsPluginDisco)
-        let pair = computeOwnCaps cp (discoEntityFromNode (discoINode merged))
+        let entity = discoEntityFromNode (discoINode merged)
+            pair = (computeOwnCaps cp entity, computeOwnCaps2 cp entity)
         atomicWriteIORef capsPluginOwnCaps (Just pair)
         return pair
     let raw = presenceRaw pres
@@ -327,18 +359,22 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError (CapsPlugin m)
         raw'' = maybe raw' (\c -> caps2InfoToElement c : raw') mcaps2
     return $ Right $ pres {presenceRaw = raw''}
 
-extractCaps :: [Element] -> Either String (Maybe CapsInfo, Maybe Caps2Info, [Element])
+extractCaps :: [Element] -> Either String (Maybe CapsInfo, [Element])
 extractCaps elems = do
-  let (caps1Elems, rest1) = partition (\e -> elementName e == capsName "c") elems
-      (caps2Elems, rest2) = partition (\e -> elementName e == caps2Name "c") rest1
+  let (caps1Elems, rest) = partition (\e -> elementName e == capsName "c") elems
   caps1Items <- traverse parseCapsInstance caps1Elems
   let mcaps1 = case caps1Items of
         [] -> Nothing
         xs -> Just $ CapsInfo xs
+  return (mcaps1, rest)
+
+extractCaps2 :: [Element] -> Either String (Maybe Caps2Info, [Element])
+extractCaps2 elems = do
+  let (caps2Elems, rest) = partition (\e -> elementName e == caps2Name "c") elems
   mcaps2 <- case caps2Elems of
     [] -> Right Nothing
     (e : _) -> Just <$> parseCaps2Info e
-  return (mcaps1, mcaps2, rest2)
+  return (mcaps2, rest)
 
 -- * Disco lookup via caps
 
@@ -486,11 +522,9 @@ fetchAndCache CapsPlugin {capsPluginDisco, capsPluginCache} addr first candidate
 
 -- * Persistence
 
-newtype CapsPluginCache m = CapsPluginCache (CapsPlugin m)
-
-instance (MonadStream m) => XMPPPersistentCache m (CapsPluginCache m) where
+instance (MonadStream m) => XMPPPersistentCache m (CapsPlugin m) where
   cacheKey _ = "caps"
-  cacheGet (CapsPluginCache CapsPlugin {capsPluginCache}) = JSON.toJSON <$> readIORef capsPluginCache
+  cacheGet CapsPlugin {capsPluginCache} = JSON.toJSON <$> readIORef capsPluginCache
 
 -- * Plugin construction
 
@@ -501,7 +535,7 @@ capsPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 capsPlugin pluginsRef = do
   capsPluginDisco <- getDiscoPlugin pluginsRef
   capsPluginPresence <- getPresencePlugin pluginsRef
-  let oldCache = pluginsOldCacheFor pluginsRef (Proxy :: Proxy (CapsPluginCache m)) >>= JSON.parseMaybe JSON.parseJSON
+  let oldCache = pluginsOldCacheFor pluginsRef (Proxy :: Proxy (CapsPlugin m)) >>= JSON.parseMaybe JSON.parseJSON
   capsPluginCache <- newIORef $ fromMaybe emptyCapsCache oldCache
   capsPluginOwnCaps <- newIORef Nothing
   let capsPluginNode = "https://github.com/abbradar/yaxmpp"
@@ -514,7 +548,7 @@ capsPlugin pluginsRef = do
   capsPluginAlgos2 <- traverse resolveAlgo algoNames2
   let plugin :: CapsPlugin m = CapsPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  registerCacheGetter pluginsRef (CapsPluginCache plugin)
+  registerCacheGetter pluginsRef plugin
   Filter.pushNewOrFailM plugin (presencePluginFilters capsPluginPresence)
   HL.pushNewOrFailM plugin (discoPluginEntityGetHandlers capsPluginDisco)
   HL.pushNewOrFailM plugin (discoPluginMyEntityHandlers capsPluginDisco)

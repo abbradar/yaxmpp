@@ -50,7 +50,7 @@ import Control.Monad
 import Control.Monad.Logger
 import Control.Slot (Slot)
 import qualified Control.Slot as Slot
-import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson as JSON
 import Data.ClassBox (ClassBox (..))
 import Data.Map.Strict (Map)
@@ -73,6 +73,7 @@ import Network.XMPP.Plugin
 import Network.XMPP.Stanza
 import Network.XMPP.Stream
 import Network.XMPP.Utils
+import Network.XMPP.XEP.Forms
 import Network.XMPP.XML
 import Text.XML
 import Text.XML.Cursor hiding (element)
@@ -94,25 +95,32 @@ type DiscoFeature = Text
 data DiscoEntity = DiscoEntity
   { discoIdentities :: Map DiscoIdentity (Maybe LocalizedText)
   , discoFeatures :: Set DiscoFeature
+  , discoForms :: Map Text Form
+  -- ^ XEP-0128 standardized data forms attached to the disco-info response,
+  -- keyed by their @FORM_TYPE@. Untyped forms are dropped by the parser.
+  -- Included in the XEP-0115/0390 verification hash.
   }
   deriving (Show, Eq, Generic)
 
--- | JSON encoding: @{ identities: [[ident, names], ...], features: [feat, ...] }@.
+-- | JSON encoding: @{ identities: [[ident, names], ...], features: [feat, ...], forms: { ft → form, ... } }@.
 instance ToJSON DiscoEntity where
   toJSON DiscoEntity {..} =
     JSON.object
       [ "identities" .= M.toList discoIdentities
       , "features" .= discoFeatures
+      , "forms" .= discoForms
       ]
 
 instance FromJSON DiscoEntity where
   parseJSON = JSON.withObject "DiscoEntity" $ \o -> do
     ids <- o .: "identities"
     feats <- o .: "features"
+    forms <- o .:? "forms" .!= M.empty
     return
       DiscoEntity
         { discoIdentities = M.fromList ids
         , discoFeatures = feats
+        , discoForms = forms
         }
 
 emptyDiscoEntity :: DiscoEntity
@@ -120,12 +128,14 @@ emptyDiscoEntity =
   DiscoEntity
     { discoIdentities = M.empty
     , discoFeatures = S.empty
+    , discoForms = M.empty
     }
 
 discoEntityUnion :: DiscoEntity -> DiscoEntity -> Maybe DiscoEntity
 discoEntityUnion a b = do
   discoIdentities <- mapDisjointUnion (discoIdentities a) (discoIdentities b)
   discoFeatures <- setDisjointUnion (discoFeatures a) (discoFeatures b)
+  discoForms <- mapDisjointUnion (discoForms a) (discoForms b)
   return DiscoEntity {..}
 
 discoInfoNS :: Text
@@ -159,7 +169,10 @@ parseDiscoEntity re = do
   when (S.size discoFeatures' /= length features) $ Left $ badRequest [i|non-unique features|]
   -- XEP-0030: expect disco#info to be supported even if not advertised.
   let discoFeatures = S.insert discoInfoNS discoFeatures'
-
+  -- XEP-0128: drop forms without a FORM_TYPE — they have no defined
+  -- semantics in disco-info contexts. Malformed forms fail the whole parse.
+  parsedForms <- traverse parseFormDisco $ fromElement re $/ XC.element (formsName "x") &| curElement
+  let discoForms = M.fromList [(ft, f) | Just (Just ft, f) <- parsedForms]
   return DiscoEntity {..}
  where
   getIdentity e = do
@@ -168,6 +181,10 @@ parseDiscoEntity re = do
     return DiscoIdentity {..}
 
   getFeature = requiredAttr "var"
+
+  parseFormDisco x = case parseForm x of
+    Left err -> Left $ badRequest [i|invalid <x xmlns="jabber:x:data">: #{err}|]
+    Right r -> Right r
 
 {- | Handler list for resolving disco entity requests from cache. If a handler
 matches the request, it must fire the callback itself and return @Just ()@;
@@ -371,11 +388,12 @@ discoInfoUnion a b = do
   return DiscoInfo {..}
 
 emitDiscoEntity :: DiscoEntity -> [Element]
-emitDiscoEntity (DiscoEntity {..}) = identities ++ features
+emitDiscoEntity (DiscoEntity {..}) = identities ++ features ++ forms
  where
   makeIdentityAttr (DiscoIdentity {..}) = [("category", discoCategory), ("type", discoType)]
   identities = emitNamed discoIdentities (discoInfoName "identity") makeIdentityAttr
   features = map (\f -> element (discoInfoName "feature") [("var", f)] []) $ S.toAscList discoFeatures
+  forms = [emitForm (Just ft) f | (ft, f) <- M.toAscList discoForms]
 
 emitDiscoItems :: DiscoItems -> [Element]
 emitDiscoItems items = emitNamed items (discoItemsName "item") makeItemAttr
