@@ -18,7 +18,7 @@ import Text.XML.Cursor hiding (element)
 import qualified Data.Registry as Reg
 import Data.Time.XMPP
 import Network.XMPP.Address (FullJID, XMPPAddress)
-import Network.XMPP.Filter (Filter (..))
+import Network.XMPP.Filter (FilterReceive (..))
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Message
 import Network.XMPP.Plugin
@@ -63,7 +63,7 @@ data DelayedDeliveryPlugin = DelayedDeliveryPlugin
 {- | Receive-only filter: clients don't stamp @\<delay/\>@ themselves
 (servers/intermediaries do it).
 -}
-instance (MonadStream m) => Filter m FullJID Presence StanzaError DelayedDeliveryPlugin where
+instance (MonadStream m) => FilterReceive m FullJID Presence StanzaError DelayedDeliveryPlugin where
   filterReceive _ _ pres = case extractDelay (presenceRaw pres) of
     Left err -> do
       $(logError) [i|XEP-0203 delayed delivery: #{err}|]
@@ -72,9 +72,8 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError DelayedDeliver
       let ext = presenceExtended pres
           ext' = maybe ext (\d -> Reg.insert d ext) mdelay
        in return $ Right $ pres {presenceRaw = raw', presenceExtended = ext'}
-  filterSend _ _ pres = return $ Right pres
 
-instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError DelayedDeliveryPlugin where
+instance (MonadStream m) => FilterReceive m XMPPAddress IMMessage StanzaError DelayedDeliveryPlugin where
   filterReceive _ _ msg = case extractDelay (imRaw msg) of
     Left err -> do
       $(logError) [i|XEP-0203 delayed delivery: #{err}|]
@@ -83,7 +82,6 @@ instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError DelayedDe
       let ext = imExtended msg
           ext' = maybe ext (\d -> Reg.insert d ext) mdelay
        in return $ Right $ msg {imRaw = raw', imExtended = ext'}
-  filterSend _ _ msg = return $ Right msg
 
 extractDelay :: [Element] -> Either String (Maybe DelayInfo, [Element])
 extractDelay elems =
@@ -95,6 +93,6 @@ extractDelay elems =
 delayedDeliveryPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 delayedDeliveryPlugin pluginsRef = do
   pp <- getPresencePlugin pluginsRef
-  Filter.pushNewOrFailM DelayedDeliveryPlugin (presencePluginFilters pp)
+  Filter.pushNewOrFailM DelayedDeliveryPlugin (presencePluginReceiveFilters pp)
   imp <- getIMPlugin pluginsRef
-  Filter.pushNewOrFailM DelayedDeliveryPlugin (imPluginFilters imp)
+  Filter.pushNewOrFailM DelayedDeliveryPlugin (imPluginReceiveFilters imp)

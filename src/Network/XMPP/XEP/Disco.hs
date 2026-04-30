@@ -96,9 +96,10 @@ data DiscoEntity = DiscoEntity
   { discoIdentities :: Map DiscoIdentity (Maybe LocalizedText)
   , discoFeatures :: Set DiscoFeature
   , discoForms :: Map Text Form
-  -- ^ XEP-0128 standardized data forms attached to the disco-info response,
-  -- keyed by their @FORM_TYPE@. Untyped forms are dropped by the parser.
-  -- Included in the XEP-0115/0390 verification hash.
+  {- ^ XEP-0128 standardized data forms attached to the disco-info response,
+  keyed by their @FORM_TYPE@. Untyped forms are dropped by the parser.
+  Included in the XEP-0115/0390 verification hash.
+  -}
   }
   deriving (Show, Eq, Generic)
 
@@ -420,9 +421,10 @@ data DiscoPlugin m = DiscoPlugin
   , discoPluginEntityCacheHandlers :: DiscoEntityCacheHandlers m
   , discoPluginEntityGetHandlers :: DiscoEntityGetHandlers m
   , discoPluginMyEntityHandlers :: DiscoMyEntityHandlers m
-  -- ^ Consulted before the default 'discoIChildren' lookup for incoming
-  -- @disco#info@ queries; lets plugins synthesize responses for nodes
-  -- they own (e.g. XEP-0115 caps @\<node\>#\<ver\>@).
+  {- ^ Consulted before the default 'discoIChildren' lookup for incoming
+  @disco#info@ queries; lets plugins synthesize responses for nodes
+  they own (e.g. XEP-0115 caps @\<node\>#\<ver\>@).
+  -}
   , discoPluginMergedMyInfoSlot :: Slot m DiscoInfo
   {- ^ Fires with the freshly merged 'DiscoInfo' for our own entity after
   every successful 'addDiscoInfo' call. Subscribe to react to changes in

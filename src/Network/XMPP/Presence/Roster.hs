@@ -68,35 +68,39 @@ rosterUpdate full@(FullJID {..}) (ResourceUnavailable err) rmap =
 
 instance (MonadStream m) => Handler m (PresenceUpdate m) () (RosterPresencePlugin m) where
   tryHandle (RosterPresencePlugin {..}) (ResourcePresence full presUpd) = do
-    roster <- rosterEntries <$> getRoster rpresencePluginRoster
-    if not $ toXMPPAddress (fullBare full) `M.member` roster
+    rpres <- readIORef rpresencePluginRef
+    track <-
+      if fullBare full `M.member` rpres
+        then return True
+        else case presUpd of
+          ResourceAvailable _ ->
+            tryGetRoster rpresencePluginRoster >>= \case
+              Just (Right (rosters -> roster)) ->
+                return $ toXMPPAddress (fullBare full) `M.member` roster
+              _ -> return False
+          ResourceUnavailable _ -> return False
+    if not track
       then return Nothing
-      else do
-        rpres <- readIORef rpresencePluginRef
-        case rosterUpdate full presUpd rpres of
-          Nothing -> return Nothing
-          Just (pres', event) -> do
-            atomicWriteIORef rpresencePluginRef pres'
-            Slot.call rpresencePluginSlot event
-            return $ Just ()
+      else case rosterUpdate full presUpd rpres of
+        Nothing -> return Nothing
+        Just (pres', event) -> do
+          atomicWriteIORef rpresencePluginRef pres'
+          Slot.call rpresencePluginSlot event
+          return $ Just ()
   tryHandle (RosterPresencePlugin {..}) (AllResourcesOffline bare extended) = do
-    roster <- rosterEntries <$> getRoster rpresencePluginRoster
-    if not $ toXMPPAddress bare `M.member` roster
-      then return Nothing
-      else do
-        rpres <- readIORef rpresencePluginRef
-        case M.lookup bare rpres of
-          Nothing -> return $ Just ()
-          Just resources -> do
-            let handleOne pres resource =
-                  case rosterUpdate (FullJID bare resource) (ResourceUnavailable extended) pres of
-                    Nothing -> return pres
-                    Just (pres', event) -> do
-                      atomicWriteIORef rpresencePluginRef pres'
-                      Slot.call rpresencePluginSlot event
-                      return pres'
-            foldM_ handleOne rpres $ M.keys resources
-            return $ Just ()
+    rpres <- readIORef rpresencePluginRef
+    case M.lookup bare rpres of
+      Nothing -> return Nothing
+      Just resources -> do
+        let handleOne pres resource =
+              case rosterUpdate (FullJID bare resource) (ResourceUnavailable extended) pres of
+                Nothing -> return pres
+                Just (pres', event) -> do
+                  atomicWriteIORef rpresencePluginRef pres'
+                  Slot.call rpresencePluginSlot event
+                  return pres'
+        foldM_ handleOne rpres $ M.keys resources
+        return $ Just ()
 
 getRosterPresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (RosterPresencePlugin m)
 getRosterPresencePlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (RosterPresencePlugin m)) $ pluginsHooksSet pluginsRef
@@ -106,10 +110,10 @@ getRosterPresence RosterPresencePlugin {rpresencePluginRef} = readIORef rpresenc
 
 rpresencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 rpresencePlugin pluginsRef = do
+  rpresencePluginRoster <- getRosterPlugin pluginsRef
   rpresencePluginRef <- newIORef M.empty
   rpresencePluginSlot <- Slot.new
-  rpresencePluginRoster <- getRosterPlugin pluginsRef
   pp <- getPresencePlugin pluginsRef
   let plugin :: RosterPresencePlugin m = RosterPresencePlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
-  HL.pushNewOrFailM plugin (presencePluginHandlers pp)
+  HL.pushNewOrFailM plugin $ presencePluginHandlers pp

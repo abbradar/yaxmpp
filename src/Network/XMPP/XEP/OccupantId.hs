@@ -14,7 +14,7 @@ import Data.Text (Text)
 import Text.XML
 
 import Network.XMPP.Address
-import Network.XMPP.Filter (Filter (..))
+import Network.XMPP.Filter (FilterReceive (..))
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Message
 import Network.XMPP.Plugin
@@ -47,7 +47,7 @@ data OccupantIdPlugin = OccupantIdPlugin
 {- | Receive-only filter: occupant IDs are stamped by the MUC service, so
 the send side is a no-op.
 -}
-instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError OccupantIdPlugin where
+instance (MonadStream m) => FilterReceive m XMPPAddress IMMessage StanzaError OccupantIdPlugin where
   filterReceive _ _ msg = case extractOccupantId (imRaw msg) of
     Left err -> do
       $(logError) [i|XEP-0421 occupant ID: #{err}|]
@@ -56,9 +56,8 @@ instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError OccupantI
       let ext = imExtended msg
           ext' = maybe ext (\o -> Reg.insert o ext) moid
        in return $ Right $ msg {imRaw = raw', imExtended = ext'}
-  filterSend _ _ msg = return $ Right msg
 
-instance (MonadStream m) => Filter m FullJID Presence StanzaError OccupantIdPlugin where
+instance (MonadStream m) => FilterReceive m FullJID Presence StanzaError OccupantIdPlugin where
   filterReceive _ _ pres = case extractOccupantId (presenceRaw pres) of
     Left err -> do
       $(logError) [i|XEP-0421 occupant ID: #{err}|]
@@ -67,11 +66,10 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError OccupantIdPlug
       let ext = presenceExtended pres
           ext' = maybe ext (\o -> Reg.insert o ext) moid
        in return $ Right $ pres {presenceRaw = raw', presenceExtended = ext'}
-  filterSend _ _ pres = return $ Right pres
 
 occupantIdPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 occupantIdPlugin pluginsRef = do
   imp <- getIMPlugin pluginsRef
-  Filter.pushNewOrFailM OccupantIdPlugin (imPluginFilters imp)
+  Filter.pushNewOrFailM OccupantIdPlugin (imPluginReceiveFilters imp)
   pp <- getPresencePlugin pluginsRef
-  Filter.pushNewOrFailM OccupantIdPlugin (presencePluginFilters pp)
+  Filter.pushNewOrFailM OccupantIdPlugin (presencePluginReceiveFilters pp)

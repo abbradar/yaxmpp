@@ -28,7 +28,7 @@ import Data.Typeable (Typeable)
 import Text.XML
 
 import Network.XMPP.Address
-import Network.XMPP.Filter (Filter (..))
+import Network.XMPP.Filter (FilterReceive (..), FilterSend (..))
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Message
 import Network.XMPP.Plugin
@@ -93,11 +93,13 @@ sendReceipt DeliveryReceiptsPlugin {deliveryReceiptsPluginSession} to msgType mi
 -- | Filter witness for moving 'DeliveryReceiptRequest' between 'imExtended' and @\<request/\>@.
 data DeliveryReceiptRequestFilter = DeliveryReceiptRequestFilter
 
-instance (MonadStream m) => Filter m XMPPAddress IMMessage StanzaError DeliveryReceiptRequestFilter where
+instance (MonadStream m) => FilterReceive m XMPPAddress IMMessage StanzaError DeliveryReceiptRequestFilter where
   filterReceive _ _ msg =
     let (mreq, raw') = extractRequest (imRaw msg)
         ext' = maybe (imExtended msg) (`Reg.insert` imExtended msg) mreq
      in return $ Right $ msg {imRaw = raw', imExtended = ext'}
+
+instance (MonadStream m) => FilterSend m XMPPAddress IMMessage StanzaError DeliveryReceiptRequestFilter where
   filterSend _ _ msg =
     let ext = imExtended msg
         (mreq, ext') = Reg.pop (Proxy :: Proxy DeliveryReceiptRequest) ext
@@ -152,6 +154,7 @@ deliveryReceiptsPlugin pluginsRef = do
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   imp <- getIMPlugin pluginsRef
-  Filter.pushNewOrFailM DeliveryReceiptRequestFilter (imPluginFilters imp)
+  Filter.pushNewOrFailM DeliveryReceiptRequestFilter (imPluginReceiveFilters imp)
+  Filter.pushNewOrFailM DeliveryReceiptRequestFilter (imPluginSendFilters imp)
   Slot.pushNewOrFailM plugin $ postInSlot pluginsRef
   addDiscoInfo pluginsRef plugin

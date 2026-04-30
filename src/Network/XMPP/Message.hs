@@ -5,10 +5,12 @@ module Network.XMPP.Message (
   IMMessage (..),
   AddressedIMMessage (..),
   IMSlot,
-  IMFilterList,
+  IMFilterReceiveList,
+  IMFilterSendList,
   IMPlugin,
   imPluginSlot,
-  imPluginFilters,
+  imPluginReceiveFilters,
+  imPluginSendFilters,
   imPluginSelf,
   plainIMMessage,
   getIMPlugin,
@@ -31,7 +33,7 @@ import qualified Data.Registry.Mutable as RegRef
 import Data.Text (Text)
 import qualified Data.UUID as UUID
 import Network.XMPP.Address
-import Network.XMPP.Filter (FilterList)
+import Network.XMPP.Filter (FilterReceiveList, FilterSendList)
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language
 import Network.XMPP.Plugin
@@ -80,13 +82,15 @@ plainIMMessage txt =
 
 type IMSlot m = Slot m AddressedIMMessage
 
-type IMFilterList m = FilterList m XMPPAddress StanzaError IMMessage
+type IMFilterReceiveList m = FilterReceiveList m XMPPAddress StanzaError IMMessage
+type IMFilterSendList m = FilterSendList m XMPPAddress StanzaError IMMessage
 
 data IMPlugin m = IMPlugin
   { imPluginSession :: StanzaSession m
   , imPluginSelf :: XMPPAddress
   , imPluginSlot :: IMSlot m
-  , imPluginFilters :: IMFilterList m
+  , imPluginReceiveFilters :: IMFilterReceiveList m
+  , imPluginSendFilters :: IMFilterSendList m
   }
 
 {- | Parse an 'InStanza' into an 'AddressedIMMessage' structurally (no codec
@@ -122,11 +126,11 @@ tryParseRawIMMessage self InStanza {istFrom, istTo, istId, istType, istChildren}
 
 -- | Parse and decode a message through IM filters.
 tryParseIMMessage :: (MonadStream m) => IMPlugin m -> InStanza -> m (Either StanzaError (Maybe AddressedIMMessage))
-tryParseIMMessage IMPlugin {imPluginSelf, imPluginFilters} st = case tryParseRawIMMessage (addressBare imPluginSelf) st of
+tryParseIMMessage IMPlugin {imPluginSelf, imPluginReceiveFilters} st = case tryParseRawIMMessage (addressBare imPluginSelf) st of
   Left err -> return $ Left err
   Right Nothing -> return $ Right Nothing
   Right (Just addressed@AddressedIMMessage {imFrom, imMessage = msg}) -> do
-    filtered <- Filter.runReceiveFilters imPluginFilters imFrom msg
+    filtered <- Filter.runReceiveFilters imPluginReceiveFilters imFrom msg
     case filtered of
       Left err -> return $ Left err
       Right msg' -> return $ Right $ Just $ addressed {imMessage = msg'}
@@ -149,8 +153,8 @@ getIMPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m (IMPlugin m)
 getIMPlugin pluginsRef = RegRef.lookupOrFailM (Proxy :: Proxy (IMPlugin m)) $ pluginsHooksSet pluginsRef
 
 imSend :: (MonadStream m) => IMPlugin m -> XMPPAddress -> IMMessage -> m (Either StanzaError StanzaId)
-imSend IMPlugin {imPluginSession, imPluginFilters} to msg = do
-  filtered <- Filter.runSendFilters imPluginFilters to msg
+imSend IMPlugin {imPluginSession, imPluginSendFilters} to msg = do
+  filtered <- Filter.runSendFilters imPluginSendFilters to msg
   case filtered of
     Left err -> return $ Left err
     Right IMMessage {..} -> do
@@ -171,7 +175,8 @@ imSend IMPlugin {imPluginSession, imPluginFilters} to msg = do
 imPlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 imPlugin pluginsRef = do
   imPluginSlot <- Slot.new
-  imPluginFilters <- Filter.new
+  imPluginReceiveFilters <- Filter.new
+  imPluginSendFilters <- Filter.new
   let imPluginSession = pluginsSession pluginsRef
       imPluginSelf = toXMPPAddress $ ssAddress imPluginSession
       plugin :: IMPlugin m = IMPlugin {..}

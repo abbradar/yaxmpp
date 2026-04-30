@@ -5,8 +5,10 @@ outgoing stanza components with extension-specific metadata.
 -}
 module Network.XMPP.Filter (
   module Data.ClassVector.Mutable,
-  Filter (..),
-  FilterList,
+  FilterReceive (..),
+  FilterSend (..),
+  FilterReceiveList,
+  FilterSendList,
   runReceiveFilters,
   runSendFilters,
 ) where
@@ -16,22 +18,26 @@ import Control.Monad.IO.Class
 import Data.ClassBox (ClassBox (..))
 import Data.ClassVector.Mutable
 
-{- | A pair of one-way monadic conversions between a container @value@ and a
-structured type @a@, both of which may fail with @e@.
-
-@meta@ is additional context passed to the filter (e.g. the source address).
-@filterReceive@ transforms an incoming @value@ on its way in.
-@filterSend@ transforms an outgoing @value@ on its way out.
+{- | Receive-side monadic filter: transforms an incoming @value@ on its way
+in. @meta@ carries additional context (e.g. the source address).
 -}
-class Filter m meta value e a where
+class FilterReceive m meta value e a where
   filterReceive :: a -> meta -> value -> m (Either e value)
+
+{- | Send-side monadic filter: transforms an outgoing @value@ on its way
+out. @meta@ carries additional context (e.g. the destination address).
+-}
+class FilterSend m meta value e a where
   filterSend :: a -> meta -> value -> m (Either e value)
 
--- | A mutable list of filters operating on the same @value@/@e@ types.
-type FilterList m meta e value = ClassVectorRef (Filter m meta value e)
+-- | A mutable list of receive filters operating on the same @value@/@e@ types.
+type FilterReceiveList m meta e value = ClassVectorRef (FilterReceive m meta value e)
 
--- | Run all receive filters in order, threading the value through each. Stops on the first error.
-runReceiveFilters :: (MonadIO m) => FilterList m meta e value -> meta -> value -> m (Either e value)
+-- | A mutable list of send filters operating on the same @value@/@e@ types.
+type FilterSendList m meta e value = ClassVectorRef (FilterSend m meta value e)
+
+-- | Run all receive filters in order. Stops on the first error.
+runReceiveFilters :: (MonadIO m) => FilterReceiveList m meta e value -> meta -> value -> m (Either e value)
 runReceiveFilters filters meta val = do
   es <- toAscList filters
   foldM step (Right val) es
@@ -39,8 +45,8 @@ runReceiveFilters filters meta val = do
   step (Left err) _ = return $ Left err
   step (Right v) (ClassBox f) = filterReceive f meta v
 
--- | Run all send filters in reverse order, threading the value through each. Stops on the first error.
-runSendFilters :: (MonadIO m) => FilterList m meta e value -> meta -> value -> m (Either e value)
+-- | Run all send filters in reverse order. Stops on the first error.
+runSendFilters :: (MonadIO m) => FilterSendList m meta e value -> meta -> value -> m (Either e value)
 runSendFilters filters meta val = do
   es <- toDescList filters
   foldM step (Right val) es

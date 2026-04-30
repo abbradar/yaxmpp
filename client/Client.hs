@@ -325,9 +325,9 @@ main = do
                     ( "roster"
                     , Command
                         { commandHandler = \runInBase args -> case args of
-                            [] -> do
-                              roster <- runInBase $ getRoster rosterP
-                              HL.outputStrLn $ show roster
+                            [] -> runInBase $ getRoster rosterP $ \case
+                              Left err -> writeMessage [i|Roster error: #{err}|]
+                              Right roster -> writeMessage $ show roster
                             _ -> HL.outputStrLn "Invalid arguments"
                         , commandAutocomplete = \_ _ -> return []
                         }

@@ -192,7 +192,12 @@ main = runStderrLoggingT $ do
       mucP <- getMUCPlugin pluginsRef
 
       _ <- forkLinked $ do
-        rst <- getRoster rosterP
+        rosterReady <- newEmptyMVar
+        getRoster rosterP $ putMVar rosterReady
+        rst <-
+          readMVar rosterReady >>= \case
+            Left err -> fail [i|Failed to obtain initial roster: #{err}|]
+            Right r -> return r
         $(logInfo) [i|Got initial roster: #{rst}|]
         void $ myPresenceSend myPresP (Just defaultPresence)
 

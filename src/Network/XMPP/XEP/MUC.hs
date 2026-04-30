@@ -70,7 +70,7 @@ import Data.Registry.Mutable (RegistryRef)
 import qualified Data.Registry.Mutable as RegRef
 import Data.Time.XMPP
 import Network.XMPP.Address
-import Network.XMPP.Filter (Filter (..))
+import Network.XMPP.Filter (FilterReceive (..))
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language
 import Network.XMPP.Plugin
@@ -212,7 +212,7 @@ data MUCPresenceFilter = MUCPresenceFilter
 presences. The send side is a no-op because the server is the sole
 authority for these elements (XEP-0045 §7.2).
 -}
-instance (MonadStream m) => Filter m FullJID Presence StanzaError MUCPresenceFilter where
+instance (MonadStream m) => FilterReceive m FullJID Presence StanzaError MUCPresenceFilter where
   filterReceive _ _ pres = case extractMUCInfo (presenceRaw pres) of
     Left err -> do
       $(logError) [i|XEP-0045 MUC presence: #{err}|]
@@ -221,7 +221,6 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError MUCPresenceFil
       let ext = presenceExtended pres
           ext' = maybe ext (\info -> Reg.insert info ext) mInfo
        in return $ Right $ pres {presenceRaw = raw', presenceExtended = ext'}
-  filterSend _ _ pres = return $ Right pres
 
 extractMUCInfo :: [Element] -> Either String (Maybe MUCInfo, [Element])
 extractMUCInfo elems =
@@ -570,5 +569,5 @@ mucPlugin pluginsRef = do
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   HL.pushNewOrFailM plugin $ pluginsInHandlers pluginsRef
   HL.pushNewOrFailM plugin $ presencePluginHandlers mucPluginPresence
-  Filter.pushNewOrFailM MUCPresenceFilter $ presencePluginFilters mucPluginPresence
+  Filter.pushNewOrFailM MUCPresenceFilter $ presencePluginReceiveFilters mucPluginPresence
   addDiscoInfo pluginsRef plugin

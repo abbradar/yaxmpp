@@ -11,11 +11,13 @@ module Network.XMPP.Presence (
   presenceValue,
   presenceState,
   presenceSlot,
-  PresenceFilterList,
+  PresenceFilterReceiveList,
+  PresenceFilterSendList,
   PresencePlugin,
   presencePluginHandlers,
   presencePluginSlot,
-  presencePluginFilters,
+  presencePluginReceiveFilters,
+  presencePluginSendFilters,
   getPresencePlugin,
   presencePlugin,
   PresenceEvent (..),
@@ -47,7 +49,7 @@ import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Network.XMPP.Address
-import Network.XMPP.Filter (FilterList)
+import Network.XMPP.Filter (FilterReceiveList, FilterSendList)
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language
 import Network.XMPP.Plugin
@@ -184,7 +186,8 @@ parsePresence elems = do
 parseExtended :: [Element] -> [Element]
 parseExtended elems = fromChildren elems $/ checkName ((/= Just jcNS) . nameNamespace) &| curElement
 
-type PresenceFilterList m = FilterList m FullJID StanzaError Presence
+type PresenceFilterReceiveList m = FilterReceiveList m FullJID StanzaError Presence
+type PresenceFilterSendList m = FilterSendList m FullJID StanzaError Presence
 
 type AllPresencesMap m = Map FullJID (PresenceRef m)
 
@@ -195,7 +198,8 @@ data PresencePlugin m = PresencePlugin
   {- ^ Broadcast slot fired before the dispatch handler list. Use this for
   observer-style hooks (e.g. to populate per-resource mutable state).
   -}
-  , presencePluginFilters :: PresenceFilterList m
+  , presencePluginReceiveFilters :: PresenceFilterReceiveList m
+  , presencePluginSendFilters :: PresenceFilterSendList m
   , presencePluginPresences :: IORef (AllPresencesMap m)
   }
 
@@ -209,7 +213,7 @@ instance (MonadStream m) => Handler m InStanza InResponse (PresencePlugin m) whe
             (state, slot) <- case existing of
               Just old -> return (presenceState old, presenceSlot old)
               Nothing -> (,) <$> RegRef.new <*> Slot.new
-            filtered <- Filter.runReceiveFilters presencePluginFilters faddr p
+            filtered <- Filter.runReceiveFilters presencePluginReceiveFilters faddr p
             case filtered of
               Left e -> return $ InError e
               Right p' -> do
@@ -263,7 +267,8 @@ presencePlugin :: forall m. (MonadStream m) => XMPPPluginsRef m -> m ()
 presencePlugin pluginsRef = do
   presencePluginHandlers <- HL.new
   presencePluginSlot <- Slot.new
-  presencePluginFilters <- Filter.new
+  presencePluginReceiveFilters <- Filter.new
+  presencePluginSendFilters <- Filter.new
   presencePluginPresences <- newIORef M.empty
   let presencePluginSession = pluginsSession pluginsRef
       plugin :: PresencePlugin m = PresencePlugin {..}
@@ -285,9 +290,9 @@ presenceUpdate k (ResourceUnavailable e) m
   | otherwise = Nothing
 
 presenceStanza :: (MonadStream m) => PresencePlugin m -> Maybe Presence -> m (Either StanzaError OutStanza)
-presenceStanza PresencePlugin {presencePluginSession, presencePluginFilters} (Just pres) = do
+presenceStanza PresencePlugin {presencePluginSession, presencePluginSendFilters} (Just pres) = do
   let myAddr = sessionAddress $ ssSession presencePluginSession
-  filtered <- Filter.runSendFilters presencePluginFilters myAddr pres
+  filtered <- Filter.runSendFilters presencePluginSendFilters myAddr pres
   case filtered of
     Left err -> return $ Left err
     Right Presence {..} -> do

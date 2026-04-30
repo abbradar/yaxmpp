@@ -48,7 +48,7 @@ import UnliftIO.IORef
 import qualified Data.Registry as Reg
 import qualified Data.Registry.Mutable as RegRef
 import Network.XMPP.Address (FullJID, XMPPAddress, fullJidGet, toXMPPAddress)
-import Network.XMPP.Filter (Filter (..))
+import Network.XMPP.Filter (FilterReceive (..), FilterSend (..))
 import qualified Network.XMPP.Filter as Filter
 import Network.XMPP.Language (LocalizedText, localTexts)
 import Network.XMPP.Plugin
@@ -334,7 +334,7 @@ whatever 'DiscoEntity' the disco plugin had merged at that moment;
 results are memoized for subsequent sends — later disco changes do
 not propagate.
 -}
-instance (MonadStream m) => Filter m FullJID Presence StanzaError (CapsPlugin m) where
+instance (MonadStream m) => FilterReceive m FullJID Presence StanzaError (CapsPlugin m) where
   filterReceive _ _ pres = case do
     (mcaps1, raw1) <- extractCaps (presenceRaw pres)
     (mcaps2, raw2) <- extractCaps2 raw1
@@ -348,6 +348,7 @@ instance (MonadStream m) => Filter m FullJID Presence StanzaError (CapsPlugin m)
           ext'' = maybe ext' (\c -> Reg.insert c ext') mcaps2
        in return $ Right $ pres {presenceRaw = raw', presenceExtended = ext''}
 
+instance (MonadStream m) => FilterSend m FullJID Presence StanzaError (CapsPlugin m) where
   filterSend cp@CapsPlugin {capsPluginDisco, capsPluginOwnCaps} _ pres = do
     cached <- readIORef capsPluginOwnCaps
     (mcaps1, mcaps2) <- case cached of
@@ -553,6 +554,7 @@ capsPlugin pluginsRef = do
   let plugin :: CapsPlugin m = CapsPlugin {..}
   RegRef.insertNewOrFailM plugin $ pluginsHooksSet pluginsRef
   registerCacheGetter pluginsRef plugin
-  Filter.pushNewOrFailM plugin (presencePluginFilters capsPluginPresence)
+  Filter.pushNewOrFailM plugin (presencePluginReceiveFilters capsPluginPresence)
+  Filter.pushNewOrFailM plugin (presencePluginSendFilters capsPluginPresence)
   HL.pushNewOrFailM plugin (discoPluginEntityGetHandlers capsPluginDisco)
   HL.pushNewOrFailM plugin (discoPluginMyEntityHandlers capsPluginDisco)

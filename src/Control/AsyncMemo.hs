@@ -4,6 +4,7 @@ module Control.AsyncMemo (
   AsyncMemo,
   new,
   get,
+  tryGet,
 )
 where
 
@@ -50,3 +51,14 @@ get (AsyncMemo ref) handler = do
             Pending handlers -> (Done a, handlers)
             _ -> error "AsyncMemo: unexpected state"
           mapM_ ($ a) $ reverse handlers
+
+{- | Non-blocking poll. Returns 'Just' the memoized value if the action has
+already completed, 'Nothing' if it has not yet started or is in progress.
+Does NOT start the action.
+-}
+tryGet :: (MonadUnliftIO m) => AsyncMemo m a -> m (Maybe a)
+tryGet (AsyncMemo ref) = do
+  state <- readIORef ref
+  return $ case state of
+    Done a -> Just a
+    _ -> Nothing

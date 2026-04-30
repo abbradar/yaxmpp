@@ -1,9 +1,11 @@
+{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE Strict #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Data.ClassBox (
   Unconstrained,
   ClassBox (..),
+  weakenClassBox,
   showClassBoxList,
 ) where
 
@@ -18,6 +20,9 @@ class Unconstrained a
 instance Unconstrained a
 
 data ClassBox (constr :: Type -> Constraint) = forall a. (constr a) => ClassBox {toClass :: a}
+
+weakenClassBox :: forall c1 c2. (forall a. (c1 a) => c2 a) => ClassBox c1 -> ClassBox c2
+weakenClassBox (ClassBox a) = ClassBox a
 
 instance (forall a. (constr a) => Show a) => Show (ClassBox constr) where
   showsPrec d (ClassBox a) = showsPrec d a

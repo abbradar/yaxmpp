@@ -7,6 +7,7 @@ module Control.AsyncFuture (
   resolve,
   future,
   get,
+  tryGet,
 )
 where
 
@@ -60,3 +61,13 @@ get (AsyncFuture ref) handler = do
       case oldVal of
         Done a -> handler a
         Pending _ -> return ()
+
+{- | Non-blocking poll. Returns 'Just' the resolved value if the future has
+already been resolved, 'Nothing' otherwise.
+-}
+tryGet :: (MonadUnliftIO m) => AsyncFuture m a -> m (Maybe a)
+tryGet (AsyncFuture ref) = do
+  state <- readIORef ref
+  return $ case state of
+    Done a -> Just a
+    Pending _ -> Nothing
